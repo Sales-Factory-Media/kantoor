@@ -1,6 +1,8 @@
 import { useState } from 'react'
-import type { ClickUpStatusGroup, OfflineAgent } from '../hooks/useExtensionMessages.js'
-import { OfflineAgentRow } from './AgentSidebar.js'
+import type { ToolActivity } from '../office/types.js'
+import type { OfficeState } from '../office/engine/officeState.js'
+import type { ClickUpStatusGroup, OfflineAgent, KnownProject } from '../hooks/useExtensionMessages.js'
+import { AgentRoomList } from './AgentSidebar.js'
 import { vscode } from '../vscodeApi.js'
 
 interface ForemanPanelProps {
@@ -10,19 +12,34 @@ interface ForemanPanelProps {
   clickupConfigured: boolean
   clickupListId: string | null
   offlineAgents: OfflineAgent[]
+  officeState: OfficeState
+  agents: number[]
+  agentTools: Record<number, ToolActivity[]>
+  agentStatuses: Record<number, string>
+  knownProjects: KnownProject[]
 }
 
 function WorkerPicker({
   ticketId,
   ticketName,
   ticketUrl,
+  officeState,
+  agents,
+  agentTools,
+  agentStatuses,
   offlineAgents,
+  knownProjects,
   onClose,
 }: {
   ticketId: string
   ticketName: string
   ticketUrl: string
+  officeState: OfficeState
+  agents: number[]
+  agentTools: Record<number, ToolActivity[]>
+  agentStatuses: Record<number, string>
   offlineAgents: OfflineAgent[]
+  knownProjects: KnownProject[]
   onClose: () => void
 }) {
   const ticket = { id: ticketId, name: ticketName, url: ticketUrl }
@@ -79,21 +96,17 @@ function WorkerPicker({
           {ticketName}
         </div>
 
-        <div style={{ overflowY: 'auto', flex: 1 }}>
-          {offlineAgents.length === 0 && (
-            <div style={{ fontSize: '18px', color: 'var(--pixel-text-dim)', padding: '8px 0' }}>
-              No workers available. Hire some first!
-            </div>
-          )}
-          {offlineAgents.map((agent) => (
-            <OfflineAgentRow
-              key={agent.sessionId}
-              agent={agent}
-              clickupTicket={ticket}
-              onCallIn={() => onClose()}
-            />
-          ))}
-        </div>
+        <AgentRoomList
+          officeState={officeState}
+          agents={agents}
+          selectedAgent={null}
+          agentTools={agentTools}
+          agentStatuses={agentStatuses}
+          offlineAgents={offlineAgents}
+          knownProjects={knownProjects}
+          clickupTicket={ticket}
+          onTicketAssigned={onClose}
+        />
       </div>
     </div>
   )
@@ -195,6 +208,11 @@ export function ForemanPanel({
   clickupConfigured,
   clickupListId,
   offlineAgents,
+  officeState,
+  agents,
+  agentTools,
+  agentStatuses,
+  knownProjects,
 }: ForemanPanelProps) {
   const [pickerTicket, setPickerTicket] = useState<{ id: string; name: string; url: string } | null>(null)
   const [collapsedStatuses, setCollapsedStatuses] = useState<Set<string>>(new Set())
@@ -222,7 +240,12 @@ export function ForemanPanel({
           ticketId={pickerTicket.id}
           ticketName={pickerTicket.name}
           ticketUrl={pickerTicket.url}
+          officeState={officeState}
+          agents={agents}
+          agentTools={agentTools}
+          agentStatuses={agentStatuses}
           offlineAgents={offlineAgents}
+          knownProjects={knownProjects}
           onClose={() => setPickerTicket(null)}
         />
       )}

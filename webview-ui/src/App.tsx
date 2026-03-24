@@ -112,6 +112,11 @@ function App() {
         clickupConfigured={clickupConfigured}
         clickupListId={clickupListId}
         offlineAgents={offlineAgents}
+        officeState={officeState}
+        agents={agents}
+        agentTools={agentTools}
+        agentStatuses={agentStatuses}
+        knownProjects={knownProjects}
       />
 
       <BottomToolbar
