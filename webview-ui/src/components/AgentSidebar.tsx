@@ -1,8 +1,9 @@
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import type { ToolActivity } from '../office/types.js'
 import type { OfficeState } from '../office/engine/officeState.js'
 import type { OfflineAgent, KnownProject } from '../hooks/useExtensionMessages.js'
 import { vscode } from '../vscodeApi.js'
+import { FOREMAN_ROOM_NAME } from '../constants.js'
 
 interface AgentSidebarProps {
   officeState: OfficeState
@@ -15,6 +16,7 @@ interface AgentSidebarProps {
   knownProjects: KnownProject[]
   onSaveAgentMeta: () => void
   onForgetAgent: (sessionId: string) => void
+  onOpenForeman?: () => void
 }
 
 /** Format an ISO timestamp as a relative "time ago" string */
@@ -100,7 +102,7 @@ function groupByRoom(
   // Seed with rooms from officeState + known projects (with workspace paths)
   for (const room of officeState.rooms) {
     const g = ensure(room.projectName)
-    if (room.isConferenceRoom || room.isWarehouse || room.isGarage) g.isSpecialRoom = true
+    if (room.isConferenceRoom || room.isWarehouse || room.isGarage || room.isForeman) g.isSpecialRoom = true
   }
   for (const kp of knownProjects) {
     const g = ensure(kp.name)
@@ -208,6 +210,145 @@ const deleteButtonStyle: React.CSSProperties = {
   padding: '0 2px',
   flexShrink: 0,
   lineHeight: 1,
+}
+
+export interface ClickUpTicketRef {
+  id: string
+  name: string
+  url: string
+}
+
+interface OfflineAgentRowProps {
+  agent: OfflineAgent
+  onEdit?: (agent: OfflineAgent) => void
+  onDelete?: (agent: OfflineAgent) => void
+  onCallIn?: (agent: OfflineAgent) => void
+  onRestart?: (agent: OfflineAgent) => void
+  /** When set, "Call In" sends clickupStartWork with this ticket instead of the normal call-in flow */
+  clickupTicket?: ClickUpTicketRef
+}
+
+export function OfflineAgentRow({ agent, onEdit, onDelete, onCallIn, onRestart, clickupTicket }: OfflineAgentRowProps) {
+  const [isHovered, setIsHovered] = useState(false)
+
+  const handleCallIn = (e: React.MouseEvent) => {
+    e.stopPropagation()
+    if (clickupTicket) {
+      vscode.postMessage({
+        type: 'clickupStartWork',
+        agentId: agent.sessionId,
+        ticketId: clickupTicket.id,
+        ticketName: clickupTicket.name,
+        ticketUrl: clickupTicket.url,
+      })
+      if (onCallIn) onCallIn(agent)
+    } else if (agent.isPersistent && onCallIn) {
+      onCallIn(agent)
+    } else if (onRestart) {
+      onRestart(agent)
+    }
+  }
+
+  return (
+    <div
+      onMouseEnter={() => setIsHovered(true)}
+      onMouseLeave={() => setIsHovered(false)}
+      style={{
+        padding: '4px 6px',
+        background: isHovered ? 'var(--pixel-btn-hover-bg)' : 'transparent',
+        borderBottom: '1px solid var(--pixel-border)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        gap: 4,
+      }}
+    >
+      <div style={{ overflow: 'hidden', flex: 1 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+          <span
+            style={{
+              width: 6,
+              height: 6,
+              borderRadius: '50%',
+              background: 'rgba(255,255,255,0.1)',
+              flexShrink: 0,
+            }}
+          />
+          <span
+            style={{
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            <span style={{ fontSize: '22px', color: 'var(--pixel-text-dim)' }}>
+              {agent.name || agent.sessionId.slice(0, 8)}
+            </span>
+            {agent.roleShort && (
+              <span style={{ fontSize: '18px', color: 'var(--pixel-accent)', marginLeft: 6, opacity: 0.7 }}>
+                {agent.roleShort}
+              </span>
+            )}
+          </span>
+        </div>
+        {agent.lastSessionEnd && (
+          <div
+            style={{
+              fontSize: '16px',
+              color: 'var(--pixel-text-dim)',
+              paddingLeft: 10,
+              marginTop: 1,
+              opacity: 0.7,
+            }}
+          >
+            Last active: {timeAgo(agent.lastSessionEnd)}
+          </div>
+        )}
+      </div>
+      <div style={{ display: 'flex', gap: 4, alignItems: 'center', flexShrink: 0 }}>
+        {onEdit && (
+          <button
+            onClick={(e) => { e.stopPropagation(); onEdit(agent) }}
+            title="Employee file"
+            style={{
+              ...deleteButtonStyle,
+              color: isHovered ? 'var(--pixel-text-dim)' : 'transparent',
+            }}
+          >
+            {'\u270E'}
+          </button>
+        )}
+        {onDelete && (
+          <button
+            onClick={(e) => { e.stopPropagation(); onDelete(agent) }}
+            title="Fire employee"
+            style={{
+              ...deleteButtonStyle,
+              color: isHovered ? 'var(--pixel-text-dim)' : 'transparent',
+            }}
+          >
+            {'\u{1F5D1}'}
+          </button>
+        )}
+        <button
+          onClick={handleCallIn}
+          style={{
+            padding: '2px 8px',
+            fontSize: '18px',
+            color: 'var(--pixel-agent-text)',
+            background: 'var(--pixel-agent-bg)',
+            border: '2px solid var(--pixel-agent-border)',
+            borderRadius: 0,
+            cursor: 'pointer',
+            flexShrink: 0,
+          }}
+          title={clickupTicket ? 'Assign this ticket to this agent' : agent.isPersistent ? 'Call this agent back to work' : 'Resume this session in iTerm'}
+        >
+          {agent.isPersistent ? 'Call In' : 'Resume'}
+        </button>
+      </div>
+    </div>
+  )
 }
 
 interface EmployeeFileProps {
@@ -410,10 +551,10 @@ export function AgentSidebar({
   knownProjects,
   onSaveAgentMeta,
   onForgetAgent,
+  onOpenForeman,
 }: AgentSidebarProps) {
   const [collapsed, setCollapsed] = useState(false)
   const [hoveredId, setHoveredId] = useState<number | null>(null)
-  const [hoveredOffline, setHoveredOffline] = useState<string | null>(null)
   const [editingAgentId, setEditingAgentId] = useState<number | null>(null)
   const [editingOfflineAgent, setEditingOfflineAgent] = useState<OfflineAgent | undefined>(undefined)
   const [creatingForWorkspace, setCreatingForWorkspace] = useState<string | null>(null)
@@ -794,126 +935,31 @@ export function AgentSidebar({
                 })}
 
                 {/* Offline agents in this room */}
-                {!collapsedRooms.has(projectName) && group.offlineAgents.map((agent) => {
-                  const isHovered = hoveredOffline === agent.sessionId
-                  return (
-                    <div
-                      key={`offline-${agent.sessionId}`}
-                      onMouseEnter={() => setHoveredOffline(agent.sessionId)}
-                      onMouseLeave={() => setHoveredOffline(null)}
-                      style={{
-                        padding: '4px 6px',
-                        background: isHovered ? 'var(--pixel-btn-hover-bg)' : 'transparent',
-                        borderBottom: '1px solid var(--pixel-border)',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'space-between',
-                        gap: 4,
-                      }}
-                    >
-                      <div style={{ overflow: 'hidden', flex: 1 }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                          <span
-                            style={{
-                              width: 6,
-                              height: 6,
-                              borderRadius: '50%',
-                              background: 'rgba(255,255,255,0.1)',
-                              flexShrink: 0,
-                            }}
-                          />
-                          <span
-                            style={{
-                              overflow: 'hidden',
-                              textOverflow: 'ellipsis',
-                              whiteSpace: 'nowrap',
-                            }}
-                          >
-                            <span style={{ fontSize: '22px', color: 'var(--pixel-text-dim)' }}>
-                              {agent.name || agent.sessionId.slice(0, 8)}
-                            </span>
-                            {agent.roleShort && (
-                              <span style={{ fontSize: '18px', color: 'var(--pixel-accent)', marginLeft: 6, opacity: 0.7 }}>
-                                {agent.roleShort}
-                              </span>
-                            )}
-                          </span>
-                        </div>
-                        {agent.lastSessionEnd && (
-                          <div
-                            style={{
-                              fontSize: '16px',
-                              color: 'var(--pixel-text-dim)',
-                              paddingLeft: 10,
-                              marginTop: 1,
-                              opacity: 0.7,
-                            }}
-                          >
-                            Last active: {timeAgo(agent.lastSessionEnd)}
-                          </div>
-                        )}
-                      </div>
-                      <div style={{ display: 'flex', gap: 4, alignItems: 'center', flexShrink: 0 }}>
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            setEditingAgentId(null)
-                            setEditingOfflineAgent(agent)
-                            setCreatingForWorkspace(null)
-                          }}
-                          title="Employee file"
-                          style={{
-                            ...deleteButtonStyle,
-                            color: isHovered ? 'var(--pixel-text-dim)' : 'transparent',
-                          }}
-                        >
-                          {'\u270E'}
-                        </button>
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            setConfirmDelete({ sessionId: agent.sessionId, name: agent.name || agent.sessionId.slice(0, 8), isPersistent: agent.isPersistent })
-                          }}
-                          title="Fire employee"
-                          style={{
-                            ...deleteButtonStyle,
-                            color: isHovered ? 'var(--pixel-text-dim)' : 'transparent',
-                          }}
-                        >
-                          {'\u{1F5D1}'}
-                        </button>
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            if (agent.isPersistent) {
-                              setCallInAgent(agent)
-                              setCallInTask('')
-                            } else {
-                              vscode.postMessage({
-                                type: 'restartAgent',
-                                sessionId: agent.sessionId,
-                                workspacePath: agent.workspacePath,
-                              })
-                            }
-                          }}
-                          style={{
-                            padding: '2px 8px',
-                            fontSize: '18px',
-                            color: 'var(--pixel-agent-text)',
-                            background: 'var(--pixel-agent-bg)',
-                            border: '2px solid var(--pixel-agent-border)',
-                            borderRadius: 0,
-                            cursor: 'pointer',
-                            flexShrink: 0,
-                          }}
-                          title={agent.isPersistent ? 'Call this agent back to work' : 'Resume this session in iTerm'}
-                        >
-                          {agent.isPersistent ? 'Call In' : 'Resume'}
-                        </button>
-                      </div>
-                    </div>
-                  )
-                })}
+                {!collapsedRooms.has(projectName) && group.offlineAgents.map((agent) => (
+                  <OfflineAgentRow
+                    key={`offline-${agent.sessionId}`}
+                    agent={agent}
+                    onEdit={(a) => {
+                      setEditingAgentId(null)
+                      setEditingOfflineAgent(a)
+                      setCreatingForWorkspace(null)
+                    }}
+                    onDelete={(a) => {
+                      setConfirmDelete({ sessionId: a.sessionId, name: a.name || a.sessionId.slice(0, 8), isPersistent: a.isPersistent })
+                    }}
+                    onCallIn={(a) => {
+                      setCallInAgent(a)
+                      setCallInTask('')
+                    }}
+                    onRestart={(a) => {
+                      vscode.postMessage({
+                        type: 'restartAgent',
+                        sessionId: a.sessionId,
+                        workspacePath: a.workspacePath,
+                      })
+                    }}
+                  />
+                ))}
 
                 {/* + hire link per project room (not special rooms) */}
                 {!collapsedRooms.has(projectName) && !group.isSpecialRoom && (
@@ -954,26 +1000,31 @@ export function AgentSidebar({
                 >
                   Common Areas
                 </div>
-                {specialRooms.map(([projectName, group]) => (
+                {specialRooms.map(([projectName, group]) => {
+                  const isForeman = projectName === FOREMAN_ROOM_NAME
+                  return (
                   <div key={projectName}>
                     {/* Room header */}
                     <div
+                      onClick={isForeman && onOpenForeman ? onOpenForeman : undefined}
                       style={{
                         padding: '3px 6px',
                         fontSize: '18px',
-                        color: group.liveAgents.length > 0 ? 'var(--pixel-green)' : 'var(--pixel-text-dim)',
+                        color: isForeman ? 'var(--pixel-accent)' : group.liveAgents.length > 0 ? 'var(--pixel-green)' : 'var(--pixel-text-dim)',
                         background: group.liveAgents.length > 0 ? 'rgba(90, 200, 140, 0.08)' : 'rgba(255, 255, 255, 0.03)',
                         borderBottom: '1px solid var(--pixel-border)',
                         overflow: 'hidden',
                         textOverflow: 'ellipsis',
                         whiteSpace: 'nowrap',
                         userSelect: 'none',
+                        cursor: isForeman ? 'pointer' : 'default',
                       }}
                     >
                       {projectName}
                     </div>
                   </div>
-                ))}
+                  )
+                })}
               </>
             )}
           </div>
