@@ -389,20 +389,6 @@ function handleClickupStartWork(msg: Record<string, unknown>, ctx: ServerContext
 
 	let callInTask = `Work on ClickUp ticket ${ticketId}: "${ticketName}". Use the ClickUp MCP tools to read the ticket details, update status, and add comments as you make progress. Ticket URL: ${ticketUrl}`;
 
-	callInTask += `\n\n## Git Conventions for ClickUp Integration
-
-When making commits and pull requests for this ticket, follow these conventions so ClickUp automatically tracks the work:
-
-**Branch naming**: Name your branch \`CU-${ticketId}/<short-description>\` (e.g. \`CU-${ticketId}/fix-login-bug\`).
-
-**Commit messages**: Include the ticket ID in your commit messages using one of these formats:
-- \`CU-${ticketId} <message>\` (e.g. \`CU-${ticketId} fix null pointer in auth flow\`)
-- Or include \`#${ticketId}\` anywhere in the commit message
-
-**Pull request titles**: Include \`CU-${ticketId}\` in the PR title (e.g. \`CU-${ticketId} Fix login authentication bug\`).
-
-**Pull request body**: Include a link to the ticket in the PR description: ${ticketUrl}`;
-
 	if (additionalPrompt) {
 		callInTask += `\n\n## Additional Instructions\n\n${additionalPrompt}`;
 	}

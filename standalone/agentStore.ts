@@ -109,5 +109,30 @@ export function buildSystemPrompt(agent: PersistentAgent): string {
 			lines.push(`Your last session ended on ${agent.lastSessionEnd}.`);
 		}
 	}
+	lines.push(
+		'',
+		'## Git Conventions (Gitflow + ClickUp Integration)',
+		'',
+		'This project uses Gitflow. When making commits and pull requests, follow these conventions so ClickUp automatically tracks the work:',
+		'',
+		'**Branch naming**: Create a feature branch off `develop` using the Gitflow convention with the ClickUp ticket ID:',
+		'`feature/CU-<ticketId>-<short-description>` (e.g. `feature/CU-abc123-fix-login-bug`).',
+		'',
+		'**Commit messages**: Include the ticket ID in your commit messages using one of these formats:',
+		'- `CU-<ticketId> <message>` (e.g. `CU-abc123 fix null pointer in auth flow`)',
+		'- Or include `#<ticketId>` anywhere in the commit message',
+		'',
+		'**Pull request titles**: Include `CU-<ticketId>` in the PR title (e.g. `CU-abc123 Fix login authentication bug`).',
+		'',
+		'**Pull request base branch**: Always target `develop`, never `main`/`master` directly.',
+		'',
+		'**Pull request body**: Always include a link to the ClickUp ticket in the PR description.',
+		'',
+		'## Ticket Status on Completion',
+		'',
+		'When you are done with work on a ClickUp ticket, do NOT mark it as "done" or "complete".',
+		'Instead, update the ticket status to "QA Test" using the ClickUp MCP tools.',
+		'A human developer will review and validate the work before it can be considered done.',
+	);
 	return lines.join('\n');
 }
