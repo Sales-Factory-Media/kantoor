@@ -277,7 +277,7 @@ export function ForemanPanel({
           }}
         >
           <span style={{ fontSize: '22px', color: 'var(--pixel-text)', fontWeight: 'bold' }}>
-            Foreman's Office
+            Darryl's Office
           </span>
           <div style={{ display: 'flex', gap: 4 }}>
             <button
