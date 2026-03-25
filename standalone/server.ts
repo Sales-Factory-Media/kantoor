@@ -77,6 +77,7 @@ interface ServerContext {
 	setPersistentAgents: (agents: PersistentAgent[]) => void;
 	clickupConfig: ClickUpConfig | null;
 	clickupTickets: ClickUpStatusGroup[];
+	clickupTimer: ReturnType<typeof setInterval> | null;
 }
 
 // ── Launch helper (shared by saveAgentIdentity + launchAgent) ─
@@ -89,6 +90,13 @@ function launchPersistentAgent(pa: PersistentAgent, persistentAgents: Persistent
 	const cwd = pa.workspacePath || os.homedir();
 	console.log(`[Standalone] Launching agent "${pa.name}" with session ${newSessionId} in ${cwd}${callInTask ? ` with task: ${callInTask}` : ''}`);
 	return launchAgentSession(newSessionId, cwd, prompt, callInTask);
+}
+
+function startClickupPolling(ctx: ServerContext): void {
+	if (ctx.clickupTimer) return; // already polling
+	if (!ctx.clickupConfig) return;
+	console.log('[Standalone] Starting ClickUp polling...');
+	ctx.clickupTimer = setInterval(() => { handleClickupRefresh(ctx).catch(() => {}); }, CLICKUP_POLL_INTERVAL_MS);
 }
 
 // ── Message handlers ─────────────────────────────────────────
@@ -341,8 +349,12 @@ function handleSetSoundEnabled(msg: Record<string, unknown>): void {
 	writeJson(SETTINGS_FILE, { ...settings, soundEnabled: msg.enabled });
 }
 
+let clickupRefreshInFlight = false;
+
 async function handleClickupRefresh(ctx: ServerContext): Promise<void> {
 	if (!ctx.clickupConfig) return;
+	if (clickupRefreshInFlight) return;
+	clickupRefreshInFlight = true;
 	try {
 		const statuses = await fetchListTasks(ctx.clickupConfig);
 		ctx.clickupTickets = statuses;
@@ -350,6 +362,8 @@ async function handleClickupRefresh(ctx: ServerContext): Promise<void> {
 	} catch (err) {
 		console.error('[Standalone] ClickUp fetch error:', err);
 		ctx.broadcastSink.postMessage({ type: 'clickupError', error: String(err) });
+	} finally {
+		clickupRefreshInFlight = false;
 	}
 }
 
@@ -363,6 +377,7 @@ function handleClickupStartWork(msg: Record<string, unknown>, ctx: ServerContext
 	const pa = persistentAgents.find(p => p.id === agentId);
 	if (!pa) {
 		console.log(`[Standalone] Persistent agent ${agentId} not found for ClickUp task`);
+		ctx.broadcastSink.postMessage({ type: 'clickupError', error: `Agent not found: ${agentId}` });
 		return;
 	}
 
@@ -375,16 +390,34 @@ function handleClickupStartWork(msg: Record<string, unknown>, ctx: ServerContext
 }
 
 function handleClickupConfigure(msg: Record<string, unknown>, ctx: ServerContext): void {
-	const apiToken = msg.apiToken as string | undefined;
-	const listId = msg.listId as string;
+	const rawListId = msg.listId;
+	const rawApiToken = msg.apiToken;
+
+	if (typeof rawListId !== 'string' || rawListId.trim().length === 0) {
+		ctx.broadcastSink.postMessage({ type: 'clickupError', error: 'Invalid ClickUp configuration: listId must be a non-empty string.' });
+		return;
+	}
+
+	const incomingApiToken = typeof rawApiToken === 'string' ? rawApiToken.trim() : '';
+	const effectiveApiToken = incomingApiToken || ctx.clickupConfig?.apiToken || '';
+
+	if (!effectiveApiToken) {
+		ctx.broadcastSink.postMessage({ type: 'clickupError', error: 'Invalid ClickUp configuration: apiToken must be a non-empty string.' });
+		return;
+	}
+
 	const settings = readJson(SETTINGS_FILE) ?? {};
 	const config: ClickUpConfig = {
-		apiToken: apiToken || ctx.clickupConfig?.apiToken || '',
-		listId,
+		apiToken: effectiveApiToken,
+		listId: rawListId.trim(),
 	};
 	writeJson(SETTINGS_FILE, { ...settings, clickup: config });
 	ctx.clickupConfig = config;
-	ctx.broadcastSink.postMessage({ type: 'clickupConfigured', configured: true, listId });
+	ctx.broadcastSink.postMessage({ type: 'clickupConfigured', configured: true, listId: config.listId });
+
+	// Start polling if not already running
+	startClickupPolling(ctx);
+
 	// Immediately fetch
 	handleClickupRefresh(ctx).catch(() => {});
 }
@@ -460,6 +493,7 @@ async function main(): Promise<void> {
 		setPersistentAgents(updated) { persistentAgents = updated; ctx.persistentAgents = updated; },
 		clickupConfig,
 		clickupTickets: [],
+		clickupTimer: null,
 	};
 
 	// ── Workspace path cache (decoded from project hash) ────
@@ -533,11 +567,9 @@ async function main(): Promise<void> {
 	scanner.start();
 
 	// ── ClickUp polling ─────────────────────────────────────
-	let clickupTimer: ReturnType<typeof setInterval> | null = null;
 	if (ctx.clickupConfig) {
-		console.log('[Standalone] ClickUp configured, starting polling...');
 		handleClickupRefresh(ctx).catch(() => {});
-		clickupTimer = setInterval(() => { handleClickupRefresh(ctx).catch(() => {}); }, CLICKUP_POLL_INTERVAL_MS);
+		startClickupPolling(ctx);
 	}
 
 	// ── HTTP server ──────────────────────────────────────────
@@ -584,7 +616,7 @@ async function main(): Promise<void> {
 	// Graceful shutdown
 	process.on('SIGINT', () => {
 		console.log('\n[Standalone] Shutting down...');
-		if (clickupTimer) clearInterval(clickupTimer);
+		if (ctx.clickupTimer) clearInterval(ctx.clickupTimer);
 		scanner.stop();
 		agentManager.dispose();
 		wss.close();

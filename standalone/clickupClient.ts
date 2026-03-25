@@ -20,11 +20,14 @@ export interface ClickUpConfig {
 	listId: string;
 }
 
+const FETCH_TIMEOUT_MS = 15000;
+
 function fetchJson(url: string, headers: Record<string, string>): Promise<unknown> {
 	return new Promise((resolve, reject) => {
 		const req = https.get(url, { headers }, (res) => {
 			let data = '';
 			res.on('data', (chunk: Buffer) => { data += chunk.toString(); });
+			res.on('error', (err) => reject(new Error(`ClickUp response error: ${err.message}`)));
 			res.on('end', () => {
 				if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) {
 					try { resolve(JSON.parse(data)); }
@@ -33,6 +36,9 @@ function fetchJson(url: string, headers: Record<string, string>): Promise<unknow
 					reject(new Error(`ClickUp API ${res.statusCode}: ${data.slice(0, 200)}`));
 				}
 			});
+		});
+		req.setTimeout(FETCH_TIMEOUT_MS, () => {
+			req.destroy(new Error(`ClickUp request timed out after ${FETCH_TIMEOUT_MS}ms`));
 		});
 		req.on('error', reject);
 	});
