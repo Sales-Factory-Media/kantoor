@@ -18,9 +18,9 @@ export function readJson(filePath: string): Record<string, unknown> | null {
 export function writeJson(filePath: string, data: unknown): void {
 	try {
 		if (!fs.existsSync(SETTINGS_DIR)) {
-			fs.mkdirSync(SETTINGS_DIR, { recursive: true });
+			fs.mkdirSync(SETTINGS_DIR, { recursive: true, mode: 0o700 });
 		}
-		fs.writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf-8');
+		fs.writeFileSync(filePath, JSON.stringify(data, null, 2), { encoding: 'utf-8', mode: 0o600 });
 	} catch (err) {
 		console.error(`[Standalone] Failed to write ${filePath}:`, err);
 	}

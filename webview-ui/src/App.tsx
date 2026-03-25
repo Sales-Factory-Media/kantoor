@@ -10,6 +10,7 @@ import { BottomToolbar } from './components/BottomToolbar.js'
 import { DebugView } from './components/DebugView.js'
 import { AgentSidebar } from './components/AgentSidebar.js'
 import { ConversationPanel } from './components/ConversationPanel.js'
+import { ForemanPanel } from './components/ForemanPanel.js'
 
 // Game state lives outside React — updated imperatively by message handlers
 const officeStateRef = { current: null as OfficeState | null }
@@ -26,11 +27,12 @@ function defaultZoom(): number {
 }
 
 function App() {
-  const { agents, selectedAgent, selectAgent, agentTools, agentStatuses, subagentTools, subagentCharacters, layoutReady, workspaceFolders, agentConversation, offlineAgents, knownProjects, saveAgentMeta, forgetAgent } = useExtensionMessages(getOfficeState)
+  const { agents, selectedAgent, selectAgent, agentTools, agentStatuses, subagentTools, subagentCharacters, layoutReady, workspaceFolders, agentConversation, offlineAgents, knownProjects, saveAgentMeta, forgetAgent, clickupTickets, clickupConfigured, clickupListId } = useExtensionMessages(getOfficeState)
 
   const [isDebugMode, setIsDebugMode] = useState(false)
   const [zoom, setZoom] = useState(defaultZoom)
   const panRef = useRef({ x: 0, y: 0 })
+  const [foremanOpen, setForemanOpen] = useState(false)
 
   const handleToggleDebugMode = useCallback(() => setIsDebugMode((prev) => !prev), [])
 
@@ -103,6 +105,20 @@ function App() {
         agentConversation={agentConversation}
       />
 
+      <ForemanPanel
+        visible={foremanOpen}
+        onClose={() => setForemanOpen(false)}
+        clickupTickets={clickupTickets}
+        clickupConfigured={clickupConfigured}
+        clickupListId={clickupListId}
+        offlineAgents={offlineAgents}
+        officeState={officeState}
+        agents={agents}
+        agentTools={agentTools}
+        agentStatuses={agentStatuses}
+        knownProjects={knownProjects}
+      />
+
       <BottomToolbar
         onOpenClaude={handleOpenClaude}
         workspaceFolders={workspaceFolders}
@@ -130,6 +146,7 @@ function App() {
         knownProjects={knownProjects}
         onSaveAgentMeta={saveAgentMeta}
         onForgetAgent={forgetAgent}
+        onOpenForeman={() => setForemanOpen(true)}
       />
 
       {isDebugMode && (

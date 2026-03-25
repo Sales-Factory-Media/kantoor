@@ -59,6 +59,21 @@ export interface OfflineAgent {
   sessionCount?: number
 }
 
+export interface ClickUpTask {
+  id: string
+  name: string
+  status: { status: string; color: string }
+  assignees: Array<{ username: string }>
+  url: string
+  priority: { id: string } | null
+}
+
+export interface ClickUpStatusGroup {
+  name: string
+  color: string
+  tasks: ClickUpTask[]
+}
+
 export interface ExtensionMessageState {
   agents: number[]
   selectedAgent: number | null
@@ -75,6 +90,9 @@ export interface ExtensionMessageState {
   knownProjects: KnownProject[]
   saveAgentMeta: () => void
   forgetAgent: (sessionId: string) => void
+  clickupTickets: ClickUpStatusGroup[]
+  clickupConfigured: boolean
+  clickupListId: string | null
 }
 
 export function useExtensionMessages(
@@ -91,6 +109,9 @@ export function useExtensionMessages(
   const [workspaceFolders, setWorkspaceFolders] = useState<WorkspaceFolder[]>([])
   const [agentConversation, setAgentConversation] = useState<Record<number, ConversationEntry[]>>({})
   const [offlineAgents, setOfflineAgents] = useState<OfflineAgent[]>([])
+  const [clickupTickets, setClickupTickets] = useState<ClickUpStatusGroup[]>([])
+  const [clickupConfigured, setClickupConfigured] = useState(false)
+  const [clickupListId, setClickupListId] = useState<string | null>(null)
 
   // Ref to expose saveAgentMeta and forgetAgent outside the effect closure
   const saveAgentMetaRef = useRef<() => void>(() => {})
@@ -472,6 +493,13 @@ export function useExtensionMessages(
           if (existing.length > 0) return prev
           return { ...prev, [id]: entries.slice(-CONVERSATION_MAX_ENTRIES) }
         })
+      } else if (msg.type === 'clickupTickets') {
+        setClickupTickets(msg.statuses as ClickUpStatusGroup[])
+      } else if (msg.type === 'clickupConfigured') {
+        setClickupConfigured(msg.configured as boolean)
+        if (msg.listId) setClickupListId(msg.listId as string)
+      } else if (msg.type === 'clickupError') {
+        console.error('[ClickUp]', msg.error)
       }
     }
     window.addEventListener('message', handler)
@@ -482,5 +510,5 @@ export function useExtensionMessages(
   const saveAgentMeta = useCallback(() => saveAgentMetaRef.current(), [])
   const forgetAgent = useCallback((sessionId: string) => forgetAgentRef.current(sessionId), [])
 
-  return { agents, selectedAgent, selectAgent: setSelectedAgent, agentTools, agentStatuses, subagentTools, subagentCharacters, layoutReady, loadedAssets, workspaceFolders, agentConversation, offlineAgents, knownProjects, saveAgentMeta, forgetAgent }
+  return { agents, selectedAgent, selectAgent: setSelectedAgent, agentTools, agentStatuses, subagentTools, subagentCharacters, layoutReady, loadedAssets, workspaceFolders, agentConversation, offlineAgents, knownProjects, saveAgentMeta, forgetAgent, clickupTickets, clickupConfigured, clickupListId }
 }
