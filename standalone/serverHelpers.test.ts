@@ -73,7 +73,7 @@ describe('writeJson', () => {
 	it('creates settings directory if it does not exist', () => {
 		mockFs.existsSync.mockReturnValue(false);
 		writeJson('/mock-home/.pixel-agents/test.json', { foo: 'bar' });
-		expect(mockFs.mkdirSync).toHaveBeenCalledWith('/mock-home/.pixel-agents', { recursive: true });
+		expect(mockFs.mkdirSync).toHaveBeenCalledWith('/mock-home/.pixel-agents', { recursive: true, mode: 0o700 });
 	});
 
 	it('does not create directory if it already exists', () => {
@@ -89,7 +89,7 @@ describe('writeJson', () => {
 		expect(mockFs.writeFileSync).toHaveBeenCalledWith(
 			'/some/file.json',
 			JSON.stringify(data, null, 2),
-			'utf-8',
+			{ encoding: 'utf-8', mode: 0o600 },
 		);
 	});
 
