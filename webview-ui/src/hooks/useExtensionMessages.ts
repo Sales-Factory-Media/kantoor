@@ -66,6 +66,7 @@ export interface ClickUpTask {
   assignees: Array<{ username: string }>
   url: string
   priority: { id: string } | null
+  parent: string | null
 }
 
 export interface ClickUpStatusGroup {

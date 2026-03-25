@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import type { ToolActivity } from '../office/types.js'
 import type { OfficeState } from '../office/engine/officeState.js'
-import type { ClickUpStatusGroup, OfflineAgent, KnownProject } from '../hooks/useExtensionMessages.js'
+import type { ClickUpStatusGroup, ClickUpTask, OfflineAgent, KnownProject } from '../hooks/useExtensionMessages.js'
 import { AgentRoomList } from './AgentSidebar.js'
 import { vscode } from '../vscodeApi.js'
 
@@ -42,6 +42,8 @@ function WorkerPicker({
   knownProjects: KnownProject[]
   onClose: () => void
 }) {
+  const [useTeam, setUseTeam] = useState(false)
+  const [additionalPrompt, setAdditionalPrompt] = useState('')
   const ticket = { id: ticketId, name: ticketName, url: ticketUrl }
 
   return (
@@ -96,6 +98,51 @@ function WorkerPicker({
           {ticketName}
         </div>
 
+        <div>
+          <div style={{ fontSize: '18px', color: 'var(--pixel-text-dim)', marginBottom: 2 }}>
+            Additional instructions (optional)
+          </div>
+          <textarea
+            style={{
+              width: '100%',
+              padding: '8px 10px',
+              fontSize: '14px',
+              color: 'var(--pixel-text)',
+              background: 'var(--pixel-bg)',
+              border: '2px solid var(--pixel-border)',
+              borderRadius: 0,
+              outline: 'none',
+              boxSizing: 'border-box',
+              minHeight: 160,
+              resize: 'vertical',
+            }}
+            value={additionalPrompt}
+            onChange={(e) => setAdditionalPrompt(e.target.value)}
+            placeholder="e.g. Focus on the API layer first..."
+          />
+        </div>
+
+        <label
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 6,
+            fontSize: '18px',
+            color: 'var(--pixel-text)',
+            cursor: 'pointer',
+            userSelect: 'none',
+            padding: '2px 0',
+          }}
+        >
+          <input
+            type="checkbox"
+            checked={useTeam}
+            onChange={(e) => setUseTeam(e.target.checked)}
+            style={{ accentColor: 'var(--pixel-accent)' }}
+          />
+          Use Agent Team
+        </label>
+
         <AgentRoomList
           officeState={officeState}
           agents={agents}
@@ -105,6 +152,8 @@ function WorkerPicker({
           offlineAgents={offlineAgents}
           knownProjects={knownProjects}
           clickupTicket={ticket}
+          useTeam={useTeam}
+          additionalPrompt={additionalPrompt.trim() || undefined}
           onTicketAssigned={onClose}
         />
       </div>
@@ -366,55 +415,82 @@ export function ForemanPanel({
                 </div>
 
                 {/* Tasks */}
-                {!collapsedStatuses.has(group.name) && group.tasks.map((task) => (
-                  <div
-                    key={task.id}
-                    style={{
-                      padding: '4px 8px 4px 14px',
-                      borderBottom: '1px solid var(--pixel-border)',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'space-between',
-                      gap: 6,
-                    }}
-                  >
-                    <div style={{ overflow: 'hidden', flex: 1 }}>
-                      <div
-                        style={{
-                          fontSize: '18px',
-                          color: 'var(--pixel-text)',
-                          overflow: 'hidden',
-                          textOverflow: 'ellipsis',
-                          whiteSpace: 'nowrap',
-                        }}
-                        title={task.name}
-                      >
-                        {task.name}
-                      </div>
-                      {task.assignees.length > 0 && (
-                        <div style={{ fontSize: '14px', color: 'var(--pixel-text-dim)' }}>
-                          {task.assignees.map((a) => a.username).join(', ')}
-                        </div>
-                      )}
-                    </div>
-                    <button
-                      onClick={() => setPickerTicket({ id: task.id, name: task.name, url: task.url })}
+                {!collapsedStatuses.has(group.name) && (() => {
+                  const parentTasks = group.tasks.filter((t) => !t.parent)
+                  const childrenByParent = new Map<string, ClickUpTask[]>()
+                  for (const t of group.tasks) {
+                    if (t.parent) {
+                      const list = childrenByParent.get(t.parent) ?? []
+                      list.push(t)
+                      childrenByParent.set(t.parent, list)
+                    }
+                  }
+                  // Subtasks whose parent is in a different status group (not visible here)
+                  const orphanSubtasks = group.tasks.filter((t) => t.parent && !group.tasks.some((p) => p.id === t.parent))
+
+                  const renderTask = (task: ClickUpTask, indent: boolean) => (
+                    <div
+                      key={task.id}
                       style={{
-                        padding: '2px 6px',
-                        fontSize: '16px',
-                        color: 'var(--pixel-agent-text)',
-                        background: 'var(--pixel-agent-bg)',
-                        border: '2px solid var(--pixel-agent-border)',
-                        borderRadius: 0,
-                        cursor: 'pointer',
-                        flexShrink: 0,
-                        whiteSpace: 'nowrap',
+                        padding: `4px 8px 4px ${indent ? 28 : 14}px`,
+                        borderBottom: '1px solid var(--pixel-border)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: 6,
                       }}
                     >
-                      Start Work
-                    </button>
-                  </div>
-                ))}
+                      <div style={{ overflow: 'hidden', flex: 1 }}>
+                        <div
+                          style={{
+                            fontSize: indent ? '16px' : '18px',
+                            color: 'var(--pixel-text)',
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                            whiteSpace: 'nowrap',
+                          }}
+                          title={task.name}
+                        >
+                          {indent && <span style={{ color: 'var(--pixel-text-dim)', marginRight: 4 }}>{'\u2514'}</span>}
+                          {task.name}
+                        </div>
+                        {task.assignees.length > 0 && (
+                          <div style={{ fontSize: '14px', color: 'var(--pixel-text-dim)', paddingLeft: indent ? 16 : 0 }}>
+                            {task.assignees.map((a) => a.username).join(', ')}
+                          </div>
+                        )}
+                      </div>
+                      <button
+                        onClick={() => setPickerTicket({ id: task.id, name: task.name, url: task.url })}
+                        style={{
+                          padding: '2px 6px',
+                          fontSize: '16px',
+                          color: 'var(--pixel-agent-text)',
+                          background: 'var(--pixel-agent-bg)',
+                          border: '2px solid var(--pixel-agent-border)',
+                          borderRadius: 0,
+                          cursor: 'pointer',
+                          flexShrink: 0,
+                          whiteSpace: 'nowrap',
+                        }}
+                      >
+                        Start Work
+                      </button>
+                    </div>
+                  )
+
+                  return (
+                    <>
+                      {parentTasks.map((task) => (
+                        <div key={task.id}>
+                          {renderTask(task, false)}
+                          {(childrenByParent.get(task.id) ?? []).map((sub) => renderTask(sub, true))}
+                        </div>
+                      ))}
+                      {orphanSubtasks.map((task) => renderTask(task, true))}
+                    </>
+                  )
+                })()}
               </div>
             ))
           )}

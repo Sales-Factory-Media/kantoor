@@ -226,9 +226,13 @@ interface OfflineAgentRowProps {
   onRestart?: (agent: OfflineAgent) => void
   /** When set, "Call In" sends clickupStartWork with this ticket instead of the normal call-in flow */
   clickupTicket?: ClickUpTicketRef
+  /** When true, the agent should use agent team mode */
+  useTeam?: boolean
+  /** Additional instructions to append to the ticket task */
+  additionalPrompt?: string
 }
 
-export function OfflineAgentRow({ agent, onEdit, onDelete, onCallIn, onRestart, clickupTicket }: OfflineAgentRowProps) {
+export function OfflineAgentRow({ agent, onEdit, onDelete, onCallIn, onRestart, clickupTicket, useTeam, additionalPrompt }: OfflineAgentRowProps) {
   const [isHovered, setIsHovered] = useState(false)
 
   const handleCallIn = (e: React.MouseEvent) => {
@@ -240,6 +244,8 @@ export function OfflineAgentRow({ agent, onEdit, onDelete, onCallIn, onRestart, 
         ticketId: clickupTicket.id,
         ticketName: clickupTicket.name,
         ticketUrl: clickupTicket.url,
+        useTeam: useTeam || undefined,
+        additionalPrompt: additionalPrompt || undefined,
       })
       if (onCallIn) onCallIn(agent)
     } else if (agent.isPersistent && onCallIn) {
@@ -550,6 +556,10 @@ export interface AgentRoomListProps {
   knownProjects: KnownProject[]
   /** When set, offline agent "Call In" assigns this ticket instead of the normal flow */
   clickupTicket?: ClickUpTicketRef
+  /** When true, the agent should use agent team mode */
+  useTeam?: boolean
+  /** Additional instructions to append to the ticket task */
+  additionalPrompt?: string
   /** Called after a clickup ticket is assigned (to close the picker) */
   onTicketAssigned?: () => void
   // Sidebar-specific callbacks (omitted in worker picker mode)
@@ -574,6 +584,8 @@ export function AgentRoomList({
   offlineAgents,
   knownProjects,
   clickupTicket,
+  useTeam,
+  additionalPrompt,
   onTicketAssigned,
   onSelectAgent,
   onEditLiveAgent,
@@ -800,6 +812,8 @@ export function AgentRoomList({
               key={`offline-${agent.sessionId}`}
               agent={agent}
               clickupTicket={clickupTicket}
+              useTeam={useTeam}
+              additionalPrompt={additionalPrompt}
               onEdit={onEditOfflineAgent}
               onDelete={onDeleteOfflineAgent}
               onCallIn={clickupTicket ? onTicketAssigned ? () => onTicketAssigned() : undefined : onCallInOfflineAgent}
@@ -894,6 +908,7 @@ export function AgentSidebar({
   const [confirmRoomDelete, setConfirmRoomDelete] = useState<{ name: string } | null>(null)
   const [callInAgent, setCallInAgent] = useState<OfflineAgent | null>(null)
   const [callInTask, setCallInTask] = useState('')
+  const [callInUseTeam, setCallInUseTeam] = useState(false)
 
   // Always show sidebar — rooms exist even without agents
   if (agents.length === 0 && offlineAgents.length === 0 && knownProjects.length === 0) return null
@@ -965,15 +980,15 @@ export function AgentSidebar({
               <textarea
                 style={{
                   width: '100%',
-                  padding: '4px 6px',
-                  fontSize: '20px',
+                  padding: '8px 10px',
+                  fontSize: '14px',
                   color: 'var(--pixel-text)',
                   background: 'var(--pixel-bg)',
                   border: '2px solid var(--pixel-border)',
                   borderRadius: 0,
                   outline: 'none',
                   boxSizing: 'border-box',
-                  minHeight: 60,
+                  minHeight: 160,
                   resize: 'vertical',
                 }}
                 value={callInTask}
@@ -982,6 +997,25 @@ export function AgentSidebar({
                 autoFocus
               />
             </div>
+            <label
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 6,
+                fontSize: '18px',
+                color: 'var(--pixel-text)',
+                cursor: 'pointer',
+                userSelect: 'none',
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={callInUseTeam}
+                onChange={(e) => setCallInUseTeam(e.target.checked)}
+                style={{ accentColor: 'var(--pixel-accent)' }}
+              />
+              Use Agent Team
+            </label>
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
               <button
                 onClick={() => setCallInAgent(null)}
@@ -1003,6 +1037,7 @@ export function AgentSidebar({
                     type: 'launchAgent',
                     agentId: callInAgent.sessionId,
                     callInTask: callInTask.trim() || undefined,
+                    useTeam: callInUseTeam || undefined,
                   })
                   setCallInAgent(null)
                 }}
@@ -1103,6 +1138,7 @@ export function AgentSidebar({
             onCallInOfflineAgent={(a) => {
               setCallInAgent(a)
               setCallInTask('')
+              setCallInUseTeam(false)
             }}
             onRestartOfflineAgent={(a) => {
               vscode.postMessage({
