@@ -262,7 +262,7 @@ export function renderNames(
 ): void {
   const fontSize = NAME_FONT_SIZE_PX * zoom
   ctx.save()
-  ctx.font = `${fontSize}px "FS Pixel Sans", monospace`
+  ctx.font = `${fontSize}px "Open Sans", sans-serif`
   ctx.textAlign = 'center'
   ctx.textBaseline = 'bottom'
 
@@ -297,7 +297,7 @@ export function renderProjectLabels(
   if (rooms.length === 0) return
   ctx.save()
   const fontSize = ROOM_LABEL_FONT_SIZE_PX * zoom
-  ctx.font = `${fontSize}px "FS Pixel Sans", monospace`
+  ctx.font = `${fontSize}px "Open Sans", sans-serif`
   ctx.textAlign = 'center'
   ctx.textBaseline = 'bottom'
 

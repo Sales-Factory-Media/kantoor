@@ -303,13 +303,17 @@ function handleLaunchAgent(msg: Record<string, unknown>, ctx: ServerContext): vo
 	const { persistentAgents } = ctx;
 	const agentId = msg.agentId as string;
 	const callInTask = msg.callInTask as string | undefined;
+	const useTeam = msg.useTeam as boolean | undefined;
 	const pa = persistentAgents.find(p => p.id === agentId);
 	if (!pa) {
 		console.log(`[Standalone] Persistent agent ${agentId} not found`);
 		return;
 	}
 	ensureAgentMemory(agentId);
-	if (!launchPersistentAgent(pa, persistentAgents, callInTask)) {
+	const task = useTeam && callInTask
+		? `${callInTask}\n\nCreate an agent team to work on this. Break the work into parallel tasks and spawn teammates to handle them.`
+		: callInTask;
+	if (!launchPersistentAgent(pa, persistentAgents, task)) {
 		console.log(`[Standalone] Failed to launch agent session for ${pa.name}`);
 	}
 }
@@ -373,6 +377,8 @@ function handleClickupStartWork(msg: Record<string, unknown>, ctx: ServerContext
 	const ticketId = msg.ticketId as string;
 	const ticketName = msg.ticketName as string;
 	const ticketUrl = msg.ticketUrl as string;
+	const useTeam = msg.useTeam as boolean | undefined;
+	const additionalPrompt = msg.additionalPrompt as string | undefined;
 
 	const pa = persistentAgents.find(p => p.id === agentId);
 	if (!pa) {
@@ -381,7 +387,15 @@ function handleClickupStartWork(msg: Record<string, unknown>, ctx: ServerContext
 		return;
 	}
 
-	const callInTask = `Work on ClickUp ticket ${ticketId}: "${ticketName}". Use the ClickUp MCP tools to read the ticket details, update status, and add comments as you make progress. Ticket URL: ${ticketUrl}`;
+	let callInTask = `Work on ClickUp ticket ${ticketId}: "${ticketName}". Use the ClickUp MCP tools to read the ticket details, update status, and add comments as you make progress. Ticket URL: ${ticketUrl}`;
+
+	if (additionalPrompt) {
+		callInTask += `\n\n## Additional Instructions\n\n${additionalPrompt}`;
+	}
+
+	if (useTeam) {
+		callInTask += '\n\nCreate an agent team to work on this ticket. Break the work into parallel tasks and spawn teammates to handle them.';
+	}
 
 	ensureAgentMemory(agentId);
 	if (!launchPersistentAgent(pa, persistentAgents, callInTask)) {

@@ -7,6 +7,7 @@ export interface ClickUpTask {
 	assignees: Array<{ username: string }>;
 	url: string;
 	priority: { id: string } | null;
+	parent: string | null;
 }
 
 export interface ClickUpStatusGroup {
@@ -46,7 +47,7 @@ function fetchJson(url: string, headers: Record<string, string>): Promise<unknow
 
 export async function fetchListTasks(config: ClickUpConfig): Promise<ClickUpStatusGroup[]> {
 	const url = `https://api.clickup.com/api/v2/list/${config.listId}/task?include_closed=false&subtasks=true`;
-	const data = await fetchJson(url, { Authorization: config.apiToken }) as { tasks: Array<{ id: string; name: string; status: { status: string; color: string }; assignees: Array<{ username: string }>; url: string; priority: { id: string } | null }> };
+	const data = await fetchJson(url, { Authorization: config.apiToken }) as { tasks: Array<{ id: string; name: string; status: { status: string; color: string }; assignees: Array<{ username: string }>; url: string; priority: { id: string } | null; parent: string | null }> };
 
 	// Group tasks by status
 	const statusMap = new Map<string, ClickUpStatusGroup>();
@@ -62,6 +63,7 @@ export async function fetchListTasks(config: ClickUpConfig): Promise<ClickUpStat
 			assignees: task.assignees || [],
 			url: task.url,
 			priority: task.priority,
+			parent: task.parent || null,
 		});
 	}
 

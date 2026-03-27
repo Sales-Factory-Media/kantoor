@@ -61,7 +61,7 @@ on run argv
 	if cwd is not "" then
 		set cmd to "cd " & quoted form of cwd & " && "
 	end if
-	set cmd to cmd & "claude --resume " & sid
+	set cmd to cmd & "claude --model 'claude-opus-4-6[1m]' --resume " & sid
 	tell application "iTerm2"
 		activate
 		if (count of windows) = 0 then
@@ -92,7 +92,7 @@ end run`;
 
 /**
  * Launch a new iTerm2 tab and run `claude` with a specific session ID and system prompt.
- * If initialPrompt is provided, it's passed via --prompt so the agent starts working immediately.
+ * If initialPrompt is provided, it's passed as a positional argument so the agent starts working immediately.
  */
 export function launchAgentSession(sessionId: string, cwd: string, systemPrompt: string, initialPrompt?: string): boolean {
 	try {
@@ -102,10 +102,10 @@ on run argv
 	set cwd to item 2 of argv
 	set sysPrompt to item 3 of argv
 	set initialPrompt to item 4 of argv
+	set cmd to "cd " & quoted form of cwd & " && claude --model 'claude-opus-4-6[1m]' --session-id " & sid & " --append-system-prompt " & quoted form of sysPrompt
 	if initialPrompt is not "" then
-		set sysPrompt to sysPrompt & "\n\nYour task for this session:\n" & initialPrompt
+		set cmd to cmd & " " & quoted form of initialPrompt
 	end if
-	set cmd to "cd " & quoted form of cwd & " && claude --session-id " & sid & " --append-system-prompt " & quoted form of sysPrompt
 	tell application "iTerm2"
 		activate
 		if (count of windows) = 0 then
