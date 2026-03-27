@@ -136,3 +136,27 @@ export function buildSystemPrompt(agent: PersistentAgent): string {
 	);
 	return lines.join('\n');
 }
+
+export function buildConferencePrompt(agent: PersistentAgent, partnerName: string, topic: string): string {
+	const lines = [
+		'',
+		'## Conference Mode',
+		'',
+		`You are in a conference with ${partnerName}. Topic: ${topic}`,
+		'',
+		'IMPORTANT: You must use the MCP tools prefixed with `mcp__peers__` to communicate.',
+		'Do NOT use the built-in SendMessage or any team/teammate tools — those will not work.',
+		'The correct tools are:',
+		'1. `mcp__peers__list_peers` with scope="repo" to find ' + partnerName,
+		'2. `mcp__peers__send_message` with to_id and message to send messages',
+		'3. `mcp__peers__check_messages` to check for replies',
+		'',
+		'Guidelines:',
+		'- Start by introducing yourself and your perspective on the topic',
+		'- Take turns — send a message, then check for replies',
+		'- After sending a message, wait ~10 seconds then call mcp__peers__check_messages to see if a reply arrived',
+		`- If ${partnerName} hasn't registered yet, wait a few seconds and retry mcp__peers__list_peers`,
+		'- When discussion is complete, summarize outcomes to your memory file',
+	];
+	return lines.join('\n');
+}

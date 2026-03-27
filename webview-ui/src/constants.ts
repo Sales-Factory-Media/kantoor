@@ -162,6 +162,10 @@ export const TOOL_ACTIVITY_CATEGORY: Record<string, string> = {
   WebFetch: 'web_research',
   WebSearch: 'web_research',
   Task: 'planning',
+  'mcp__peers__send_message': 'conference',
+  'mcp__peers__check_messages': 'conference',
+  'mcp__peers__list_peers': 'conference',
+  'mcp__peers__set_summary': 'conference',
 }
 
 // ── Conversation Panel ──────────────────────────────────────

@@ -16,7 +16,11 @@ import {
 	CONVERSATION_TOOL_RESULT_MAX_LENGTH,
 } from './constants.js';
 
-export const PERMISSION_EXEMPT_TOOLS = new Set(['Task', 'AskUserQuestion']);
+export const PERMISSION_EXEMPT_TOOLS = new Set([
+	'Task', 'AskUserQuestion',
+	'mcp__peers__send_message', 'mcp__peers__check_messages',
+	'mcp__peers__list_peers', 'mcp__peers__set_summary',
+]);
 
 export function formatToolStatus(toolName: string, input: Record<string, unknown>): string {
 	const base = (p: unknown) => typeof p === 'string' ? path.basename(p) : '';
@@ -37,6 +41,10 @@ export function formatToolStatus(toolName: string, input: Record<string, unknown
 			return desc ? `Subtask: ${desc.length > TASK_DESCRIPTION_DISPLAY_MAX_LENGTH ? desc.slice(0, TASK_DESCRIPTION_DISPLAY_MAX_LENGTH) + '\u2026' : desc}` : 'Running subtask';
 		}
 		case 'AskUserQuestion': return 'Waiting for your answer';
+		case 'mcp__peers__send_message': return 'Conferencing';
+		case 'mcp__peers__check_messages': return 'Checking messages';
+		case 'mcp__peers__list_peers': return 'Finding peers';
+		case 'mcp__peers__set_summary': return 'Updating status';
 		case 'EnterPlanMode': return 'Planning';
 		case 'NotebookEdit': return `Editing notebook`;
 		default: return `Using ${toolName}`;
