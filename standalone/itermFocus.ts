@@ -94,7 +94,11 @@ end run`;
  * Launch a new iTerm2 tab and run `claude` with a specific session ID and system prompt.
  * If initialPrompt is provided, it's passed as a positional argument so the agent starts working immediately.
  */
-export function launchAgentSession(sessionId: string, cwd: string, systemPrompt: string, initialPrompt?: string): boolean {
+export function launchAgentSession(
+	sessionId: string, cwd: string, systemPrompt: string,
+	initialPrompt?: string,
+	options?: { mcpConfigPath?: string; extraFlags?: string[] }
+): boolean {
 	try {
 		const script = `
 on run argv
@@ -102,7 +106,15 @@ on run argv
 	set cwd to item 2 of argv
 	set sysPrompt to item 3 of argv
 	set initialPrompt to item 4 of argv
+	set mcpConfig to item 5 of argv
+	set extraFlags to item 6 of argv
 	set cmd to "cd " & quoted form of cwd & " && claude --model 'claude-opus-4-6[1m]' --session-id " & sid & " --append-system-prompt " & quoted form of sysPrompt
+	if mcpConfig is not "" then
+		set cmd to cmd & " --mcp-config " & quoted form of mcpConfig
+	end if
+	if extraFlags is not "" then
+		set cmd to cmd & " " & extraFlags
+	end if
 	if initialPrompt is not "" then
 		set cmd to cmd & " " & quoted form of initialPrompt
 	end if
@@ -123,7 +135,12 @@ on run argv
 		end if
 	end tell
 end run`;
-		execFileSync('osascript', ['-e', script, '--', sessionId, cwd, systemPrompt, initialPrompt || ''], {
+		execFileSync('osascript', [
+			'-e', script, '--',
+			sessionId, cwd, systemPrompt, initialPrompt || '',
+			options?.mcpConfigPath || '',
+			(options?.extraFlags || []).join(' '),
+		], {
 			encoding: 'utf-8',
 			timeout: 5000,
 		});

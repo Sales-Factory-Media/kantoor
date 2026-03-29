@@ -94,6 +94,8 @@ export interface ExtensionMessageState {
   clickupTickets: ClickUpStatusGroup[]
   clickupConfigured: boolean
   clickupListId: string | null
+  activeConference: { conferenceId: string; agent1Id: string; agent2Id: string; topic: string } | null
+  peersBrokerAvailable: boolean
 }
 
 export function useExtensionMessages(
@@ -113,6 +115,8 @@ export function useExtensionMessages(
   const [clickupTickets, setClickupTickets] = useState<ClickUpStatusGroup[]>([])
   const [clickupConfigured, setClickupConfigured] = useState(false)
   const [clickupListId, setClickupListId] = useState<string | null>(null)
+  const [activeConference, setActiveConference] = useState<{ conferenceId: string; agent1Id: string; agent2Id: string; topic: string } | null>(null)
+  const [peersBrokerAvailable, setPeersBrokerAvailable] = useState(false)
 
   // Ref to expose saveAgentMeta and forgetAgent outside the effect closure
   const saveAgentMetaRef = useRef<() => void>(() => {})
@@ -501,6 +505,17 @@ export function useExtensionMessages(
         if (msg.listId) setClickupListId(msg.listId as string)
       } else if (msg.type === 'clickupError') {
         console.error('[ClickUp]', msg.error)
+      } else if (msg.type === 'conferenceStarted') {
+        setActiveConference({
+          conferenceId: msg.conferenceId as string,
+          agent1Id: msg.agent1Id as string,
+          agent2Id: msg.agent2Id as string,
+          topic: msg.topic as string,
+        })
+      } else if (msg.type === 'conferenceEnded') {
+        setActiveConference(null)
+      } else if (msg.type === 'peersBrokerStatus') {
+        setPeersBrokerAvailable(msg.available as boolean)
       }
     }
     window.addEventListener('message', handler)
@@ -511,5 +526,5 @@ export function useExtensionMessages(
   const saveAgentMeta = useCallback(() => saveAgentMetaRef.current(), [])
   const forgetAgent = useCallback((sessionId: string) => forgetAgentRef.current(sessionId), [])
 
-  return { agents, selectedAgent, selectAgent: setSelectedAgent, agentTools, agentStatuses, subagentTools, subagentCharacters, layoutReady, loadedAssets, workspaceFolders, agentConversation, offlineAgents, knownProjects, saveAgentMeta, forgetAgent, clickupTickets, clickupConfigured, clickupListId }
+  return { agents, selectedAgent, selectAgent: setSelectedAgent, agentTools, agentStatuses, subagentTools, subagentCharacters, layoutReady, loadedAssets, workspaceFolders, agentConversation, offlineAgents, knownProjects, saveAgentMeta, forgetAgent, clickupTickets, clickupConfigured, clickupListId, activeConference, peersBrokerAvailable }
 }

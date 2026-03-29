@@ -17,6 +17,7 @@ interface AgentSidebarProps {
   onSaveAgentMeta: () => void
   onForgetAgent: (sessionId: string) => void
   onOpenForeman?: () => void
+  peersBrokerAvailable?: boolean
 }
 
 /** Format an ISO timestamp as a relative "time ago" string */
@@ -899,6 +900,7 @@ export function AgentSidebar({
   onSaveAgentMeta,
   onForgetAgent,
   onOpenForeman,
+  peersBrokerAvailable,
 }: AgentSidebarProps) {
   const [collapsed, setCollapsed] = useState(false)
   const [editingAgentId, setEditingAgentId] = useState<number | null>(null)
@@ -909,6 +911,10 @@ export function AgentSidebar({
   const [callInAgent, setCallInAgent] = useState<OfflineAgent | null>(null)
   const [callInTask, setCallInTask] = useState('')
   const [callInUseTeam, setCallInUseTeam] = useState(false)
+  const [showConferenceModal, setShowConferenceModal] = useState(false)
+  const [confAgent1, setConfAgent1] = useState<string | null>(null)
+  const [confAgent2, setConfAgent2] = useState<string | null>(null)
+  const [confTopic, setConfTopic] = useState('')
 
   // Always show sidebar — rooms exist even without agents
   if (agents.length === 0 && offlineAgents.length === 0 && knownProjects.length === 0) return null
@@ -1057,6 +1063,199 @@ export function AgentSidebar({
           </div>
         </div>
       )}
+      {showConferenceModal && (() => {
+        const persistentOffline = offlineAgents.filter((a) => a.isPersistent)
+        const liveAgentIds = new Set(agents)
+        const conferenceEligible = persistentOffline.filter((a) => {
+          // Exclude agents that are currently online (have a matching live character)
+          for (const id of liveAgentIds) {
+            const ch = officeState.characters.get(id)
+            if (ch && ch.persistentAgentId === a.sessionId) return false
+          }
+          return true
+        })
+        // Group eligible agents by project
+        const agentsByProject = new Map<string, typeof conferenceEligible>()
+        for (const a of conferenceEligible) {
+          const project = a.projectName || 'No project'
+          const group = agentsByProject.get(project) || []
+          group.push(a)
+          agentsByProject.set(project, group)
+        }
+        const canStart = confAgent1 && confAgent2 && confAgent1 !== confAgent2 && confTopic.trim().length > 0
+        return (
+          <div
+            style={{
+              position: 'fixed',
+              inset: 0,
+              zIndex: 10001,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              background: 'rgba(0,0,0,0.5)',
+            }}
+            onClick={() => setShowConferenceModal(false)}
+          >
+            <div
+              style={{
+                background: 'var(--pixel-bg)',
+                border: '2px solid var(--pixel-border)',
+                borderRadius: 0,
+                boxShadow: 'var(--pixel-shadow)',
+                padding: '12px',
+                minWidth: 280,
+                maxWidth: 360,
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 10,
+              }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <span style={{ fontSize: '24px', color: 'var(--pixel-text)', fontWeight: 'bold' }}>
+                Start Conference
+              </span>
+
+              {/* Agent 1 selector */}
+              <div>
+                <div style={{ fontSize: '18px', color: 'var(--pixel-text-dim)', marginBottom: 2 }}>
+                  Agent 1
+                </div>
+                <select
+                  value={confAgent1 || ''}
+                  onChange={(e) => setConfAgent1(e.target.value || null)}
+                  style={{
+                    width: '100%',
+                    padding: '4px 6px',
+                    fontSize: '20px',
+                    color: 'var(--pixel-text)',
+                    background: 'var(--pixel-bg)',
+                    border: '2px solid var(--pixel-border)',
+                    borderRadius: 0,
+                    outline: 'none',
+                    boxSizing: 'border-box',
+                  }}
+                >
+                  <option value="">Select agent...</option>
+                  {[...agentsByProject.entries()].map(([project, groupAgents]) => (
+                    <optgroup key={project} label={project}>
+                      {groupAgents.map((a) => (
+                        <option key={a.sessionId} value={a.sessionId} disabled={a.sessionId === confAgent2}>
+                          {a.name || a.sessionId.slice(0, 8)}{a.roleShort ? ` — ${a.roleShort}` : ''}
+                        </option>
+                      ))}
+                    </optgroup>
+                  ))}
+                </select>
+              </div>
+
+              {/* Agent 2 selector */}
+              <div>
+                <div style={{ fontSize: '18px', color: 'var(--pixel-text-dim)', marginBottom: 2 }}>
+                  Agent 2
+                </div>
+                <select
+                  value={confAgent2 || ''}
+                  onChange={(e) => setConfAgent2(e.target.value || null)}
+                  style={{
+                    width: '100%',
+                    padding: '4px 6px',
+                    fontSize: '20px',
+                    color: 'var(--pixel-text)',
+                    background: 'var(--pixel-bg)',
+                    border: '2px solid var(--pixel-border)',
+                    borderRadius: 0,
+                    outline: 'none',
+                    boxSizing: 'border-box',
+                  }}
+                >
+                  <option value="">Select agent...</option>
+                  {[...agentsByProject.entries()].map(([project, groupAgents]) => (
+                    <optgroup key={project} label={project}>
+                      {groupAgents.map((a) => (
+                        <option key={a.sessionId} value={a.sessionId} disabled={a.sessionId === confAgent1}>
+                          {a.name || a.sessionId.slice(0, 8)}{a.roleShort ? ` — ${a.roleShort}` : ''}
+                        </option>
+                      ))}
+                    </optgroup>
+                  ))}
+                </select>
+              </div>
+
+              {/* Topic */}
+              <div>
+                <div style={{ fontSize: '18px', color: 'var(--pixel-text-dim)', marginBottom: 2 }}>
+                  Discussion Topic
+                </div>
+                <textarea
+                  style={{
+                    width: '100%',
+                    padding: '8px 10px',
+                    fontSize: '14px',
+                    color: 'var(--pixel-text)',
+                    background: 'var(--pixel-bg)',
+                    border: '2px solid var(--pixel-border)',
+                    borderRadius: 0,
+                    outline: 'none',
+                    boxSizing: 'border-box',
+                    minHeight: 100,
+                    resize: 'vertical',
+                  }}
+                  value={confTopic}
+                  onChange={(e) => setConfTopic(e.target.value)}
+                  placeholder="What should they discuss?"
+                  autoFocus
+                />
+              </div>
+
+              {/* Buttons */}
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+                <button
+                  onClick={() => setShowConferenceModal(false)}
+                  style={{
+                    padding: '4px 12px',
+                    fontSize: '18px',
+                    color: 'var(--pixel-text)',
+                    background: 'var(--pixel-bg)',
+                    border: '2px solid var(--pixel-border)',
+                    borderRadius: 0,
+                    cursor: 'pointer',
+                  }}
+                >
+                  Cancel
+                </button>
+                <button
+                  disabled={!canStart}
+                  onClick={() => {
+                    if (!canStart) return
+                    vscode.postMessage({
+                      type: 'startConference',
+                      agent1Id: confAgent1,
+                      agent2Id: confAgent2,
+                      topic: confTopic.trim(),
+                    })
+                    setShowConferenceModal(false)
+                    setConfAgent1(null)
+                    setConfAgent2(null)
+                    setConfTopic('')
+                  }}
+                  style={{
+                    padding: '4px 12px',
+                    fontSize: '18px',
+                    color: canStart ? 'var(--pixel-agent-text)' : 'var(--pixel-text-dim)',
+                    background: canStart ? 'var(--pixel-agent-bg)' : 'var(--pixel-bg)',
+                    border: `2px solid ${canStart ? 'var(--pixel-agent-border)' : 'var(--pixel-border)'}`,
+                    borderRadius: 0,
+                    cursor: canStart ? 'pointer' : 'not-allowed',
+                    opacity: canStart ? 1 : 0.5,
+                  }}
+                >
+                  Start
+                </button>
+              </div>
+            </div>
+          </div>
+        )
+      })()}
       {showEmployeeFile && (
         <EmployeeFile
           officeState={officeState}
@@ -1106,6 +1305,35 @@ export function AgentSidebar({
             {collapsed ? '\u25B6' : '\u25BC'}
           </span>
         </div>
+
+        {/* Conference button */}
+        {!collapsed && (
+          <button
+            onClick={() => {
+              setShowConferenceModal(true)
+              setConfAgent1(null)
+              setConfAgent2(null)
+              setConfTopic('')
+            }}
+            disabled={peersBrokerAvailable === false}
+            title={peersBrokerAvailable === false ? 'Peers broker not running. Run: docker compose up -d' : 'Start a conference between two agents'}
+            style={{
+              padding: '3px 8px',
+              margin: '4px 6px',
+              fontSize: '18px',
+              color: peersBrokerAvailable === false ? 'var(--pixel-text-dim)' : 'var(--pixel-text)',
+              background: 'var(--pixel-bg)',
+              border: '2px solid var(--pixel-border)',
+              borderRadius: 0,
+              boxShadow: '2px 2px 0px #0a0a14',
+              cursor: peersBrokerAvailable === false ? 'not-allowed' : 'pointer',
+              opacity: peersBrokerAvailable === false ? 0.5 : 1,
+              userSelect: 'none',
+            }}
+          >
+            Conference
+          </button>
+        )}
 
         {/* Agent list grouped by room */}
         {!collapsed && (

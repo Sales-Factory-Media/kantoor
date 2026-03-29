@@ -1,0 +1,14 @@
+services:
+  peers-broker:
+    image: oven/bun:latest
+    working_dir: /app
+    volumes:
+      - ./vendor/claude-peers-mcp:/app:ro
+      - peers-data:/data
+    command: bun run broker.ts
+    ports:
+      - "7899:7899"
+    restart: unless-stopped
+
+volumes:
+  peers-data:

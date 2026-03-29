@@ -1,0 +1,3 @@
+[submodule "vendor/claude-peers-mcp"]
+	path = vendor/claude-peers-mcp
+	url = https://github.com/Sales-Factory-Media/claude-peers-mcp.git

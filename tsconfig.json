@@ -16,6 +16,7 @@
 		"out",
 		"scripts",
 		"standalone",
+		"vendor",
 		"vitest.config.ts"
 	]
 }
