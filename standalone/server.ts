@@ -470,8 +470,8 @@ function handleStartConference(msg: Record<string, unknown>, ctx: ServerContext)
 	// Build prompts
 	const prompt1 = buildSystemPrompt(pa1) + buildConferencePrompt(pa1, pa2.name, topic);
 	const prompt2 = buildSystemPrompt(pa2) + buildConferencePrompt(pa2, pa1.name, topic);
-	const initialPrompt1 = `Start the conference about: ${topic}. First use list_peers to find ${pa2.name}, then introduce yourself and your perspective.`;
-	const initialPrompt2 = `You've been invited to a conference about: ${topic}. Use check_messages() to see if ${pa1.name} has sent you a message, then respond.`;
+	const initialPrompt1 = `Conference topic: ${topic}. Start NOW: call mcp__peers__list_peers with scope="machine" to find ${pa2.name}, then send_message with your introduction. Use ONLY MCP peer tools, NOT SendMessage/Agent.`;
+	const initialPrompt2 = `Conference topic: ${topic}. Start NOW: call mcp__peers__check_messages to see if ${pa1.name} has messaged you, then reply via mcp__peers__send_message. If no message yet, call mcp__peers__list_peers with scope="machine" to find them. Use ONLY MCP peer tools, NOT SendMessage/Agent.`;
 
 	// Launch agent 1
 	pa1.currentSessionId = sid1;
