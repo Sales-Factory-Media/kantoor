@@ -602,6 +602,8 @@ export function AgentRoomList({
   const [hoveredId, setHoveredId] = useState<number | null>(null)
   const [hoveredRoom, setHoveredRoom] = useState<string | null>(null)
   const [manualToggles, setManualToggles] = useState<Set<string>>(new Set())
+  const [editingDescRoom, setEditingDescRoom] = useState<string | null>(null)
+  const [descDraft, setDescDraft] = useState('')
 
   const roomGroups = groupByRoom(agents, officeState, offlineAgents, knownProjects)
 
@@ -670,19 +672,97 @@ export function AgentRoomList({
                 {projectName || 'Unassigned'}
               </span>
             </span>
-            {onRemoveRoom && group.liveAgents.length === 0 && hoveredRoom === projectName && (
-              <button
-                onClick={(e) => {
-                  e.stopPropagation()
-                  onRemoveRoom(projectName)
-                }}
-                title="Remove room"
-                style={deleteButtonStyle}
-              >
-                {'\u2715'}
-              </button>
-            )}
+            <span style={{ display: 'flex', alignItems: 'center', gap: 2, flexShrink: 0 }}>
+              {group.workspacePath && hoveredRoom === projectName && (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    if (editingDescRoom === (group.workspacePath || projectName)) {
+                      setEditingDescRoom(null)
+                    } else {
+                      const roomKey = group.workspacePath || projectName
+                      setEditingDescRoom(roomKey)
+                      setDescDraft(knownProjects.find((p) => p.workspacePath === group.workspacePath)?.description || '')
+                    }
+                  }}
+                  title="Edit project description"
+                  style={deleteButtonStyle}
+                >
+                  {'\u270E'}
+                </button>
+              )}
+              {onRemoveRoom && group.liveAgents.length === 0 && hoveredRoom === projectName && (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    onRemoveRoom(projectName)
+                  }}
+                  title="Remove room"
+                  style={deleteButtonStyle}
+                >
+                  {'\u2715'}
+                </button>
+              )}
+            </span>
           </div>
+
+          {/* Description preview */}
+          {(() => {
+            const roomKey = group.workspacePath || projectName
+            const desc = knownProjects.find((p) => p.workspacePath === group.workspacePath)?.description
+            if (desc && editingDescRoom !== roomKey) {
+              return (
+                <div style={{ fontSize: '14px', color: 'var(--pixel-text-dim)', padding: '2px 8px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {desc}
+                </div>
+              )
+            }
+            return null
+          })()}
+
+          {/* Description editor */}
+          {editingDescRoom === (group.workspacePath || projectName) && (
+            <div style={{ padding: '4px 6px', borderBottom: '1px solid var(--pixel-border)' }}>
+              <textarea
+                style={{
+                  width: '100%',
+                  padding: '4px 6px',
+                  fontSize: '14px',
+                  color: 'var(--pixel-text)',
+                  background: 'var(--pixel-bg)',
+                  border: '2px solid var(--pixel-border)',
+                  borderRadius: 0,
+                  outline: 'none',
+                  boxSizing: 'border-box',
+                  minHeight: 80,
+                  resize: 'vertical',
+                }}
+                value={descDraft}
+                onChange={(e) => setDescDraft(e.target.value)}
+                placeholder="Project description..."
+                autoFocus
+              />
+              <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 4 }}>
+                <button
+                  onClick={() => {
+                    vscode.postMessage({ type: 'updateProjectDescription', workspacePath: group.workspacePath, description: descDraft })
+                    setEditingDescRoom(null)
+                  }}
+                  style={{
+                    padding: '2px 10px',
+                    fontSize: '18px',
+                    color: 'var(--pixel-agent-text)',
+                    background: 'var(--pixel-agent-bg)',
+                    border: '2px solid var(--pixel-agent-border)',
+                    borderRadius: 0,
+                    cursor: 'pointer',
+                  }}
+                >
+                  Save
+                </button>
+              </div>
+            </div>
+          )}
 
           {/* Live agents in this room */}
           {!collapsedRooms.has(projectName) && group.liveAgents.map((id) => {

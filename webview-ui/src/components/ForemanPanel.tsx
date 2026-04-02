@@ -304,17 +304,47 @@ export function ForemanPanel({
           top: 10,
           left: 10,
           zIndex: 'var(--pixel-controls-z)',
-          background: 'var(--pixel-bg)',
-          border: '2px solid var(--pixel-border)',
-          borderRadius: 0,
-          boxShadow: 'var(--pixel-shadow)',
           width: 340,
           maxHeight: 'calc(100% - 20px)',
           display: 'flex',
           flexDirection: 'column',
-          overflow: 'hidden',
+          alignItems: 'center',
         }}
       >
+        {/* Darryl avatar floating above the panel */}
+        <div
+          style={{
+            width: 96,
+            height: 96,
+            borderRadius: '50%',
+            border: '2px solid var(--pixel-border)',
+            boxShadow: 'var(--pixel-shadow)',
+            overflow: 'hidden',
+            marginBottom: -16,
+            zIndex: 1,
+            pointerEvents: 'none',
+          }}
+        >
+          <img
+            src="darryl.webp"
+            alt="Darryl"
+            style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
+          />
+        </div>
+        <div
+          style={{
+            background: 'var(--pixel-bg)',
+            border: '2px solid var(--pixel-border)',
+            borderRadius: 0,
+            boxShadow: 'var(--pixel-shadow)',
+            width: '100%',
+            flex: 1,
+            minHeight: 0,
+            display: 'flex',
+            flexDirection: 'column',
+            overflow: 'hidden',
+          }}
+        >
         {/* Header */}
         <div
           style={{
@@ -460,22 +490,39 @@ export function ForemanPanel({
                           </div>
                         )}
                       </div>
-                      <button
-                        onClick={() => setPickerTicket({ id: task.id, name: task.name, url: task.url })}
-                        style={{
-                          padding: '2px 6px',
-                          fontSize: '16px',
-                          color: 'var(--pixel-agent-text)',
-                          background: 'var(--pixel-agent-bg)',
-                          border: '2px solid var(--pixel-agent-border)',
-                          borderRadius: 0,
-                          cursor: 'pointer',
-                          flexShrink: 0,
-                          whiteSpace: 'nowrap',
-                        }}
-                      >
-                        Start Work
-                      </button>
+                      <div style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
+                        <button
+                          onClick={() => setPickerTicket({ id: task.id, name: task.name, url: task.url })}
+                          style={{
+                            padding: '2px 6px',
+                            fontSize: '16px',
+                            color: 'var(--pixel-agent-text)',
+                            background: 'var(--pixel-agent-bg)',
+                            border: '2px solid var(--pixel-agent-border)',
+                            borderRadius: 0,
+                            cursor: 'pointer',
+                            whiteSpace: 'nowrap',
+                          }}
+                        >
+                          Start Work
+                        </button>
+                        <button
+                          onClick={() => vscode.postMessage({ type: 'darrylHandleTicket', ticketId: task.id, ticketName: task.name, ticketUrl: task.url })}
+                          title="Let Darryl assess and assign this ticket"
+                          style={{
+                            padding: '2px 6px',
+                            fontSize: '16px',
+                            color: 'var(--pixel-text)',
+                            background: 'var(--pixel-bg)',
+                            border: '2px solid var(--pixel-border)',
+                            borderRadius: 0,
+                            cursor: 'pointer',
+                            whiteSpace: 'nowrap',
+                          }}
+                        >
+                          Darryl
+                        </button>
+                      </div>
                     </div>
                   )
 
@@ -495,6 +542,7 @@ export function ForemanPanel({
             ))
           )}
         </div>
+      </div>
       </div>
     </>
   )

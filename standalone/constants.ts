@@ -9,3 +9,4 @@ export const CLICKUP_POLL_INTERVAL_MS = 300000; // poll ClickUp every 5 minutes
 export const PEERS_BROKER_PORT = 7899;
 export const PEERS_BROKER_URL = 'http://localhost:7899';
 export const CONFERENCE_AGENT_DELAY_MS = 3000;
+export const DARRYL_ROLE_SHORT = 'Foreman';

@@ -12,8 +12,8 @@ import {
 	loadWallTiles,
 	loadCharacterSprites,
 } from '../src/assetLoader.js';
-import { loadKnownProjects, addKnownProject, removeKnownProjectByName } from '../src/projectStore.js';
-import { SERVER_PORT, CLICKUP_POLL_INTERVAL_MS, PEERS_BROKER_URL, CONFERENCE_AGENT_DELAY_MS } from './constants.js';
+import { loadKnownProjects, addKnownProject, removeKnownProjectByName, updateKnownProject } from '../src/projectStore.js';
+import { SERVER_PORT, CLICKUP_POLL_INTERVAL_MS, PEERS_BROKER_URL, CONFERENCE_AGENT_DELAY_MS, DARRYL_ROLE_SHORT } from './constants.js';
 import { ProjectScanner, decodeProjectHash } from './projectScanner.js';
 import { StandaloneAgentManager } from './standaloneAgentManager.js';
 import { focusItermSession, launchItermSession, launchAgentSession } from './itermFocus.js';
@@ -23,10 +23,12 @@ import {
 	pickRandomName,
 	ensureAgentMemory,
 	deleteAgentData,
+	generateAgentId,
 	buildSystemPrompt,
 	buildConferencePrompt,
+	buildDarrylSystemPrompt,
 } from './agentStore.js';
-import type { PersistentAgent } from './agentStore.js';
+import type { PersistentAgent, RosterEntry } from './agentStore.js';
 import type { OfflineAgent } from './types.js';
 import { ensureMcpConfig, startConference, endConference } from './conferenceManager.js';
 import type { ConferenceState } from './conferenceManager.js';
@@ -89,7 +91,9 @@ function launchPersistentAgent(pa: PersistentAgent, persistentAgents: Persistent
 	pa.currentSessionId = newSessionId;
 	savePersistentAgents(persistentAgents);
 
-	const prompt = buildSystemPrompt(pa);
+	const knownProjects = loadKnownProjects();
+	const project = knownProjects.find(p => p.workspacePath === pa.workspacePath);
+	const prompt = buildSystemPrompt(pa, project?.description);
 	const cwd = pa.workspacePath || os.homedir();
 	console.log(`[Standalone] Launching agent "${pa.name}" with session ${newSessionId} in ${cwd}${callInTask ? ` with task: ${callInTask}` : ''}`);
 	return launchAgentSession(newSessionId, cwd, prompt, callInTask);
@@ -353,7 +357,24 @@ function handleRemoveRoom(msg: Record<string, unknown>, ctx: ServerContext): voi
 	if (!roomName) return;
 	console.log(`[Standalone] Removing room: ${roomName}`);
 	removeKnownProjectByName(roomName);
+
+	// Remove persistent agents belonging to this project so they don't recreate the room
+	const toRemove = ctx.persistentAgents.filter(
+		(pa) => pa.workspacePath && path.basename(pa.workspacePath) === roomName,
+	);
+	if (toRemove.length > 0) {
+		const updated = ctx.persistentAgents.filter(
+			(pa) => !toRemove.some((r) => r.id === pa.id),
+		);
+		for (const pa of toRemove) {
+			deleteAgentData(pa.id);
+		}
+		savePersistentAgents(updated);
+		ctx.setPersistentAgents(updated);
+	}
+
 	ctx.broadcastSink.postMessage({ type: 'knownProjects', projects: loadKnownProjects() });
+	ctx.broadcastSink.postMessage({ type: 'offlineAgents', agents: getOfflineAgents(ctx.agentManager, ctx.persistentAgents) });
 }
 
 function handleSetSoundEnabled(msg: Record<string, unknown>): void {
@@ -379,8 +400,42 @@ async function handleClickupRefresh(ctx: ServerContext): Promise<void> {
 	}
 }
 
-function handleClickupStartWork(msg: Record<string, unknown>, ctx: ServerContext): void {
+function launchAgentOnTicket(
+	agentId: string,
+	ticketId: string,
+	ticketName: string,
+	ticketUrl: string,
+	ctx: ServerContext,
+	options?: { useTeam?: boolean; additionalPrompt?: string },
+): { success: boolean; error?: string } {
 	const { persistentAgents } = ctx;
+	const pa = persistentAgents.find(p => p.id === agentId);
+	if (!pa) return { success: false, error: `Agent not found: ${agentId}` };
+
+	let callInTask = `Work on ClickUp ticket ${ticketId}: "${ticketName}". Use the ClickUp MCP tools to read the ticket details, update status, and add comments as you make progress. Ticket URL: ${ticketUrl}`;
+
+	const knownProjects = loadKnownProjects();
+	const project = knownProjects.find(p => p.workspacePath === pa.workspacePath);
+	if (project?.description) {
+		callInTask += `\n\n## Project Context\n\n${project.description}`;
+	}
+
+	if (options?.additionalPrompt) {
+		callInTask += `\n\n## Additional Instructions\n\n${options.additionalPrompt}`;
+	}
+
+	if (options?.useTeam) {
+		callInTask += '\n\nCreate an agent team to work on this ticket. Break the work into parallel tasks and spawn teammates to handle them.';
+	}
+
+	ensureAgentMemory(agentId);
+	if (!launchPersistentAgent(pa, persistentAgents, callInTask)) {
+		return { success: false, error: 'Failed to launch agent session' };
+	}
+	return { success: true };
+}
+
+function handleClickupStartWork(msg: Record<string, unknown>, ctx: ServerContext): void {
 	const agentId = msg.agentId as string;
 	const ticketId = msg.ticketId as string;
 	const ticketName = msg.ticketName as string;
@@ -388,26 +443,10 @@ function handleClickupStartWork(msg: Record<string, unknown>, ctx: ServerContext
 	const useTeam = msg.useTeam as boolean | undefined;
 	const additionalPrompt = msg.additionalPrompt as string | undefined;
 
-	const pa = persistentAgents.find(p => p.id === agentId);
-	if (!pa) {
-		console.log(`[Standalone] Persistent agent ${agentId} not found for ClickUp task`);
-		ctx.broadcastSink.postMessage({ type: 'clickupError', error: `Agent not found: ${agentId}` });
-		return;
-	}
-
-	let callInTask = `Work on ClickUp ticket ${ticketId}: "${ticketName}". Use the ClickUp MCP tools to read the ticket details, update status, and add comments as you make progress. Ticket URL: ${ticketUrl}`;
-
-	if (additionalPrompt) {
-		callInTask += `\n\n## Additional Instructions\n\n${additionalPrompt}`;
-	}
-
-	if (useTeam) {
-		callInTask += '\n\nCreate an agent team to work on this ticket. Break the work into parallel tasks and spawn teammates to handle them.';
-	}
-
-	ensureAgentMemory(agentId);
-	if (!launchPersistentAgent(pa, persistentAgents, callInTask)) {
-		console.log(`[Standalone] Failed to launch agent for ClickUp task ${ticketId}`);
+	const result = launchAgentOnTicket(agentId, ticketId, ticketName, ticketUrl, ctx, { useTeam, additionalPrompt });
+	if (!result.success) {
+		console.log(`[Standalone] Failed to launch agent for ClickUp task ${ticketId}: ${result.error}`);
+		ctx.broadcastSink.postMessage({ type: 'clickupError', error: result.error || 'Unknown error' });
 	}
 }
 
@@ -468,8 +507,11 @@ function handleStartConference(msg: Record<string, unknown>, ctx: ServerContext)
 	};
 
 	// Build prompts
-	const prompt1 = buildSystemPrompt(pa1) + buildConferencePrompt(pa1, pa2.name, topic);
-	const prompt2 = buildSystemPrompt(pa2) + buildConferencePrompt(pa2, pa1.name, topic);
+	const knownProjects = loadKnownProjects();
+	const project1 = knownProjects.find(p => p.workspacePath === pa1.workspacePath);
+	const project2 = knownProjects.find(p => p.workspacePath === pa2.workspacePath);
+	const prompt1 = buildSystemPrompt(pa1, project1?.description) + buildConferencePrompt(pa1, pa2.name, topic);
+	const prompt2 = buildSystemPrompt(pa2, project2?.description) + buildConferencePrompt(pa2, pa1.name, topic);
 	const initialPrompt1 = `Conference topic: ${topic}. Start NOW: call mcp__peers__list_peers with scope="machine" to find ${pa2.name}, then send_message with your introduction. Use ONLY MCP peer tools, NOT SendMessage/Agent.`;
 	const initialPrompt2 = `Conference topic: ${topic}. Start NOW: call mcp__peers__check_messages to see if ${pa1.name} has messaged you, then reply via mcp__peers__send_message. If no message yet, call mcp__peers__list_peers with scope="machine" to find them. Use ONLY MCP peer tools, NOT SendMessage/Agent.`;
 
@@ -513,6 +555,13 @@ function handleStartConference(msg: Record<string, unknown>, ctx: ServerContext)
 	});
 }
 
+function handleUpdateProjectDescription(msg: Record<string, unknown>, ctx: ServerContext): void {
+	const workspacePath = msg.workspacePath as string;
+	const description = msg.description as string;
+	updateKnownProject(workspacePath, { description });
+	ctx.broadcastSink.postMessage({ type: 'knownProjects', projects: loadKnownProjects() });
+}
+
 function handleEndConference(msg: Record<string, unknown>, ctx: ServerContext): void {
 	const conferenceId = msg.conferenceId as string;
 	const conf = endConference(conferenceId);
@@ -520,6 +569,106 @@ function handleEndConference(msg: Record<string, unknown>, ctx: ServerContext): 
 		console.log(`[Standalone] Conference ended: ${conferenceId}`);
 	}
 	ctx.broadcastSink.postMessage({ type: 'conferenceEnded', conferenceId });
+}
+
+function handleDarrylHandleTicket(msg: Record<string, unknown>, ctx: ServerContext): void {
+	const ticketId = msg.ticketId as string;
+	const ticketName = msg.ticketName as string;
+	const ticketUrl = msg.ticketUrl as string;
+	const { persistentAgents } = ctx;
+
+	// Find or create Darryl
+	let darryl = persistentAgents.find(p => p.name === 'Darryl' && p.roleShort === DARRYL_ROLE_SHORT);
+	if (!darryl) {
+		darryl = {
+			id: generateAgentId(),
+			name: 'Darryl',
+			roleShort: DARRYL_ROLE_SHORT,
+			roleFull: 'The Foreman. Assesses tickets, decides which agents should work on them, and launches them.',
+			workspacePath: path.join(os.homedir(), 'Projects', 'kantoor-workspace'),
+		};
+		persistentAgents.push(darryl);
+		savePersistentAgents(persistentAgents);
+	}
+
+	// Build roster
+	const knownProjects = loadKnownProjects();
+	const roster: RosterEntry[] = persistentAgents
+		.filter(p => p.id !== darryl!.id)
+		.map(p => {
+			const proj = knownProjects.find(k => k.workspacePath === p.workspacePath);
+			return {
+				id: p.id,
+				name: p.name,
+				roleShort: p.roleShort,
+				roleFull: p.roleFull,
+				workspacePath: p.workspacePath,
+				projectName: proj?.name,
+				projectDescription: proj?.description,
+				isOnline: !!p.currentSessionId,
+			};
+		});
+
+	// Build prompts
+	const systemPrompt = buildDarrylSystemPrompt(darryl, roster, SERVER_PORT);
+
+	const initialTask = `Assess ClickUp ticket ${ticketId}: "${ticketName}"\nTicket URL: ${ticketUrl}\n\n1. Read the full ticket with mcp__clickup__clickup_get_task (task_id: "${ticketId}")\n2. Decide if the ticket is complete enough to assign\n3. If not complete: comment with your questions using mcp__clickup__clickup_create_task_comment\n4. If complete: pick the best agent from your roster and launch them via the HTTP API\n5. Update your memory file with your decision`;
+
+	// Launch Darryl
+	const newSessionId = crypto.randomUUID();
+	darryl.currentSessionId = newSessionId;
+	savePersistentAgents(persistentAgents);
+	ensureAgentMemory(darryl.id);
+
+	const cwd = darryl.workspacePath || os.homedir();
+	if (!launchAgentSession(newSessionId, cwd, systemPrompt, initialTask)) {
+		console.log(`[Standalone] Failed to launch Darryl for ticket ${ticketId}`);
+	}
+}
+
+function handleApiRoster(res: http.ServerResponse, ctx: ServerContext): void {
+	const knownProjects = loadKnownProjects();
+	const roster: RosterEntry[] = ctx.persistentAgents.map(p => {
+		const proj = knownProjects.find(k => k.workspacePath === p.workspacePath);
+		return {
+			id: p.id,
+			name: p.name,
+			roleShort: p.roleShort,
+			roleFull: p.roleFull,
+			workspacePath: p.workspacePath,
+			projectName: proj?.name,
+			projectDescription: proj?.description,
+			isOnline: !!p.currentSessionId,
+		};
+	});
+	res.writeHead(200);
+	res.end(JSON.stringify({ roster }));
+}
+
+function handleApiLaunchAgent(json: Record<string, unknown>, res: http.ServerResponse, ctx: ServerContext): void {
+	const agentId = json.agentId as string | undefined;
+	const ticketId = json.ticketId as string | undefined;
+	const ticketName = json.ticketName as string | undefined;
+	const ticketUrl = json.ticketUrl as string | undefined;
+
+	if (!agentId || !ticketId || !ticketName || !ticketUrl) {
+		res.writeHead(400);
+		res.end(JSON.stringify({ error: 'Missing required fields: agentId, ticketId, ticketName, ticketUrl' }));
+		return;
+	}
+
+	const useTeam = json.useTeam as boolean | undefined;
+	const additionalPrompt = json.additionalPrompt as string | undefined;
+
+	const result = launchAgentOnTicket(agentId, ticketId, ticketName, ticketUrl, ctx, { useTeam, additionalPrompt });
+	if (result.success) {
+		res.writeHead(200);
+		res.end(JSON.stringify({ success: true }));
+	} else {
+		res.writeHead(400);
+		res.end(JSON.stringify({ success: false, error: result.error }));
+		ctx.broadcastSink.postMessage({ type: 'clickupError', error: result.error || 'Unknown error' });
+	}
 }
 
 // ── Message dispatch ─────────────────────────────────────────
@@ -539,6 +688,8 @@ const messageHandlers: Record<string, (ws: WebSocket, msg: Record<string, unknow
 	clickupConfigure: (_ws, msg, ctx) => handleClickupConfigure(msg, ctx),
 	startConference: (_ws, msg, ctx) => handleStartConference(msg, ctx),
 	endConference: (_ws, msg, ctx) => handleEndConference(msg, ctx),
+	updateProjectDescription: (_ws, msg, ctx) => handleUpdateProjectDescription(msg, ctx),
+	darrylHandleTicket: (_ws, msg, ctx) => handleDarrylHandleTicket(msg, ctx),
 };
 
 // Not supported in standalone mode
@@ -675,7 +826,7 @@ async function main(): Promise<void> {
 	}
 
 	// ── HTTP server ──────────────────────────────────────────
-	const server = createHttpServer();
+	const server = createHttpServer(ctx);
 
 	// ── WebSocket server ─────────────────────────────────────
 	const wss = new WebSocketServer({ noServer: true });
@@ -740,13 +891,42 @@ const MIME_TYPES: Record<string, string> = {
 	'.ttf': 'font/ttf',
 };
 
-function createHttpServer(): http.Server {
+function createHttpServer(ctx: ServerContext): http.Server {
 	return http.createServer((req, res) => {
 		let urlPath = req.url || '/';
 
 		// Strip query strings
 		const qIdx = urlPath.indexOf('?');
 		if (qIdx >= 0) urlPath = urlPath.slice(0, qIdx);
+
+		// API routes
+		if (urlPath.startsWith('/api/')) {
+			res.setHeader('Content-Type', 'application/json');
+
+			if (req.method === 'GET' && urlPath === '/api/roster') {
+				handleApiRoster(res, ctx);
+				return;
+			}
+
+			if (req.method === 'POST' && urlPath === '/api/launch-agent') {
+				let body = '';
+				req.on('data', (chunk: Buffer) => { body += chunk.toString(); });
+				req.on('end', () => {
+					try {
+						const json = JSON.parse(body) as Record<string, unknown>;
+						handleApiLaunchAgent(json, res, ctx);
+					} catch {
+						res.writeHead(400);
+						res.end(JSON.stringify({ error: 'Invalid JSON' }));
+					}
+				});
+				return;
+			}
+
+			res.writeHead(404);
+			res.end(JSON.stringify({ error: 'Not found' }));
+			return;
+		}
 
 		// Default to index.html
 		if (urlPath === '/') urlPath = '/index.html';
