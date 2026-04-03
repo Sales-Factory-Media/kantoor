@@ -5,6 +5,7 @@ import { vscode, isStandalone } from '../vscodeApi.js'
 interface BottomToolbarProps {
   onOpenClaude: () => void
   workspaceFolders: WorkspaceFolder[]
+  clickupNextFetchAt: number | null
 }
 
 const btnBase: React.CSSProperties = {
@@ -17,14 +18,38 @@ const btnBase: React.CSSProperties = {
   cursor: 'pointer',
 }
 
+function formatCountdown(ms: number): string {
+  if (ms <= 0) return '0:00'
+  const totalSec = Math.ceil(ms / 1000)
+  const min = Math.floor(totalSec / 60)
+  const sec = totalSec % 60
+  return `${min}:${sec.toString().padStart(2, '0')}`
+}
+
 export function BottomToolbar({
   onOpenClaude,
   workspaceFolders,
+  clickupNextFetchAt,
 }: BottomToolbarProps) {
   const [hovered, setHovered] = useState<string | null>(null)
   const [isFolderPickerOpen, setIsFolderPickerOpen] = useState(false)
   const [hoveredFolder, setHoveredFolder] = useState<number | null>(null)
   const folderPickerRef = useRef<HTMLDivElement>(null)
+  const [countdown, setCountdown] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (clickupNextFetchAt == null) {
+      setCountdown(null)
+      return
+    }
+    const tick = () => {
+      const remaining = clickupNextFetchAt - Date.now()
+      setCountdown(remaining > 0 ? formatCountdown(remaining) : null)
+    }
+    tick()
+    const id = setInterval(tick, 1000)
+    return () => clearInterval(id)
+  }, [clickupNextFetchAt])
 
   // Close folder picker on outside click
   useEffect(() => {
@@ -67,7 +92,7 @@ export function BottomToolbar({
           pointerEvents: 'none',
         }}
       >
-        Watching...
+        Watching... {countdown != null ? `(next fetch in ${countdown})` : 'Countdown not running'}
       </div>
     )
   }

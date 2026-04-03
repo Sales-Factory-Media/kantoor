@@ -11,3 +11,5 @@ export const PEERS_BROKER_URL = 'http://localhost:7899';
 export const CONFERENCE_AGENT_DELAY_MS = 3000;
 export const DARRYL_ROLE_SHORT = 'Foreman';
 export const DARRYL_CLICKUP_USERNAME = 'Darryl Philbin';
+export const DARRYL_ESCALATION_USERNAME = 'Anne De Jong';
+export const DARRYL_WORKSPACE = '~/Projects/kantoor-workspace';

@@ -264,8 +264,17 @@ function filterGroups(groups: ClickUpStatusGroup[], predicate: (t: ClickUpTask) 
 function renderTask(
   task: ClickUpTask,
   indent: boolean,
+  statusName: string,
   onPickTicket: (t: { id: string; name: string; url: string }) => void,
 ) {
+  const isTodo = statusName.toLowerCase() === 'to do'
+
+  const handleCopyUrl = () => {
+    navigator.clipboard.writeText(task.url).catch(() => {
+      // silent fail
+    })
+  }
+
   return (
     <div
       key={task.id}
@@ -299,37 +308,76 @@ function renderTask(
         )}
       </div>
       <div style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
-        <button
-          onClick={() => onPickTicket({ id: task.id, name: task.name, url: task.url })}
-          style={{
-            padding: '2px 6px',
-            fontSize: '16px',
-            color: 'var(--pixel-agent-text)',
-            background: 'var(--pixel-agent-bg)',
-            border: '2px solid var(--pixel-agent-border)',
-            borderRadius: 0,
-            cursor: 'pointer',
-            whiteSpace: 'nowrap',
-          }}
-        >
-          Start Work
-        </button>
-        <button
-          onClick={() => vscode.postMessage({ type: 'darrylHandleTicket', ticketId: task.id, ticketName: task.name, ticketUrl: task.url })}
-          title="Let Darryl assess and assign this ticket"
-          style={{
-            padding: '2px 6px',
-            fontSize: '16px',
-            color: 'var(--pixel-text)',
-            background: 'var(--pixel-bg)',
-            border: '2px solid var(--pixel-border)',
-            borderRadius: 0,
-            cursor: 'pointer',
-            whiteSpace: 'nowrap',
-          }}
-        >
-          Darryl
-        </button>
+        {isTodo ? (
+          <>
+            <button
+              onClick={() => onPickTicket({ id: task.id, name: task.name, url: task.url })}
+              style={{
+                padding: '2px 6px',
+                fontSize: '16px',
+                color: 'var(--pixel-agent-text)',
+                background: 'var(--pixel-agent-bg)',
+                border: '2px solid var(--pixel-agent-border)',
+                borderRadius: 0,
+                cursor: 'pointer',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              Start Work
+            </button>
+            <button
+              onClick={() => vscode.postMessage({ type: 'darrylHandleTicket', ticketId: task.id, ticketName: task.name, ticketUrl: task.url })}
+              title="Let Darryl assess and assign this ticket"
+              style={{
+                padding: '2px 6px',
+                fontSize: '16px',
+                color: 'var(--pixel-text)',
+                background: 'var(--pixel-bg)',
+                border: '2px solid var(--pixel-border)',
+                borderRadius: 0,
+                cursor: 'pointer',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              Darryl
+            </button>
+          </>
+        ) : (
+          <>
+            <button
+              onClick={() => window.open(task.url, '_blank')}
+              title="Open in ClickUp"
+              style={{
+                padding: '2px 6px',
+                fontSize: '16px',
+                color: 'var(--pixel-agent-text)',
+                background: 'var(--pixel-agent-bg)',
+                border: '2px solid var(--pixel-agent-border)',
+                borderRadius: 0,
+                cursor: 'pointer',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              Open
+            </button>
+            <button
+              onClick={handleCopyUrl}
+              title="Copy ClickUp link"
+              style={{
+                padding: '2px 6px',
+                fontSize: '16px',
+                color: 'var(--pixel-text)',
+                background: 'var(--pixel-bg)',
+                border: '2px solid var(--pixel-border)',
+                borderRadius: 0,
+                cursor: 'pointer',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              Copy
+            </button>
+          </>
+        )}
       </div>
     </div>
   )
@@ -384,11 +432,11 @@ function renderStatusGroup(
         <>
           {parentTasks.map((task) => (
             <div key={task.id}>
-              {renderTask(task, false, onPickTicket)}
-              {(childrenByParent.get(task.id) ?? []).map((sub) => renderTask(sub, true, onPickTicket))}
+              {renderTask(task, false, group.name, onPickTicket)}
+              {(childrenByParent.get(task.id) ?? []).map((sub) => renderTask(sub, true, group.name, onPickTicket))}
             </div>
           ))}
-          {orphanSubtasks.map((task) => renderTask(task, true, onPickTicket))}
+          {orphanSubtasks.map((task) => renderTask(task, true, group.name, onPickTicket))}
         </>
       )}
     </div>
