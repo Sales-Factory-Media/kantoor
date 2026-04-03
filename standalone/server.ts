@@ -556,9 +556,20 @@ function handleStartConference(msg: Record<string, unknown>, ctx: ServerContext)
 }
 
 function handleUpdateProjectDescription(msg: Record<string, unknown>, ctx: ServerContext): void {
-	const workspacePath = msg.workspacePath as string;
-	const description = msg.description as string;
-	updateKnownProject(workspacePath, { description });
+	const workspacePath = msg.workspacePath;
+	const description = msg.description;
+
+	if (typeof workspacePath !== 'string' || workspacePath.trim().length === 0) {
+		console.warn('[Standalone] Invalid project description update: workspacePath must be a non-empty string');
+		return;
+	}
+
+	if (typeof description !== 'string') {
+		console.warn('[Standalone] Invalid project description update: description must be a string');
+		return;
+	}
+
+	updateKnownProject(workspacePath.trim(), { description });
 	ctx.broadcastSink.postMessage({ type: 'knownProjects', projects: loadKnownProjects() });
 }
 
@@ -580,15 +591,26 @@ function handleDarrylHandleTicket(msg: Record<string, unknown>, ctx: ServerConte
 	// Find or create Darryl
 	let darryl = persistentAgents.find(p => p.name === 'Darryl' && p.roleShort === DARRYL_ROLE_SHORT);
 	if (!darryl) {
+		// Use the first known project's workspace path, or fall back to home directory
+		const knownProjectsFallback = loadKnownProjects();
+		const fallbackWorkspace = knownProjectsFallback.length > 0
+			? knownProjectsFallback[0].workspacePath
+			: os.homedir();
 		darryl = {
 			id: generateAgentId(),
 			name: 'Darryl',
 			roleShort: DARRYL_ROLE_SHORT,
 			roleFull: 'The Foreman. Assesses tickets, decides which agents should work on them, and launches them.',
-			workspacePath: path.join(os.homedir(), 'Projects', 'kantoor-workspace'),
+			workspacePath: fallbackWorkspace,
 		};
 		persistentAgents.push(darryl);
 		savePersistentAgents(persistentAgents);
+	}
+
+	// If Darryl already has an active session, reuse it
+	if (darryl.currentSessionId) {
+		console.log(`[Standalone] Darryl already has an active session ${darryl.currentSessionId}, skipping relaunch for ticket ${ticketId}`);
+		return;
 	}
 
 	// Build roster
@@ -770,8 +792,8 @@ async function main(): Promise<void> {
 	const scanner = new ProjectScanner({
 		onNewSession(projectDir, jsonlFile, projectName) {
 			if (!agentManager.hasSession(jsonlFile)) {
-				addKnownProject(projectName, projectDir);
 				const workspacePath = getWorkspacePath(projectDir);
+				addKnownProject(projectName, workspacePath || projectDir);
 				const sessionId = path.basename(jsonlFile, '.jsonl');
 				let pa = findPersistentAgentBySession(sessionId);
 
@@ -862,7 +884,7 @@ async function main(): Promise<void> {
 		});
 	});
 
-	server.listen(SERVER_PORT, () => {
+	server.listen(SERVER_PORT, '127.0.0.1', () => {
 		console.log(`\n  Pixel Agents standalone server`);
 		console.log(`  Listening on http://localhost:${SERVER_PORT}\n`);
 		console.log(`  Watching ~/.claude/projects/ for agent sessions...\n`);
@@ -891,6 +913,7 @@ const MIME_TYPES: Record<string, string> = {
 	'.woff': 'font/woff',
 	'.woff2': 'font/woff2',
 	'.ttf': 'font/ttf',
+	'.webp': 'image/webp',
 };
 
 function createHttpServer(ctx: ServerContext): http.Server {
@@ -911,9 +934,21 @@ function createHttpServer(ctx: ServerContext): http.Server {
 			}
 
 			if (req.method === 'POST' && urlPath === '/api/launch-agent') {
+				const MAX_BODY_BYTES = 64 * 1024; // 64 KB
 				let body = '';
-				req.on('data', (chunk: Buffer) => { body += chunk.toString(); });
+				let exceeded = false;
+				req.on('data', (chunk: Buffer) => {
+					if (exceeded) return;
+					body += chunk.toString();
+					if (Buffer.byteLength(body) > MAX_BODY_BYTES) {
+						exceeded = true;
+						res.writeHead(413);
+						res.end(JSON.stringify({ error: 'Request body too large' }));
+						req.destroy();
+					}
+				});
 				req.on('end', () => {
+					if (exceeded) return;
 					try {
 						const json = JSON.parse(body) as Record<string, unknown>;
 						handleApiLaunchAgent(json, res, ctx);

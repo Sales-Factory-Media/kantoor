@@ -21,8 +21,10 @@ vi.mock('crypto', () => ({
 import {
 	pickRandomName,
 	buildSystemPrompt,
+	buildDarrylSystemPrompt,
 	getAgentMemoryPath,
 } from './agentStore.js';
+import type { RosterEntry } from './agentStore.js';
 
 function makeAgent(overrides: Partial<PersistentAgent> = {}): PersistentAgent {
 	return {
@@ -118,6 +120,83 @@ describe('buildSystemPrompt', () => {
 		expect(prompt).not.toContain('Your role:');
 		// Name should still be there
 		expect(prompt).toContain('You are Michael.');
+	});
+
+	it('includes Project Context section when projectDescription is provided', () => {
+		const agent = makeAgent();
+		const prompt = buildSystemPrompt(agent, 'A CRM application for managing customer relationships');
+		expect(prompt).toContain('## Project Context');
+		expect(prompt).toContain('A CRM application for managing customer relationships');
+	});
+
+	it('omits Project Context section when projectDescription is not provided', () => {
+		const agent = makeAgent();
+		const prompt = buildSystemPrompt(agent);
+		expect(prompt).not.toContain('## Project Context');
+	});
+
+	it('omits Project Context section when projectDescription is undefined', () => {
+		const agent = makeAgent();
+		const prompt = buildSystemPrompt(agent, undefined);
+		expect(prompt).not.toContain('## Project Context');
+	});
+});
+
+describe('buildDarrylSystemPrompt', () => {
+	const darryl = makeAgent({ name: 'Darryl', roleShort: 'Foreman' });
+
+	function makeRoster(overrides: Partial<RosterEntry>[] = []): RosterEntry[] {
+		const defaults: RosterEntry = {
+			id: 'agent-2',
+			name: 'Jim',
+			roleShort: 'Developer',
+			roleFull: 'Frontend developer',
+			workspacePath: '/projects/frontend',
+			isOnline: false,
+		};
+		if (overrides.length === 0) return [{ ...defaults }];
+		return overrides.map(o => ({ ...defaults, ...o }));
+	}
+
+	it('identifies Darryl as the Foreman', () => {
+		const prompt = buildDarrylSystemPrompt(darryl, makeRoster(), 3333);
+		expect(prompt).toContain('You are Darryl, the Foreman');
+	});
+
+	it('includes HTTP API instructions with correct port', () => {
+		const prompt = buildDarrylSystemPrompt(darryl, makeRoster(), 4444);
+		expect(prompt).toContain('http://localhost:4444/api/launch-agent');
+		expect(prompt).toContain('http://localhost:4444');
+	});
+
+	it('renders roster entries with agent details', () => {
+		const roster = makeRoster([
+			{ id: 'a1', name: 'Jim', roleShort: 'Developer', isOnline: false },
+			{ id: 'a2', name: 'Pam', roleShort: 'Designer', isOnline: true },
+		]);
+		const prompt = buildDarrylSystemPrompt(darryl, roster, 3333);
+		expect(prompt).toContain('**Jim**');
+		expect(prompt).toContain('**Pam**');
+		expect(prompt).toContain('OFFLINE (available)');
+		expect(prompt).toContain('ONLINE (busy)');
+	});
+
+	it('includes project description in roster when provided', () => {
+		const roster = makeRoster([
+			{ id: 'a1', name: 'Jim', projectName: 'crm', projectDescription: 'Customer management app' },
+		]);
+		const prompt = buildDarrylSystemPrompt(darryl, roster, 3333);
+		expect(prompt).toContain('crm — Customer management app');
+	});
+
+	it('includes memory path', () => {
+		const prompt = buildDarrylSystemPrompt(darryl, makeRoster(), 3333);
+		expect(prompt).toContain('MEMORY.md');
+	});
+
+	it('includes decision framework section', () => {
+		const prompt = buildDarrylSystemPrompt(darryl, makeRoster(), 3333);
+		expect(prompt).toContain('## Decision Framework');
 	});
 });
 
