@@ -10,3 +10,4 @@ export const PEERS_BROKER_PORT = 7899;
 export const PEERS_BROKER_URL = 'http://localhost:7899';
 export const CONFERENCE_AGENT_DELAY_MS = 3000;
 export const DARRYL_ROLE_SHORT = 'Foreman';
+export const DARRYL_CLICKUP_USERNAME = 'Darryl Philbin';

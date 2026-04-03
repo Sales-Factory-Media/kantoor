@@ -596,14 +596,15 @@ function handleDarrylHandleTicket(msg: Record<string, unknown>, ctx: ServerConte
 	const roster: RosterEntry[] = persistentAgents
 		.filter(p => p.id !== darryl!.id)
 		.map(p => {
-			const proj = knownProjects.find(k => k.workspacePath === p.workspacePath);
+			const projName = path.basename(p.workspacePath);
+			const proj = knownProjects.find(k => k.name === projName);
 			return {
 				id: p.id,
 				name: p.name,
 				roleShort: p.roleShort,
 				roleFull: p.roleFull,
 				workspacePath: p.workspacePath,
-				projectName: proj?.name,
+				projectName: proj?.name ?? projName,
 				projectDescription: proj?.description,
 				isOnline: !!p.currentSessionId,
 			};
@@ -629,14 +630,15 @@ function handleDarrylHandleTicket(msg: Record<string, unknown>, ctx: ServerConte
 function handleApiRoster(res: http.ServerResponse, ctx: ServerContext): void {
 	const knownProjects = loadKnownProjects();
 	const roster: RosterEntry[] = ctx.persistentAgents.map(p => {
-		const proj = knownProjects.find(k => k.workspacePath === p.workspacePath);
+		const projName = path.basename(p.workspacePath);
+		const proj = knownProjects.find(k => k.name === projName);
 		return {
 			id: p.id,
 			name: p.name,
 			roleShort: p.roleShort,
 			roleFull: p.roleFull,
 			workspacePath: p.workspacePath,
-			projectName: proj?.name,
+			projectName: proj?.name ?? projName,
 			projectDescription: proj?.description,
 			isOnline: !!p.currentSessionId,
 		};

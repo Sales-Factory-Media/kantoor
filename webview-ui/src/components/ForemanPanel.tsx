@@ -4,6 +4,7 @@ import type { OfficeState } from '../office/engine/officeState.js'
 import type { ClickUpStatusGroup, ClickUpTask, OfflineAgent, KnownProject } from '../hooks/useExtensionMessages.js'
 import { AgentRoomList } from './AgentSidebar.js'
 import { vscode } from '../vscodeApi.js'
+import { DARRYL_CLICKUP_USERNAME } from '../constants.js'
 
 interface ForemanPanelProps {
   visible: boolean
@@ -250,6 +251,230 @@ function ConfigurePanel({ onDone, isUpdate, initialListId }: { onDone: () => voi
   )
 }
 
+function isAssignedToDarryl(task: ClickUpTask): boolean {
+  return task.assignees.some((a) => a.username === DARRYL_CLICKUP_USERNAME)
+}
+
+function filterGroups(groups: ClickUpStatusGroup[], predicate: (t: ClickUpTask) => boolean): ClickUpStatusGroup[] {
+  return groups
+    .map((g) => ({ ...g, tasks: g.tasks.filter(predicate) }))
+    .filter((g) => g.tasks.length > 0)
+}
+
+function renderTask(
+  task: ClickUpTask,
+  indent: boolean,
+  onPickTicket: (t: { id: string; name: string; url: string }) => void,
+) {
+  return (
+    <div
+      key={task.id}
+      style={{
+        padding: `4px 8px 4px ${indent ? 28 : 14}px`,
+        borderBottom: '1px solid var(--pixel-border)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        gap: 6,
+      }}
+    >
+      <div style={{ overflow: 'hidden', flex: 1 }}>
+        <div
+          style={{
+            fontSize: indent ? '16px' : '18px',
+            color: 'var(--pixel-text)',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+          }}
+          title={task.name}
+        >
+          {indent && <span style={{ color: 'var(--pixel-text-dim)', marginRight: 4 }}>{'\u2514'}</span>}
+          {task.name}
+        </div>
+        {task.assignees.length > 0 && (
+          <div style={{ fontSize: '14px', color: 'var(--pixel-text-dim)', paddingLeft: indent ? 16 : 0 }}>
+            {task.assignees.map((a) => a.username).join(', ')}
+          </div>
+        )}
+      </div>
+      <div style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
+        <button
+          onClick={() => onPickTicket({ id: task.id, name: task.name, url: task.url })}
+          style={{
+            padding: '2px 6px',
+            fontSize: '16px',
+            color: 'var(--pixel-agent-text)',
+            background: 'var(--pixel-agent-bg)',
+            border: '2px solid var(--pixel-agent-border)',
+            borderRadius: 0,
+            cursor: 'pointer',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          Start Work
+        </button>
+        <button
+          onClick={() => vscode.postMessage({ type: 'darrylHandleTicket', ticketId: task.id, ticketName: task.name, ticketUrl: task.url })}
+          title="Let Darryl assess and assign this ticket"
+          style={{
+            padding: '2px 6px',
+            fontSize: '16px',
+            color: 'var(--pixel-text)',
+            background: 'var(--pixel-bg)',
+            border: '2px solid var(--pixel-border)',
+            borderRadius: 0,
+            cursor: 'pointer',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          Darryl
+        </button>
+      </div>
+    </div>
+  )
+}
+
+function renderStatusGroup(
+  group: ClickUpStatusGroup,
+  collapsed: boolean,
+  onToggle: () => void,
+  onPickTicket: (t: { id: string; name: string; url: string }) => void,
+) {
+  const parentTasks = group.tasks.filter((t) => !t.parent)
+  const childrenByParent = new Map<string, ClickUpTask[]>()
+  for (const t of group.tasks) {
+    if (t.parent) {
+      const list = childrenByParent.get(t.parent) ?? []
+      list.push(t)
+      childrenByParent.set(t.parent, list)
+    }
+  }
+  const orphanSubtasks = group.tasks.filter((t) => t.parent && !group.tasks.some((p) => p.id === t.parent))
+
+  return (
+    <div key={group.name}>
+      <div
+        onClick={onToggle}
+        style={{
+          padding: '4px 8px',
+          fontSize: '18px',
+          color: 'var(--pixel-text)',
+          background: `${group.color}22`,
+          borderBottom: '1px solid var(--pixel-border)',
+          borderLeft: `3px solid ${group.color}`,
+          cursor: 'pointer',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          userSelect: 'none',
+        }}
+      >
+        <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <span style={{ fontSize: '14px', color: 'var(--pixel-text-dim)' }}>
+            {collapsed ? '\u25B6' : '\u25BC'}
+          </span>
+          <span style={{ fontWeight: 'bold' }}>{group.name}</span>
+          <span style={{ fontSize: '16px', color: 'var(--pixel-text-dim)' }}>
+            ({group.tasks.length})
+          </span>
+        </span>
+      </div>
+      {!collapsed && (
+        <>
+          {parentTasks.map((task) => (
+            <div key={task.id}>
+              {renderTask(task, false, onPickTicket)}
+              {(childrenByParent.get(task.id) ?? []).map((sub) => renderTask(sub, true, onPickTicket))}
+            </div>
+          ))}
+          {orphanSubtasks.map((task) => renderTask(task, true, onPickTicket))}
+        </>
+      )}
+    </div>
+  )
+}
+
+function TicketList({
+  clickupTickets,
+  collapsedStatuses,
+  toggleStatus,
+  otherTasksOpen,
+  setOtherTasksOpen,
+  onPickTicket,
+}: {
+  clickupTickets: ClickUpStatusGroup[]
+  collapsedStatuses: Set<string>
+  toggleStatus: (name: string) => void
+  otherTasksOpen: boolean
+  setOtherTasksOpen: (open: boolean) => void
+  onPickTicket: (t: { id: string; name: string; url: string }) => void
+}) {
+  const darrylGroups = filterGroups(clickupTickets, isAssignedToDarryl)
+  const otherGroups = filterGroups(clickupTickets, (t) => !isAssignedToDarryl(t))
+  const darrylTotal = darrylGroups.reduce((n, g) => n + g.tasks.length, 0)
+  const otherTotal = otherGroups.reduce((n, g) => n + g.tasks.length, 0)
+
+  return (
+    <>
+      {/* Darryl's assigned tasks */}
+      {darrylTotal > 0 ? (
+        darrylGroups.map((group) =>
+          renderStatusGroup(
+            group,
+            collapsedStatuses.has(group.name),
+            () => toggleStatus(group.name),
+            onPickTicket,
+          ),
+        )
+      ) : (
+        <div style={{ padding: '8px 8px', fontSize: '18px', color: 'var(--pixel-text-dim)' }}>
+          No tasks assigned to Darryl.
+        </div>
+      )}
+
+      {/* Other tasks — collapsible, closed by default */}
+      {otherTotal > 0 && (
+        <>
+          <div
+            onClick={() => setOtherTasksOpen(!otherTasksOpen)}
+            style={{
+              padding: '6px 8px',
+              fontSize: '18px',
+              color: 'var(--pixel-text)',
+              background: 'var(--pixel-bg)',
+              borderTop: '2px solid var(--pixel-border)',
+              borderBottom: '1px solid var(--pixel-border)',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 6,
+              userSelect: 'none',
+            }}
+          >
+            <span style={{ fontSize: '14px', color: 'var(--pixel-text-dim)' }}>
+              {otherTasksOpen ? '\u25BC' : '\u25B6'}
+            </span>
+            <span style={{ fontWeight: 'bold' }}>Other Tasks</span>
+            <span style={{ fontSize: '16px', color: 'var(--pixel-text-dim)' }}>
+              ({otherTotal})
+            </span>
+          </div>
+          {otherTasksOpen &&
+            otherGroups.map((group) =>
+              renderStatusGroup(
+                group,
+                collapsedStatuses.has('other:' + group.name),
+                () => toggleStatus('other:' + group.name),
+                onPickTicket,
+              ),
+            )}
+        </>
+      )}
+    </>
+  )
+}
+
 export function ForemanPanel({
   visible,
   onClose,
@@ -266,6 +491,7 @@ export function ForemanPanel({
   const [pickerTicket, setPickerTicket] = useState<{ id: string; name: string; url: string } | null>(null)
   const [collapsedStatuses, setCollapsedStatuses] = useState<Set<string>>(new Set())
   const [showSettings, setShowSettings] = useState(false)
+  const [otherTasksOpen, setOtherTasksOpen] = useState(false)
 
   if (!visible) return null
 
@@ -414,132 +640,14 @@ export function ForemanPanel({
               No tickets found. Click refresh to fetch.
             </div>
           ) : (
-            clickupTickets.map((group) => (
-              <div key={group.name}>
-                {/* Status header */}
-                <div
-                  onClick={() => toggleStatus(group.name)}
-                  style={{
-                    padding: '4px 8px',
-                    fontSize: '18px',
-                    color: 'var(--pixel-text)',
-                    background: `${group.color}22`,
-                    borderBottom: '1px solid var(--pixel-border)',
-                    borderLeft: `3px solid ${group.color}`,
-                    cursor: 'pointer',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    userSelect: 'none',
-                  }}
-                >
-                  <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <span style={{ fontSize: '14px', color: 'var(--pixel-text-dim)' }}>
-                      {collapsedStatuses.has(group.name) ? '\u25B6' : '\u25BC'}
-                    </span>
-                    <span style={{ fontWeight: 'bold' }}>{group.name}</span>
-                    <span style={{ fontSize: '16px', color: 'var(--pixel-text-dim)' }}>
-                      ({group.tasks.length})
-                    </span>
-                  </span>
-                </div>
-
-                {/* Tasks */}
-                {!collapsedStatuses.has(group.name) && (() => {
-                  const parentTasks = group.tasks.filter((t) => !t.parent)
-                  const childrenByParent = new Map<string, ClickUpTask[]>()
-                  for (const t of group.tasks) {
-                    if (t.parent) {
-                      const list = childrenByParent.get(t.parent) ?? []
-                      list.push(t)
-                      childrenByParent.set(t.parent, list)
-                    }
-                  }
-                  // Subtasks whose parent is in a different status group (not visible here)
-                  const orphanSubtasks = group.tasks.filter((t) => t.parent && !group.tasks.some((p) => p.id === t.parent))
-
-                  const renderTask = (task: ClickUpTask, indent: boolean) => (
-                    <div
-                      key={task.id}
-                      style={{
-                        padding: `4px 8px 4px ${indent ? 28 : 14}px`,
-                        borderBottom: '1px solid var(--pixel-border)',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'space-between',
-                        gap: 6,
-                      }}
-                    >
-                      <div style={{ overflow: 'hidden', flex: 1 }}>
-                        <div
-                          style={{
-                            fontSize: indent ? '16px' : '18px',
-                            color: 'var(--pixel-text)',
-                            overflow: 'hidden',
-                            textOverflow: 'ellipsis',
-                            whiteSpace: 'nowrap',
-                          }}
-                          title={task.name}
-                        >
-                          {indent && <span style={{ color: 'var(--pixel-text-dim)', marginRight: 4 }}>{'\u2514'}</span>}
-                          {task.name}
-                        </div>
-                        {task.assignees.length > 0 && (
-                          <div style={{ fontSize: '14px', color: 'var(--pixel-text-dim)', paddingLeft: indent ? 16 : 0 }}>
-                            {task.assignees.map((a) => a.username).join(', ')}
-                          </div>
-                        )}
-                      </div>
-                      <div style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
-                        <button
-                          onClick={() => setPickerTicket({ id: task.id, name: task.name, url: task.url })}
-                          style={{
-                            padding: '2px 6px',
-                            fontSize: '16px',
-                            color: 'var(--pixel-agent-text)',
-                            background: 'var(--pixel-agent-bg)',
-                            border: '2px solid var(--pixel-agent-border)',
-                            borderRadius: 0,
-                            cursor: 'pointer',
-                            whiteSpace: 'nowrap',
-                          }}
-                        >
-                          Start Work
-                        </button>
-                        <button
-                          onClick={() => vscode.postMessage({ type: 'darrylHandleTicket', ticketId: task.id, ticketName: task.name, ticketUrl: task.url })}
-                          title="Let Darryl assess and assign this ticket"
-                          style={{
-                            padding: '2px 6px',
-                            fontSize: '16px',
-                            color: 'var(--pixel-text)',
-                            background: 'var(--pixel-bg)',
-                            border: '2px solid var(--pixel-border)',
-                            borderRadius: 0,
-                            cursor: 'pointer',
-                            whiteSpace: 'nowrap',
-                          }}
-                        >
-                          Darryl
-                        </button>
-                      </div>
-                    </div>
-                  )
-
-                  return (
-                    <>
-                      {parentTasks.map((task) => (
-                        <div key={task.id}>
-                          {renderTask(task, false)}
-                          {(childrenByParent.get(task.id) ?? []).map((sub) => renderTask(sub, true))}
-                        </div>
-                      ))}
-                      {orphanSubtasks.map((task) => renderTask(task, true))}
-                    </>
-                  )
-                })()}
-              </div>
-            ))
+            <TicketList
+              clickupTickets={clickupTickets}
+              collapsedStatuses={collapsedStatuses}
+              toggleStatus={toggleStatus}
+              otherTasksOpen={otherTasksOpen}
+              setOtherTasksOpen={setOtherTasksOpen}
+              onPickTicket={setPickerTicket}
+            />
           )}
         </div>
       </div>
