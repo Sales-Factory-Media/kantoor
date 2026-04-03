@@ -84,7 +84,7 @@ export function pickRandomName(existingAgents: PersistentAgent[]): string {
 	return `${base} ${suffix}`;
 }
 
-export function buildSystemPrompt(agent: PersistentAgent): string {
+export function buildSystemPrompt(agent: PersistentAgent, projectDescription?: string): string {
 	const memoryPath = getAgentMemoryPath(agent.id);
 	const lines = [
 		`You are ${agent.name}.`,
@@ -108,6 +108,14 @@ export function buildSystemPrompt(agent: PersistentAgent): string {
 		if (agent.lastSessionEnd) {
 			lines.push(`Your last session ended on ${agent.lastSessionEnd}.`);
 		}
+	}
+	if (projectDescription) {
+		lines.push(
+			'',
+			'## Project Context',
+			'',
+			projectDescription,
+		);
 	}
 	lines.push(
 		'',
@@ -134,6 +142,83 @@ export function buildSystemPrompt(agent: PersistentAgent): string {
 		'Instead, update the ticket status to "QA Test" using the ClickUp MCP tools.',
 		'A human developer will review and validate the work before it can be considered done.',
 	);
+	return lines.join('\n');
+}
+
+export interface RosterEntry {
+	id: string;
+	name: string;
+	roleShort: string;
+	roleFull: string;
+	workspacePath: string;
+	projectName?: string;
+	projectDescription?: string;
+	isOnline: boolean;
+}
+
+export function buildDarrylSystemPrompt(agent: PersistentAgent, roster: RosterEntry[], serverPort: number): string {
+	const memoryPath = getAgentMemoryPath(agent.id);
+	const lines = [
+		'You are Darryl, the Foreman of this development team.',
+		'',
+		`Your persistent memory file is at: ${memoryPath}`,
+		'Read this file at the start of each session to recall context from previous sessions.',
+		'Update it as you work with important decisions, progress, patterns, and context you want to remember across sessions.',
+		'',
+		'## Decision Framework',
+		'',
+		'When you receive a ticket to assess, follow these steps:',
+		'',
+		'1. **Read the ticket** using `mcp__clickup__clickup_get_task` with the task_id provided.',
+		'2. **Assess completeness**: Does the ticket have a clear description? Are there acceptance criteria? Is the scope well-defined?',
+		'3. **If NOT complete**: Use `mcp__clickup__clickup_create_task_comment` to comment on the ticket with specific questions about what is missing or unclear. Do NOT assign anyone.',
+		'4. **If complete**: Match the ticket to the best available agent based on their role, project, and expertise, then launch them using the HTTP API.',
+		'',
+		'## HTTP API — Launching Agents',
+		'',
+		`Use curl to launch agents via the Pixel Agents server at http://localhost:${serverPort}:`,
+		'',
+		'**Solo assignment** (single agent works on the ticket):',
+		'```',
+		`curl -X POST http://localhost:${serverPort}/api/launch-agent -H 'Content-Type: application/json' -d '{"agentId":"<id>","ticketId":"<id>","ticketName":"<name>","ticketUrl":"<url>"}'`,
+		'```',
+		'',
+		'**Team assignment** (agent spawns sub-agents for complex work):',
+		'```',
+		`curl -X POST http://localhost:${serverPort}/api/launch-agent -H 'Content-Type: application/json' -d '{"agentId":"<id>","ticketId":"<id>","ticketName":"<name>","ticketUrl":"<url>","useTeam":true}'`,
+		'```',
+		'',
+		'**With additional instructions**:',
+		'```',
+		`curl -X POST http://localhost:${serverPort}/api/launch-agent -H 'Content-Type: application/json' -d '{"agentId":"<id>","ticketId":"<id>","ticketName":"<name>","ticketUrl":"<url>","additionalPrompt":"..."}'`,
+		'```',
+		'',
+		'## Agent Roster',
+		'',
+	];
+
+	for (const entry of roster) {
+		lines.push(`- **${entry.name}** (id: \`${entry.id}\`)`);
+		lines.push(`  - Role: ${entry.roleShort || 'unspecified'}${entry.roleFull ? ` — ${entry.roleFull}` : ''}`);
+		lines.push(`  - Workspace: ${entry.workspacePath}`);
+		if (entry.projectDescription) {
+			lines.push(`  - Project: ${entry.projectName || 'unknown'} — ${entry.projectDescription}`);
+		} else if (entry.projectName) {
+			lines.push(`  - Project: ${entry.projectName}`);
+		}
+		lines.push(`  - Status: ${entry.isOnline ? 'ONLINE (busy)' : 'OFFLINE (available)'}`);
+	}
+
+	lines.push(
+		'',
+		'## Rules',
+		'',
+		'- Only assign OFFLINE agents. Online agents are already busy with other work.',
+		'- Match the agent\'s workspace and role to the ticket\'s project and requirements.',
+		'- Use team mode for complex, multi-part tickets that benefit from parallel work.',
+		'- Update your memory file after each decision with what you decided and why.',
+	);
+
 	return lines.join('\n');
 }
 

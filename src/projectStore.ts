@@ -8,6 +8,7 @@ const KNOWN_PROJECTS_FILE = 'known-projects.json';
 export interface KnownProject {
 	name: string;
 	workspacePath: string;
+	description?: string;
 }
 
 function getFilePath(): string {
@@ -63,6 +64,14 @@ export function removeKnownProjectByName(name: string): void {
 	if (filtered.length !== projects.length) {
 		writeKnownProjects(filtered);
 	}
+}
+
+export function updateKnownProject(workspacePath: string, updates: Partial<Omit<KnownProject, 'workspacePath'>>): void {
+	const projects = loadKnownProjects();
+	const idx = projects.findIndex(p => p.workspacePath === workspacePath);
+	if (idx === -1) return;
+	projects[idx] = { ...projects[idx], ...updates };
+	writeKnownProjects(projects);
 }
 
 /** Get known projects filtered to those whose workspace path is in the current VS Code window */

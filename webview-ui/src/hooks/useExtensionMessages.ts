@@ -43,6 +43,7 @@ export interface WorkspaceFolder {
 export interface KnownProject {
   name: string
   workspacePath: string
+  description?: string
 }
 
 export interface OfflineAgent {
