@@ -241,7 +241,7 @@ Ticket URL: ${ticketUrl}
 	ensureAgentMemory(darryl.id);
 
 	const cwd = darryl.workspacePath || os.homedir();
-	if (!launchAgentSession(newSessionId, cwd, systemPrompt, initialTask)) {
+	if (!launchAgentSession(newSessionId, cwd, systemPrompt, initialTask, { extraFlags: ['--dangerously-skip-permissions'] })) {
 		console.log(`[Standalone] Failed to launch Darryl for ticket ${ticketId}`);
 	}
 }
