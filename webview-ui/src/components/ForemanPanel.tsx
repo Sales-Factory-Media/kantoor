@@ -436,7 +436,7 @@ function TicketList({
       {/* Other tasks — collapsible, closed by default */}
       {otherTotal > 0 && (
         <>
-          <div
+          <button
             onClick={() => setOtherTasksOpen(!otherTasksOpen)}
             style={{
               padding: '6px 8px',
@@ -445,11 +445,15 @@ function TicketList({
               background: 'var(--pixel-bg)',
               borderTop: '2px solid var(--pixel-border)',
               borderBottom: '1px solid var(--pixel-border)',
+              borderLeft: 'none',
+              borderRight: 'none',
               cursor: 'pointer',
               display: 'flex',
               alignItems: 'center',
               gap: 6,
               userSelect: 'none',
+              width: '100%',
+              textAlign: 'left',
             }}
           >
             <span style={{ fontSize: '14px', color: 'var(--pixel-text-dim)' }}>
@@ -459,7 +463,7 @@ function TicketList({
             <span style={{ fontSize: '16px', color: 'var(--pixel-text-dim)' }}>
               ({otherTotal})
             </span>
-          </div>
+          </button>
           {otherTasksOpen &&
             otherGroups.map((group) =>
               renderStatusGroup(
@@ -552,7 +556,7 @@ export function ForemanPanel({
           }}
         >
           <img
-            src="darryl.webp"
+            src="/darryl.webp"
             alt="Darryl"
             style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
           />
