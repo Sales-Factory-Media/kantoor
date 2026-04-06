@@ -99,6 +99,30 @@ export function pickRandomName(existingAgents: PersistentAgent[]): string {
 	return `${base} ${suffix}`;
 }
 
+export function copyPersistentAgent(
+	sourceId: string,
+	newName: string,
+	newRoleShort: string,
+	newRoleFull: string,
+	agents: PersistentAgent[],
+): PersistentAgent | null {
+	const source = agents.find(a => a.id === sourceId);
+	if (!source) return null;
+
+	const newAgent: PersistentAgent = {
+		id: generateAgentId(),
+		name: newName,
+		roleShort: newRoleShort,
+		roleFull: newRoleFull,
+		workspacePath: source.workspacePath,
+	};
+
+	agents.push(newAgent);
+	savePersistentAgents(agents);
+	ensureAgentMemory(newAgent.id);
+	return newAgent;
+}
+
 export function buildSystemPrompt(agent: PersistentAgent, projectDescription?: string): string {
 	const memoryPath = getAgentMemoryPath(agent.id);
 	const lines = [
@@ -208,6 +232,12 @@ export function buildDarrylSystemPrompt(agent: PersistentAgent, roster: RosterEn
 		`curl -X POST http://localhost:${serverPort}/api/launch-agent -H 'Content-Type: application/json' -d '{"agentId":"<id>","ticketId":"<id>","ticketName":"<name>","ticketUrl":"<url>","additionalPrompt":"..."}'`,
 		'```',
 		'',
+		'**Copy a busy agent** (create a duplicate with new name/role):',
+		'```',
+		`curl -X POST http://localhost:${serverPort}/api/copy-agent -H 'Content-Type: application/json' -d '{"sourceAgentId":"<id>","name":"<new-name>","roleShort":"<short-role>","roleFull":"<full-role>"}'`,
+		'```',
+		'The response returns the new agent\'s ID which can then be used with launch-agent.',
+		'',
 		'## Agent Roster',
 		'',
 	];
@@ -228,7 +258,7 @@ export function buildDarrylSystemPrompt(agent: PersistentAgent, roster: RosterEn
 		'',
 		'## Rules',
 		'',
-		'- Only assign OFFLINE agents. Online agents are already busy with other work.',
+		'- Prefer OFFLINE agents. If the best-matching agent is ONLINE (busy), use the copy-agent API to create a duplicate with a new name and job description, then launch the copy.',
 		'- Match the agent\'s workspace and role to the ticket\'s project and requirements.',
 		'- Use team mode for complex, multi-part tickets that benefit from parallel work.',
 		'- Update your memory file after each decision with what you decided and why.',
