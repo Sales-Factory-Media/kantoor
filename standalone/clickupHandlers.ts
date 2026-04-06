@@ -156,6 +156,8 @@ export function launchAgentOnTicket(
 
 	let callInTask = `Work on ClickUp ticket ${ticketId}: "${ticketName}". Use the ClickUp MCP tools to read the ticket details, update status, and add comments as you make progress. Ticket URL: ${ticketUrl}\n\nBefore starting any work, check if a branch already exists with the ticket ID (e.g. feature/CU-${ticketId}-*). If it does, check it out. If not, create a new feature branch from develop following the convention: feature/CU-${ticketId}-<short-description>.\n\nWhen you are done with the work, move the ticket to "qa test" using mcp__clickup__clickup_update_task (task_id: "${ticketId}", status: "qa test").`;
 
+	callInTask += '\n\nWhen you are finished with this work, exit your session using the curl command described in your system prompt.';
+
 	const knownProjects = loadKnownProjects();
 	const project = knownProjects.find(p => p.workspacePath === pa.workspacePath);
 	if (project?.description) {
@@ -301,7 +303,9 @@ Ticket URL: ${ticketUrl}
 - Pick the best agent from your roster and launch them via the HTTP API
 - IMPORTANT: In the additionalPrompt, instruct them that when they finish, they must move the ticket to "qa test" using mcp__clickup__clickup_update_task (status: "qa test")
 
-6. Update your memory file with your decision`;
+6. Update your memory file with your decision
+
+After completing your assessment and any actions, exit your session using the curl command described in your system prompt.`;
 
 	// Launch Darryl
 	const newSessionId = crypto.randomUUID();

@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import * as crypto from 'crypto';
+import { SERVER_PORT } from './constants.js';
 
 const SETTINGS_DIR = path.join(os.homedir(), '.pixel-agents');
 const AGENTS_FILE = path.join(SETTINGS_DIR, 'agents.json');
@@ -157,6 +158,31 @@ export function buildSystemPrompt(agent: PersistentAgent, projectDescription?: s
 		'Instead, update the ticket status to "QA Test" using the ClickUp MCP tools.',
 		'A human developer will review and validate the work before it can be considered done.',
 	);
+	if (agent.currentSessionId) {
+		lines.push(
+			'',
+			'## Self-Exit',
+			'',
+			'When you have completed ALL of your work (code committed, PR created, ticket status updated, memory file updated), exit your session by running:',
+			'',
+			'```',
+			`curl -s -X POST http://localhost:${SERVER_PORT}/api/agent-exit -H 'Content-Type: application/json' -d '{"sessionId":"${agent.currentSessionId}"}'`,
+			'```',
+			'',
+			`Your session ID is: ${agent.currentSessionId}`,
+			'',
+			'Before exiting, ensure:',
+			'1. All code changes are committed and pushed',
+			'2. A pull request has been created (if applicable)',
+			'3. The ClickUp ticket status has been updated:',
+			'   - "qa test" — if work is complete and ready for review',
+			'   - "refinement" — if the ticket is unclear and needs human clarification',
+			'   - "on hold" — if the work cannot be done or is already done',
+			'4. Your memory file has been updated with what you accomplished',
+			'',
+			'The exit command closes your terminal session. Make sure all work is saved before calling it.',
+		);
+	}
 	return lines.join('\n');
 }
 
@@ -233,6 +259,32 @@ export function buildDarrylSystemPrompt(agent: PersistentAgent, roster: RosterEn
 		'- Use team mode for complex, multi-part tickets that benefit from parallel work.',
 		'- Update your memory file after each decision with what you decided and why.',
 	);
+
+	if (agent.currentSessionId) {
+		lines.push(
+			'',
+			'## Self-Exit',
+			'',
+			'When you have completed ALL of your work (code committed, PR created, ticket status updated, memory file updated), exit your session by running:',
+			'',
+			'```',
+			`curl -s -X POST http://localhost:${serverPort}/api/agent-exit -H 'Content-Type: application/json' -d '{"sessionId":"${agent.currentSessionId}"}'`,
+			'```',
+			'',
+			`Your session ID is: ${agent.currentSessionId}`,
+			'',
+			'Before exiting, ensure:',
+			'1. All code changes are committed and pushed',
+			'2. A pull request has been created (if applicable)',
+			'3. The ClickUp ticket status has been updated:',
+			'   - "qa test" — if work is complete and ready for review',
+			'   - "refinement" — if the ticket is unclear and needs human clarification',
+			'   - "on hold" — if the work cannot be done or is already done',
+			'4. Your memory file has been updated with what you accomplished',
+			'',
+			'The exit command closes your terminal session. Make sure all work is saved before calling it.',
+		);
+	}
 
 	return lines.join('\n');
 }
