@@ -7,6 +7,7 @@ import {
 	savePersistentAgents,
 	buildSystemPrompt,
 	buildConferencePrompt,
+	expandHome,
 } from './agentStore.js';
 import { ensureMcpConfig, startConference, endConference } from './conferenceManager.js';
 import type { ConferenceState } from './conferenceManager.js';
@@ -49,7 +50,7 @@ export function handleStartConference(msg: Record<string, unknown>, ctx: ServerC
 	// Launch agent 1
 	pa1.currentSessionId = sid1;
 	savePersistentAgents(persistentAgents);
-	const cwd1 = pa1.workspacePath || os.homedir();
+	const cwd1 = expandHome(pa1.workspacePath || '~');
 	console.log(`[Standalone] Conference: launching ${pa1.name} (${sid1})`);
 	launchAgentSession(sid1, cwd1, prompt1, initialPrompt1, launchOptions);
 
@@ -57,7 +58,7 @@ export function handleStartConference(msg: Record<string, unknown>, ctx: ServerC
 	setTimeout(() => {
 		pa2.currentSessionId = sid2;
 		savePersistentAgents(persistentAgents);
-		const cwd2 = pa2.workspacePath || os.homedir();
+		const cwd2 = expandHome(pa2.workspacePath || '~');
 		console.log(`[Standalone] Conference: launching ${pa2.name} (${sid2})`);
 		launchAgentSession(sid2, cwd2, prompt2, initialPrompt2, launchOptions);
 	}, CONFERENCE_AGENT_DELAY_MS);

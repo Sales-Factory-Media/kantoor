@@ -6,6 +6,7 @@ import {
 	savePersistentAgents,
 	getAgentMemoryPath,
 	ensureAgentMemory,
+	collapseHome,
 } from './agentStore.js';
 import type { PersistentAgent } from './agentStore.js';
 import type { ClickUpConfig } from './clickupClient.js';
@@ -121,6 +122,13 @@ function handleRegistered(msg: Record<string, unknown>, ctx: ServerContext): voi
 function mergeAgents(hubAgents: PersistentAgent[]): void {
 	const localAgents = loadPersistentAgents();
 	const hubIdSet = new Set(hubAgents.map(a => a.id));
+
+	// Normalize workspace paths from hub (collapse absolute paths to ~/...)
+	for (const agent of hubAgents) {
+		if (agent.workspacePath) {
+			agent.workspacePath = collapseHome(agent.workspacePath);
+		}
+	}
 
 	// Start with all hub agents
 	const merged: PersistentAgent[] = [...hubAgents];

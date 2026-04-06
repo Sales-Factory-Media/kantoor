@@ -61,6 +61,21 @@ export function generateAgentId(): string {
 	return crypto.randomUUID();
 }
 
+/** Expand ~ to the current user's home directory */
+export function expandHome(p: string): string {
+	if (p.startsWith('~/')) return path.join(os.homedir(), p.slice(2));
+	if (p === '~') return os.homedir();
+	return p;
+}
+
+/** Collapse absolute home dir path back to ~ for portable storage */
+export function collapseHome(p: string): string {
+	const home = os.homedir();
+	if (p.startsWith(home + '/')) return '~' + p.slice(home.length);
+	if (p === home) return '~';
+	return p;
+}
+
 const OFFICE_NAMES = [
 	'Michael', 'Dwight', 'Jim', 'Pam', 'Ryan', 'Andy', 'Stanley',
 	'Kevin', 'Meredith', 'Angela', 'Oscar', 'Phyllis', 'Kelly',

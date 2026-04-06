@@ -9,6 +9,7 @@ import {
 	ensureAgentMemory,
 	generateAgentId,
 	buildDarrylSystemPrompt,
+	expandHome,
 } from './agentStore.js';
 import type { RosterEntry } from './agentStore.js';
 import { fetchListTasks, addTaskComment } from './clickupClient.js';
@@ -237,13 +238,12 @@ export function handleDarrylHandleTicket(msg: Record<string, unknown>, ctx: Serv
 	// Find or create Darryl
 	let darryl = persistentAgents.find(p => p.name === 'Darryl');
 	if (!darryl) {
-		const workspace = DARRYL_WORKSPACE.replace(/^~/, os.homedir());
 		darryl = {
 			id: generateAgentId(),
 			name: 'Darryl',
 			roleShort: DARRYL_ROLE_SHORT,
 			roleFull: 'The Foreman. Assesses tickets, decides which agents should work on them, and launches them.',
-			workspacePath: workspace,
+			workspacePath: DARRYL_WORKSPACE, // Store with ~ prefix for portability
 		};
 		persistentAgents.push(darryl);
 		savePersistentAgents(persistentAgents);
@@ -309,7 +309,7 @@ Ticket URL: ${ticketUrl}
 	savePersistentAgents(persistentAgents);
 	ensureAgentMemory(darryl.id);
 
-	const cwd = darryl.workspacePath || os.homedir();
+	const cwd = expandHome(darryl.workspacePath || '~');
 	if (!launchAgentSession(newSessionId, cwd, systemPrompt, initialTask, { extraFlags: ['--dangerously-skip-permissions'] })) {
 		console.log(`[Standalone] Failed to launch Darryl for ticket ${ticketId}`);
 	}

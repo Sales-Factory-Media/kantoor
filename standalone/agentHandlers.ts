@@ -8,6 +8,7 @@ import {
 	ensureAgentMemory,
 	deleteAgentData,
 	buildSystemPrompt,
+	expandHome,
 } from './agentStore.js';
 import type { PersistentAgent } from './agentStore.js';
 import { readJson, writeJson, getOfflineAgents } from './serverHelpers.js';
@@ -23,7 +24,7 @@ export function launchPersistentAgent(pa: PersistentAgent, persistentAgents: Per
 	const knownProjects = loadKnownProjects();
 	const project = knownProjects.find(p => p.workspacePath === pa.workspacePath);
 	const prompt = buildSystemPrompt(pa, project?.description);
-	const cwd = pa.workspacePath || os.homedir();
+	const cwd = expandHome(pa.workspacePath || '~');
 	console.log(`[Standalone] Launching agent "${pa.name}" with session ${newSessionId} in ${cwd}${callInTask ? ` with task: ${callInTask}` : ''}`);
 	return launchAgentSession(newSessionId, cwd, prompt, callInTask);
 }
