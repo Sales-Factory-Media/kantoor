@@ -1,6 +1,6 @@
 import * as os from 'os';
 import * as fs from 'fs';
-import WebSocket from 'ws';
+import { WebSocket } from 'ws';
 import {
 	loadPersistentAgents,
 	savePersistentAgents,
@@ -26,6 +26,7 @@ export function startWorkerMode(
 	function connect(): void {
 		const wsUrl = hubUrl.replace(/^http/, 'ws') + '/ws';
 		console.log(`[Worker] Connecting to hub at ${wsUrl}...`);
+		console.log(`[Worker] WebSocket class available: ${typeof WebSocket}, constructor: ${WebSocket?.name || 'unknown'}`);
 
 		const ws = new WebSocket(wsUrl);
 
