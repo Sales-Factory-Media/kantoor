@@ -198,13 +198,72 @@ A new **Workers** section in the ForemanPanel showing connected workers:
 | `standalone/workerRegistry.ts` | Hub-side: track connected workers, capacity, assignments. Read/write `worker-assignments.json`. Broadcast `workerStatus` to webview. |
 | `standalone/workerMode.ts` | Worker-side: connect to hub WebSocket, receive work, merge agents, run local Darryl sessions, report completion/failure, send heartbeats. |
 
-## Prerequisites for Worker Machines
+## Setting Up a Fresh Worker Machine
 
-- Node.js installed
-- Claude CLI installed
-- iTerm2 (for `launchAgentSession`)
-- Target repos checked out at the same workspace paths
-- Network connectivity to hub on port 3333
+### 1. Install system prerequisites
+
+- **Node.js** (v18+): `brew install node`
+- **iTerm2**: Download from https://iterm2.com or `brew install --cask iterm2`
+- **Claude CLI**: `npm install -g @anthropic-ai/claude-code`
+  - Run `claude` once to authenticate and accept terms
+  - Ensure MCP servers are configured (especially ClickUp) — the hub sends the ClickUp API token, but the worker's Claude sessions need the ClickUp MCP server installed
+
+### 2. Clone the kantoor codebase
+
+```sh
+cd ~/Projects
+git clone <repo-url> pixel-agents
+cd pixel-agents
+npm install
+cd webview-ui && npm install && cd ..
+```
+
+### 3. Clone the target project repos
+
+The worker needs the same repos checked out **at the same paths** as on the hub. For example, if the hub has agents configured with `workspacePath: ~/Projects/kantoor-workspace`, the worker must also have that repo at `~/Projects/kantoor-workspace`.
+
+Check which workspace paths are in use:
+```sh
+# On the hub machine, inspect agents.json
+cat ~/.pixel-agents/agents.json | grep workspacePath
+```
+
+Then clone each repo at the matching path on the worker.
+
+### 4. Build
+
+```sh
+cd ~/Projects/pixel-agents
+node esbuild-standalone.js
+cd webview-ui && npm run build && cd ..
+```
+
+### 5. Label the machine
+
+Put a physical colored label (sticker, tape) on the laptop so you can identify it at a glance. Pick a name and hex color that matches.
+
+### 6. Start the worker
+
+```sh
+npm run standalone -- --hub=<hub-ip>:3333 --name="Blue" --color="#2196F3"
+```
+
+The worker will:
+- Connect to the hub's WebSocket
+- Receive the agent roster and merge it with any local agents
+- Receive the ClickUp config from the hub
+- Wait for tickets to be assigned by the hub
+- Show up in the hub's Foreman Panel with a colored dot
+
+### 7. Verify
+
+Open the hub's web UI at `http://<hub-ip>:3333`. The worker should appear in the **Workers** section of Darryl's Office panel with its name and color, showing "idle" status.
+
+### Quick reference — what a worker does NOT need
+
+- Its own ClickUp configuration (received from hub)
+- Its own `agents.json` (received from hub, merged with any local agents)
+- To run the web UI (optional — you can open `http://localhost:3333` on the worker to see its local view, but the hub UI shows all workers)
 
 ## Future Enhancements (not in scope)
 
