@@ -69,3 +69,38 @@ export async function fetchListTasks(config: ClickUpConfig): Promise<ClickUpStat
 
 	return [...statusMap.values()];
 }
+
+export async function addTaskComment(config: ClickUpConfig, taskId: string, commentText: string): Promise<void> {
+	const url = `https://api.clickup.com/api/v2/task/${taskId}/comment`;
+	const body = JSON.stringify({ comment_text: commentText });
+
+	return new Promise((resolve, reject) => {
+		const urlObj = new URL(url);
+		const req = https.request({
+			hostname: urlObj.hostname,
+			path: urlObj.pathname,
+			method: 'POST',
+			headers: {
+				'Authorization': config.apiToken,
+				'Content-Type': 'application/json',
+				'Content-Length': Buffer.byteLength(body),
+			},
+		}, (res) => {
+			let data = '';
+			res.on('data', (chunk: Buffer) => { data += chunk.toString(); });
+			res.on('end', () => {
+				if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) {
+					resolve();
+				} else {
+					reject(new Error(`ClickUp comment API ${res.statusCode}: ${data.slice(0, 200)}`));
+				}
+			});
+		});
+		req.setTimeout(FETCH_TIMEOUT_MS, () => {
+			req.destroy(new Error(`ClickUp comment request timed out`));
+		});
+		req.on('error', reject);
+		req.write(body);
+		req.end();
+	});
+}

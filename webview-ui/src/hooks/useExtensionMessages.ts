@@ -60,6 +60,16 @@ export interface OfflineAgent {
   sessionCount?: number
 }
 
+export interface WorkerStatusEntry {
+  name: string
+  color: string
+  hostname: string
+  status: 'idle' | 'busy' | 'disconnected'
+  ticketId: string | null
+  ticketName: string | null
+  isHub: boolean
+}
+
 export interface ClickUpTask {
   id: string
   name: string
@@ -95,8 +105,10 @@ export interface ExtensionMessageState {
   clickupTickets: ClickUpStatusGroup[]
   clickupConfigured: boolean
   clickupListId: string | null
+  clickupNextFetchAt: number | null
   activeConference: { conferenceId: string; agent1Id: string; agent2Id: string; topic: string } | null
   peersBrokerAvailable: boolean
+  workers: WorkerStatusEntry[]
 }
 
 export function useExtensionMessages(
@@ -116,8 +128,10 @@ export function useExtensionMessages(
   const [clickupTickets, setClickupTickets] = useState<ClickUpStatusGroup[]>([])
   const [clickupConfigured, setClickupConfigured] = useState(false)
   const [clickupListId, setClickupListId] = useState<string | null>(null)
+  const [clickupNextFetchAt, setClickupNextFetchAt] = useState<number | null>(null)
   const [activeConference, setActiveConference] = useState<{ conferenceId: string; agent1Id: string; agent2Id: string; topic: string } | null>(null)
   const [peersBrokerAvailable, setPeersBrokerAvailable] = useState(false)
+  const [workers, setWorkers] = useState<WorkerStatusEntry[]>([])
 
   // Ref to expose saveAgentMeta and forgetAgent outside the effect closure
   const saveAgentMetaRef = useRef<() => void>(() => {})
@@ -501,6 +515,7 @@ export function useExtensionMessages(
         })
       } else if (msg.type === 'clickupTickets') {
         setClickupTickets(msg.statuses as ClickUpStatusGroup[])
+        if (msg.nextFetchAt != null) setClickupNextFetchAt(msg.nextFetchAt as number)
       } else if (msg.type === 'clickupConfigured') {
         setClickupConfigured(msg.configured as boolean)
         if (msg.listId) setClickupListId(msg.listId as string)
@@ -517,6 +532,8 @@ export function useExtensionMessages(
         setActiveConference(null)
       } else if (msg.type === 'peersBrokerStatus') {
         setPeersBrokerAvailable(msg.available as boolean)
+      } else if (msg.type === 'workerStatus') {
+        setWorkers(msg.workers as WorkerStatusEntry[])
       }
     }
     window.addEventListener('message', handler)
@@ -527,5 +544,5 @@ export function useExtensionMessages(
   const saveAgentMeta = useCallback(() => saveAgentMetaRef.current(), [])
   const forgetAgent = useCallback((sessionId: string) => forgetAgentRef.current(sessionId), [])
 
-  return { agents, selectedAgent, selectAgent: setSelectedAgent, agentTools, agentStatuses, subagentTools, subagentCharacters, layoutReady, loadedAssets, workspaceFolders, agentConversation, offlineAgents, knownProjects, saveAgentMeta, forgetAgent, clickupTickets, clickupConfigured, clickupListId, activeConference, peersBrokerAvailable }
+  return { agents, selectedAgent, selectAgent: setSelectedAgent, agentTools, agentStatuses, subagentTools, subagentCharacters, layoutReady, loadedAssets, workspaceFolders, agentConversation, offlineAgents, knownProjects, saveAgentMeta, forgetAgent, clickupTickets, clickupConfigured, clickupListId, clickupNextFetchAt, activeConference, peersBrokerAvailable, workers }
 }

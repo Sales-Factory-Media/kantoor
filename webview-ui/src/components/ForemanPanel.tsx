@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import type { ToolActivity } from '../office/types.js'
 import type { OfficeState } from '../office/engine/officeState.js'
-import type { ClickUpStatusGroup, ClickUpTask, OfflineAgent, KnownProject } from '../hooks/useExtensionMessages.js'
+import type { ClickUpStatusGroup, ClickUpTask, OfflineAgent, KnownProject, WorkerStatusEntry } from '../hooks/useExtensionMessages.js'
 import { AgentRoomList } from './AgentSidebar.js'
 import { vscode } from '../vscodeApi.js'
 import { DARRYL_CLICKUP_USERNAME } from '../constants.js'
@@ -18,6 +18,7 @@ interface ForemanPanelProps {
   agentTools: Record<number, ToolActivity[]>
   agentStatuses: Record<number, string>
   knownProjects: KnownProject[]
+  workers: WorkerStatusEntry[]
 }
 
 function WorkerPicker({
@@ -264,8 +265,17 @@ function filterGroups(groups: ClickUpStatusGroup[], predicate: (t: ClickUpTask) 
 function renderTask(
   task: ClickUpTask,
   indent: boolean,
+  statusName: string,
   onPickTicket: (t: { id: string; name: string; url: string }) => void,
 ) {
+  const isTodo = statusName.toLowerCase() === 'to do'
+
+  const handleCopyUrl = () => {
+    navigator.clipboard.writeText(task.url).catch(() => {
+      // silent fail
+    })
+  }
+
   return (
     <div
       key={task.id}
@@ -299,37 +309,76 @@ function renderTask(
         )}
       </div>
       <div style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
-        <button
-          onClick={() => onPickTicket({ id: task.id, name: task.name, url: task.url })}
-          style={{
-            padding: '2px 6px',
-            fontSize: '16px',
-            color: 'var(--pixel-agent-text)',
-            background: 'var(--pixel-agent-bg)',
-            border: '2px solid var(--pixel-agent-border)',
-            borderRadius: 0,
-            cursor: 'pointer',
-            whiteSpace: 'nowrap',
-          }}
-        >
-          Start Work
-        </button>
-        <button
-          onClick={() => vscode.postMessage({ type: 'darrylHandleTicket', ticketId: task.id, ticketName: task.name, ticketUrl: task.url })}
-          title="Let Darryl assess and assign this ticket"
-          style={{
-            padding: '2px 6px',
-            fontSize: '16px',
-            color: 'var(--pixel-text)',
-            background: 'var(--pixel-bg)',
-            border: '2px solid var(--pixel-border)',
-            borderRadius: 0,
-            cursor: 'pointer',
-            whiteSpace: 'nowrap',
-          }}
-        >
-          Darryl
-        </button>
+        {isTodo ? (
+          <>
+            <button
+              onClick={() => onPickTicket({ id: task.id, name: task.name, url: task.url })}
+              style={{
+                padding: '2px 6px',
+                fontSize: '16px',
+                color: 'var(--pixel-agent-text)',
+                background: 'var(--pixel-agent-bg)',
+                border: '2px solid var(--pixel-agent-border)',
+                borderRadius: 0,
+                cursor: 'pointer',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              Start Work
+            </button>
+            <button
+              onClick={() => vscode.postMessage({ type: 'darrylHandleTicket', ticketId: task.id, ticketName: task.name, ticketUrl: task.url })}
+              title="Let Darryl assess and assign this ticket"
+              style={{
+                padding: '2px 6px',
+                fontSize: '16px',
+                color: 'var(--pixel-text)',
+                background: 'var(--pixel-bg)',
+                border: '2px solid var(--pixel-border)',
+                borderRadius: 0,
+                cursor: 'pointer',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              Darryl
+            </button>
+          </>
+        ) : (
+          <>
+            <button
+              onClick={() => window.open(task.url, '_blank')}
+              title="Open in ClickUp"
+              style={{
+                padding: '2px 6px',
+                fontSize: '16px',
+                color: 'var(--pixel-agent-text)',
+                background: 'var(--pixel-agent-bg)',
+                border: '2px solid var(--pixel-agent-border)',
+                borderRadius: 0,
+                cursor: 'pointer',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              Open
+            </button>
+            <button
+              onClick={handleCopyUrl}
+              title="Copy ClickUp link"
+              style={{
+                padding: '2px 6px',
+                fontSize: '16px',
+                color: 'var(--pixel-text)',
+                background: 'var(--pixel-bg)',
+                border: '2px solid var(--pixel-border)',
+                borderRadius: 0,
+                cursor: 'pointer',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              Copy
+            </button>
+          </>
+        )}
       </div>
     </div>
   )
@@ -384,11 +433,11 @@ function renderStatusGroup(
         <>
           {parentTasks.map((task) => (
             <div key={task.id}>
-              {renderTask(task, false, onPickTicket)}
-              {(childrenByParent.get(task.id) ?? []).map((sub) => renderTask(sub, true, onPickTicket))}
+              {renderTask(task, false, group.name, onPickTicket)}
+              {(childrenByParent.get(task.id) ?? []).map((sub) => renderTask(sub, true, group.name, onPickTicket))}
             </div>
           ))}
-          {orphanSubtasks.map((task) => renderTask(task, true, onPickTicket))}
+          {orphanSubtasks.map((task) => renderTask(task, true, group.name, onPickTicket))}
         </>
       )}
     </div>
@@ -479,6 +528,76 @@ function TicketList({
   )
 }
 
+function WorkerList({ workers }: { workers: WorkerStatusEntry[] }) {
+  if (workers.length === 0) return null
+
+  return (
+    <div style={{ borderBottom: '2px solid var(--pixel-border)' }}>
+      <div
+        style={{
+          padding: '4px 8px',
+          fontSize: '18px',
+          color: 'var(--pixel-text)',
+          fontWeight: 'bold',
+          borderBottom: '1px solid var(--pixel-border)',
+        }}
+      >
+        Workers
+      </div>
+      {workers.map((w) => (
+        <div
+          key={w.name}
+          style={{
+            padding: '4px 8px',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            borderBottom: '1px solid var(--pixel-border)',
+          }}
+        >
+          {/* Color dot */}
+          <div
+            style={{
+              width: 10,
+              height: 10,
+              borderRadius: '50%',
+              backgroundColor: w.status === 'disconnected' ? '#666' : w.color,
+              flexShrink: 0,
+              opacity: w.status === 'disconnected' ? 0.5 : 1,
+            }}
+          />
+          {/* Name + hub label */}
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: '18px', color: 'var(--pixel-text)', display: 'flex', gap: 4, alignItems: 'center' }}>
+              <span>{w.name}</span>
+              {w.isHub && (
+                <span style={{ fontSize: '14px', color: 'var(--pixel-text-dim)' }}>(hub)</span>
+              )}
+            </div>
+          </div>
+          {/* Status */}
+          <div
+            style={{
+              fontSize: '16px',
+              color: w.status === 'busy' ? w.color : 'var(--pixel-text-dim)',
+              flexShrink: 0,
+              maxWidth: 140,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}
+            title={w.ticketName || w.status}
+          >
+            {w.status === 'busy' && w.ticketId
+              ? `CU-${w.ticketId}`
+              : w.status}
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
 export function ForemanPanel({
   visible,
   onClose,
@@ -491,6 +610,7 @@ export function ForemanPanel({
   agentTools,
   agentStatuses,
   knownProjects,
+  workers,
 }: ForemanPanelProps) {
   const [pickerTicket, setPickerTicket] = useState<{ id: string; name: string; url: string } | null>(null)
   const [collapsedStatuses, setCollapsedStatuses] = useState<Set<string>>(new Set())
@@ -632,6 +752,11 @@ export function ForemanPanel({
             </button>
           </div>
         </div>
+
+        {/* Workers */}
+        {workers.length > 0 && (
+          <WorkerList workers={workers} />
+        )}
 
         {/* Content */}
         <div style={{ overflowY: 'auto', flex: 1, padding: '4px 0' }}>
