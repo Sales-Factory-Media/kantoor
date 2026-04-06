@@ -124,10 +124,13 @@ function mergeAgents(hubAgents: PersistentAgent[]): void {
 	const hubIdSet = new Set(hubAgents.map(a => a.id));
 
 	// Normalize workspace paths from hub (collapse absolute paths to ~/...)
+	// Also strip currentSessionId — hub sessions run on the hub, not on this worker.
+	// Workers retain agent memory via MEMORY.md files but always start fresh sessions.
 	for (const agent of hubAgents) {
 		if (agent.workspacePath) {
 			agent.workspacePath = collapseHome(agent.workspacePath);
 		}
+		delete agent.currentSessionId;
 	}
 
 	// Start with all hub agents
@@ -168,6 +171,20 @@ function handleTicketFromHub(
 
 	// Reload agents from disk (may have been updated by merge)
 	ctx.persistentAgents = loadPersistentAgents();
+
+	// Clear any stale currentSessionId values — on a worker, sessions are local.
+	// If no local process is running for a session, clear it so agents can be launched fresh.
+	let cleared = false;
+	for (const pa of ctx.persistentAgents) {
+		if (pa.currentSessionId) {
+			pa.currentSessionId = undefined;
+			cleared = true;
+		}
+	}
+	if (cleared) {
+		savePersistentAgents(ctx.persistentAgents);
+		console.log(`[Worker] Cleared stale session IDs from persistent agents`);
+	}
 
 	console.log(`[Worker] Received ticket ${ticketId}: "${ticketName}"`);
 
