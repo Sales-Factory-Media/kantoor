@@ -15,9 +15,9 @@ import {
 } from './agentStore.js';
 import type { PersistentAgent } from './agentStore.js';
 import type { ClickUpConfig } from './clickupClient.js';
-import { readJson, getOfflineAgents } from './serverHelpers.js';
-import { preloadAssets, SEATS_FILE, SETTINGS_FILE } from './serverContext.js';
-import type { ServerContext } from './serverContext.js';
+import { readJson, writeJson, getOfflineAgents } from './serverHelpers.js';
+import { preloadAssets, SEATS_FILE, SETTINGS_FILE, WORKER_IDENTITY_FILE } from './serverContext.js';
+import type { ServerContext, WorkerIdentity } from './serverContext.js';
 import {
 	handleFocusAgent,
 	handleSaveAgentSeats,
@@ -44,6 +44,74 @@ import {
 	PEERS_BROKER_URL,
 } from './conferenceHandlers.js';
 import { createHttpServer } from './httpServer.js';
+import {
+	registerWorker,
+	handleWorkerHeartbeat,
+	handleWorkerDisconnect,
+	handleTicketStarted,
+	handleTicketComplete,
+	handleTicketFailed,
+	checkWorkerHeartbeats,
+	broadcastWorkerStatus,
+	loadAssignments,
+} from './workerRegistry.js';
+import { startWorkerMode, stopWorkerMode } from './workerMode.js';
+
+// ── CLI argument parsing ────────────────────────────────────
+
+function parseCliArgs(): { hubUrl: string | null; name: string | null; color: string | null } {
+	const args = process.argv.slice(2);
+	let hubUrl: string | null = null;
+	let name: string | null = null;
+	let color: string | null = null;
+
+	for (const arg of args) {
+		if (arg.startsWith('--hub=')) hubUrl = arg.slice('--hub='.length);
+		else if (arg.startsWith('--name=')) name = arg.slice('--name='.length);
+		else if (arg.startsWith('--color=')) color = arg.slice('--color='.length);
+	}
+
+	// Also check env vars as fallback
+	if (!hubUrl && process.env.HUB) hubUrl = process.env.HUB;
+
+	return { hubUrl, name, color };
+}
+
+function loadOrCreateWorkerIdentity(cliName: string | null, cliColor: string | null): WorkerIdentity {
+	// CLI flags take precedence
+	if (cliName && cliColor) {
+		const identity: WorkerIdentity = { name: cliName, color: cliColor };
+		writeJson(WORKER_IDENTITY_FILE, identity);
+		return identity;
+	}
+
+	// Try loading from file
+	const saved = readJson(WORKER_IDENTITY_FILE) as WorkerIdentity | null;
+	if (saved?.name && saved?.color) {
+		// Override with any CLI flags provided
+		const identity: WorkerIdentity = {
+			name: cliName || saved.name,
+			color: cliColor || saved.color,
+		};
+		if (cliName || cliColor) writeJson(WORKER_IDENTITY_FILE, identity);
+		return identity;
+	}
+
+	// Default identity
+	const identity: WorkerIdentity = {
+		name: cliName || 'Hub',
+		color: cliColor || '#4CAF50',
+	};
+	writeJson(WORKER_IDENTITY_FILE, identity);
+	return identity;
+}
+
+// ── Worker message types ────────────────────────────────────
+
+const WORKER_MESSAGE_TYPES = new Set([
+	'workerRegister', 'workerHeartbeat',
+	'ticketStarted', 'ticketComplete', 'ticketFailed',
+]);
 
 // ── WebviewReady handler (touches all domains) ───────────────
 
@@ -142,8 +210,13 @@ function handleWebviewReady(ws: WebSocket, ctx: ServerContext): void {
 		.then(() => ws.send(JSON.stringify({ type: 'peersBrokerStatus', available: true })))
 		.catch(() => ws.send(JSON.stringify({ type: 'peersBrokerStatus', available: false })));
 
+	// Send worker status
+	broadcastWorkerStatus(ctx);
+
 	// Try auto-pickup on client connect (Darryl may have become free since last poll)
-	autoDarrylPickup(ctx);
+	if (!ctx.isWorkerMode) {
+		autoDarrylPickup(ctx);
+	}
 }
 
 // ── Message dispatch ─────────────────────────────────────────
@@ -187,18 +260,23 @@ function handleClientMessage(
 // ── Main ─────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
+	// ── CLI args ─────────────────────────────────────────────
+	const cliArgs = parseCliArgs();
+	const isWorkerMode = !!cliArgs.hubUrl;
+	const workerIdentity = loadOrCreateWorkerIdentity(cliArgs.name, cliArgs.color);
+
 	const assets = await preloadAssets();
 
 	const agentManager = new StandaloneAgentManager();
 	let persistentAgents = loadPersistentAgents();
 
-	// ── WebSocket broadcast sink ─────────────────────────────
-	const clients = new Set<WebSocket>();
+	// ── WebSocket broadcast sink (webview clients only) ──────
+	const webviewClients = new Set<WebSocket>();
 
 	const broadcastSink: MessageSink = {
 		postMessage(msg: unknown) {
 			const data = JSON.stringify(msg);
-			for (const ws of clients) {
+			for (const ws of webviewClients) {
 				if (ws.readyState === ws.OPEN) {
 					ws.send(data);
 				}
@@ -225,6 +303,11 @@ async function main(): Promise<void> {
 		clickupTickets: [],
 		clickupNextFetchAt: null,
 		clickupTimer: null,
+		// Multi-worker
+		isWorkerMode,
+		workerIdentity,
+		workers: new Map(),
+		workerAssignments: isWorkerMode ? [] : loadAssignments(),
 	};
 
 	// ── Workspace path cache (decoded from project hash) ────
@@ -297,8 +380,8 @@ async function main(): Promise<void> {
 	});
 	scanner.start();
 
-	// ── ClickUp polling ─────────────────────────────────────
-	if (ctx.clickupConfig) {
+	// ── ClickUp polling (hub only) ──────────────────────────
+	if (!isWorkerMode && ctx.clickupConfig) {
 		handleClickupRefresh(ctx).catch(() => {});
 		startClickupPolling(ctx);
 	}
@@ -319,13 +402,38 @@ async function main(): Promise<void> {
 		}
 	});
 
+	// Track worker WebSocket clients separately
+	const workerClients = new Set<WebSocket>();
+
 	wss.on('connection', (ws: WebSocket) => {
-		clients.add(ws);
-		console.log(`[Standalone] WebSocket client connected (${clients.size} total)`);
+		// We don't know if it's a webview or worker yet — add to webview by default
+		// Worker clients identify themselves via 'workerRegister' message
+		webviewClients.add(ws);
+		console.log(`[Standalone] WebSocket client connected (${webviewClients.size} webview)`);
 
 		ws.on('message', (raw) => {
 			try {
 				const msg = JSON.parse(raw.toString()) as Record<string, unknown>;
+				const msgType = msg.type as string;
+
+				// Worker messages (hub-side only)
+				if (WORKER_MESSAGE_TYPES.has(msgType)) {
+					// Move from webview to worker set on first worker message
+					if (!workerClients.has(ws)) {
+						webviewClients.delete(ws);
+						workerClients.add(ws);
+						console.log(`[Standalone] Client identified as worker (${workerClients.size} workers, ${webviewClients.size} webview)`);
+					}
+
+					if (msgType === 'workerRegister') registerWorker(ws, msg, ctx);
+					else if (msgType === 'workerHeartbeat') handleWorkerHeartbeat(ws, ctx);
+					else if (msgType === 'ticketStarted') handleTicketStarted(ws, msg, ctx);
+					else if (msgType === 'ticketComplete') handleTicketComplete(ws, msg, ctx);
+					else if (msgType === 'ticketFailed') handleTicketFailed(ws, msg, ctx);
+					return;
+				}
+
+				// Regular webview messages
 				handleClientMessage(ws, msg, ctx);
 			} catch {
 				// Ignore malformed messages
@@ -333,21 +441,49 @@ async function main(): Promise<void> {
 		});
 
 		ws.on('close', () => {
-			clients.delete(ws);
-			console.log(`[Standalone] WebSocket client disconnected (${clients.size} total)`);
+			if (workerClients.has(ws)) {
+				workerClients.delete(ws);
+				handleWorkerDisconnect(ws, ctx);
+				console.log(`[Standalone] Worker disconnected (${workerClients.size} workers)`);
+			} else {
+				webviewClients.delete(ws);
+				console.log(`[Standalone] WebSocket client disconnected (${webviewClients.size} webview)`);
+			}
 		});
 	});
 
-	server.listen(SERVER_PORT, '127.0.0.1', () => {
+	// ── Worker heartbeat checker (hub only) ──────────────────
+	let heartbeatChecker: ReturnType<typeof setInterval> | null = null;
+	if (!isWorkerMode) {
+		heartbeatChecker = setInterval(() => checkWorkerHeartbeats(ctx), 30_000);
+	}
+
+	// Listen on all interfaces so workers/browsers on the network can connect
+	const listenHost = isWorkerMode ? '127.0.0.1' : '0.0.0.0';
+
+	server.listen(SERVER_PORT, listenHost, () => {
 		console.log(`\n  Pixel Agents standalone server`);
-		console.log(`  Listening on http://localhost:${SERVER_PORT}\n`);
+		console.log(`  Mode: ${isWorkerMode ? 'WORKER' : 'HUB'}`);
+		console.log(`  Identity: ${workerIdentity.name} (${workerIdentity.color})`);
+		console.log(`  Listening on http://${listenHost === '0.0.0.0' ? 'localhost' : listenHost}:${SERVER_PORT}\n`);
+		if (isWorkerMode) {
+			console.log(`  Hub: ${cliArgs.hubUrl}\n`);
+		}
 		console.log(`  Watching ~/.claude/projects/ for agent sessions...\n`);
 	});
+
+	// ── Worker mode: connect to hub ─────────────────────────
+	if (isWorkerMode && cliArgs.hubUrl) {
+		const hubUrl = cliArgs.hubUrl.startsWith('http') ? cliArgs.hubUrl : `http://${cliArgs.hubUrl}`;
+		startWorkerMode(hubUrl, workerIdentity.name, workerIdentity.color, ctx);
+	}
 
 	// Graceful shutdown
 	process.on('SIGINT', () => {
 		console.log('\n[Standalone] Shutting down...');
 		if (ctx.clickupTimer) clearInterval(ctx.clickupTimer);
+		if (heartbeatChecker) clearInterval(heartbeatChecker);
+		if (isWorkerMode) stopWorkerMode();
 		scanner.stop();
 		agentManager.dispose();
 		wss.close();

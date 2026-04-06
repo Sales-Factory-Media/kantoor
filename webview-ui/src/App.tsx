@@ -27,7 +27,7 @@ function defaultZoom(): number {
 }
 
 function App() {
-  const { agents, selectedAgent, selectAgent, agentTools, agentStatuses, subagentTools, subagentCharacters, layoutReady, workspaceFolders, agentConversation, offlineAgents, knownProjects, saveAgentMeta, forgetAgent, clickupTickets, clickupConfigured, clickupListId, clickupNextFetchAt } = useExtensionMessages(getOfficeState)
+  const { agents, selectedAgent, selectAgent, agentTools, agentStatuses, subagentTools, subagentCharacters, layoutReady, workspaceFolders, agentConversation, offlineAgents, knownProjects, saveAgentMeta, forgetAgent, clickupTickets, clickupConfigured, clickupListId, clickupNextFetchAt, workers } = useExtensionMessages(getOfficeState)
 
   const [isDebugMode, setIsDebugMode] = useState(false)
   const [zoom, setZoom] = useState(defaultZoom)
@@ -117,6 +117,7 @@ function App() {
         agentTools={agentTools}
         agentStatuses={agentStatuses}
         knownProjects={knownProjects}
+        workers={workers}
       />
 
       <BottomToolbar

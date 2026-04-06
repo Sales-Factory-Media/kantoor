@@ -60,6 +60,16 @@ export interface OfflineAgent {
   sessionCount?: number
 }
 
+export interface WorkerStatusEntry {
+  name: string
+  color: string
+  hostname: string
+  status: 'idle' | 'busy' | 'disconnected'
+  ticketId: string | null
+  ticketName: string | null
+  isHub: boolean
+}
+
 export interface ClickUpTask {
   id: string
   name: string
@@ -98,6 +108,7 @@ export interface ExtensionMessageState {
   clickupNextFetchAt: number | null
   activeConference: { conferenceId: string; agent1Id: string; agent2Id: string; topic: string } | null
   peersBrokerAvailable: boolean
+  workers: WorkerStatusEntry[]
 }
 
 export function useExtensionMessages(
@@ -120,6 +131,7 @@ export function useExtensionMessages(
   const [clickupNextFetchAt, setClickupNextFetchAt] = useState<number | null>(null)
   const [activeConference, setActiveConference] = useState<{ conferenceId: string; agent1Id: string; agent2Id: string; topic: string } | null>(null)
   const [peersBrokerAvailable, setPeersBrokerAvailable] = useState(false)
+  const [workers, setWorkers] = useState<WorkerStatusEntry[]>([])
 
   // Ref to expose saveAgentMeta and forgetAgent outside the effect closure
   const saveAgentMetaRef = useRef<() => void>(() => {})
@@ -520,6 +532,8 @@ export function useExtensionMessages(
         setActiveConference(null)
       } else if (msg.type === 'peersBrokerStatus') {
         setPeersBrokerAvailable(msg.available as boolean)
+      } else if (msg.type === 'workerStatus') {
+        setWorkers(msg.workers as WorkerStatusEntry[])
       }
     }
     window.addEventListener('message', handler)
@@ -530,5 +544,5 @@ export function useExtensionMessages(
   const saveAgentMeta = useCallback(() => saveAgentMetaRef.current(), [])
   const forgetAgent = useCallback((sessionId: string) => forgetAgentRef.current(sessionId), [])
 
-  return { agents, selectedAgent, selectAgent: setSelectedAgent, agentTools, agentStatuses, subagentTools, subagentCharacters, layoutReady, loadedAssets, workspaceFolders, agentConversation, offlineAgents, knownProjects, saveAgentMeta, forgetAgent, clickupTickets, clickupConfigured, clickupListId, clickupNextFetchAt, activeConference, peersBrokerAvailable }
+  return { agents, selectedAgent, selectAgent: setSelectedAgent, agentTools, agentStatuses, subagentTools, subagentCharacters, layoutReady, loadedAssets, workspaceFolders, agentConversation, offlineAgents, knownProjects, saveAgentMeta, forgetAgent, clickupTickets, clickupConfigured, clickupListId, clickupNextFetchAt, activeConference, peersBrokerAvailable, workers }
 }

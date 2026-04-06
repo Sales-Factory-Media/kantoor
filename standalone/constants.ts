@@ -13,3 +13,8 @@ export const DARRYL_ROLE_SHORT = 'Foreman';
 export const DARRYL_CLICKUP_USERNAME = 'Darryl Philbin';
 export const DARRYL_ESCALATION_USERNAME = 'Anne De Jong';
 export const DARRYL_WORKSPACE = '~/Projects/kantoor-workspace';
+
+// ── Multi-Worker ───────────────────────────────────────────
+export const WORKER_HEARTBEAT_INTERVAL_MS = 30_000;
+export const WORKER_HEARTBEAT_TIMEOUT_MS = 90_000;
+export const WORKER_RECONNECT_INTERVAL_MS = 5_000;

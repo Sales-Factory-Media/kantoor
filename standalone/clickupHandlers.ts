@@ -11,12 +11,19 @@ import {
 	buildDarrylSystemPrompt,
 } from './agentStore.js';
 import type { RosterEntry } from './agentStore.js';
-import { fetchListTasks } from './clickupClient.js';
+import { fetchListTasks, addTaskComment } from './clickupClient.js';
 import type { ClickUpConfig } from './clickupClient.js';
 import { readJson, writeJson } from './serverHelpers.js';
 import { SETTINGS_FILE } from './serverContext.js';
 import type { ServerContext } from './serverContext.js';
 import { launchPersistentAgent } from './agentHandlers.js';
+import {
+	getAvailableCapacity,
+	getIdleWorkers,
+	addAssignment,
+	collectAgentMemories,
+	broadcastWorkerStatus,
+} from './workerRegistry.js';
 
 // ── Polling ──────────────────────────────────────────────────
 
@@ -50,24 +57,86 @@ export async function handleClickupRefresh(ctx: ServerContext): Promise<void> {
 }
 
 export function autoDarrylPickup(ctx: ServerContext): void {
-	// If Darryl exists and already has an active session, skip — one ticket at a time
-	const darryl = ctx.persistentAgents.find(p => p.name === 'Darryl');
-	if (darryl?.currentSessionId) return;
+	// Workers don't auto-pickup — they receive tickets from the hub
+	if (ctx.isWorkerMode) return;
 
-	// Find first "to do" ticket assigned to Darryl (handleDarrylHandleTicket creates Darryl if needed)
+	// Collect all TODO tickets assigned to Darryl
+	const todoTickets: Array<{ id: string; name: string; url: string }> = [];
 	for (const group of ctx.clickupTickets) {
 		if (group.name.toLowerCase() !== 'to do') continue;
 		for (const task of group.tasks) {
 			if (task.assignees.some(a => a.username === DARRYL_CLICKUP_USERNAME)) {
-				console.log(`[Standalone] Auto-pickup: Darryl picking up TODO ticket ${task.id}: "${task.name}"`);
-				handleDarrylHandleTicket(
-					{ ticketId: task.id, ticketName: task.name, ticketUrl: task.url },
-					ctx,
-				);
-				return;
+				todoTickets.push({ id: task.id, name: task.name, url: task.url });
 			}
 		}
 	}
+
+	if (todoTickets.length === 0) return;
+
+	// Check available capacity (hub + idle remote workers)
+	const capacity = getAvailableCapacity(ctx);
+	if (capacity === 0) return;
+
+	// Distribute tickets up to available capacity
+	const ticketsToAssign = todoTickets.slice(0, capacity);
+	const idleWorkers = getIdleWorkers(ctx);
+
+	// Hub is available if Darryl isn't currently running
+	const darryl = ctx.persistentAgents.find(p => p.name === 'Darryl');
+	const hubAvailable = !darryl?.currentSessionId;
+
+	// Build a queue of available slots: hub first, then remote workers
+	const slots: Array<{ type: 'hub' } | { type: 'worker'; worker: typeof idleWorkers[0] }> = [];
+	if (hubAvailable) slots.push({ type: 'hub' });
+	for (const w of idleWorkers) slots.push({ type: 'worker', worker: w });
+
+	// Collect agent memories once (shared across all worker assignments)
+	const hasRemoteAssignment = ticketsToAssign.length > (hubAvailable ? 1 : 0);
+	const memories = hasRemoteAssignment ? collectAgentMemories(ctx.persistentAgents) : {};
+
+	for (let i = 0; i < ticketsToAssign.length && i < slots.length; i++) {
+		const ticket = ticketsToAssign[i];
+		const slot = slots[i];
+
+		if (slot.type === 'hub') {
+			console.log(`[Hub] Assigning ticket ${ticket.id} to local hub (${ctx.workerIdentity?.name || 'Hub'})`);
+			if (ctx.workerIdentity) {
+				addAssignment(ctx, ticket.id, ticket.name, ctx.workerIdentity.name, 'localhost');
+			}
+			if (ctx.clickupConfig && ctx.workerIdentity) {
+				addTaskComment(ctx.clickupConfig, ticket.id, `Assigned to worker: ${ctx.workerIdentity.name}`).catch(err => {
+					console.error(`[Hub] Failed to comment on ticket ${ticket.id}:`, err);
+				});
+			}
+			handleDarrylHandleTicket(
+				{ ticketId: ticket.id, ticketName: ticket.name, ticketUrl: ticket.url },
+				ctx,
+			);
+		} else {
+			const { worker } = slot;
+			console.log(`[Hub] Assigning ticket ${ticket.id} to worker "${worker.name}" (${worker.hostname})`);
+			addAssignment(ctx, ticket.id, ticket.name, worker.name, worker.hostname);
+
+			worker.ws.send(JSON.stringify({
+				type: 'handleTicket',
+				ticketId: ticket.id,
+				ticketName: ticket.name,
+				ticketUrl: ticket.url,
+				agentMemories: memories,
+			}));
+
+			if (ctx.clickupConfig) {
+				addTaskComment(ctx.clickupConfig, ticket.id, `Assigned to worker: ${worker.name}`).catch(err => {
+					console.error(`[Hub] Failed to comment on ticket ${ticket.id}:`, err);
+				});
+			}
+
+			worker.currentTicketId = ticket.id;
+			worker.currentTicketName = ticket.name;
+		}
+	}
+
+	broadcastWorkerStatus(ctx);
 }
 
 // ── Ticket work ──────────────────────────────────────────────
