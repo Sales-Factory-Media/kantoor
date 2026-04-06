@@ -199,7 +199,7 @@ export function addAssignment(ctx: ServerContext, ticketId: string, ticketName: 
 	saveAssignments(ctx.workerAssignments);
 }
 
-function markAssignment(ctx: ServerContext, ticketId: string, status: 'completed' | 'failed'): void {
+export function markAssignment(ctx: ServerContext, ticketId: string, status: 'completed' | 'failed'): void {
 	const assignment = ctx.workerAssignments.find(a => a.ticketId === ticketId && a.status === 'in_progress');
 	if (assignment) {
 		assignment.status = status;
