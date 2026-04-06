@@ -4,6 +4,7 @@ import * as path from 'path';
 import { loadKnownProjects } from '../src/projectStore.js';
 import type { RosterEntry } from './agentStore.js';
 import { launchAgentOnTicket } from './clickupHandlers.js';
+import { closeItermSession } from './itermFocus.js';
 import { WEBVIEW_DIR } from './serverContext.js';
 import type { ServerContext } from './serverContext.js';
 
@@ -41,6 +42,24 @@ function handleApiRoster(res: http.ServerResponse, ctx: ServerContext): void {
 	});
 	res.writeHead(200);
 	res.end(JSON.stringify({ roster }));
+}
+
+function handleApiAgentExit(json: Record<string, unknown>, res: http.ServerResponse): void {
+	const sessionId = json.sessionId as string | undefined;
+
+	if (!sessionId) {
+		res.writeHead(400);
+		res.end(JSON.stringify({ error: 'Missing required field: sessionId' }));
+		return;
+	}
+
+	const closed = closeItermSession(sessionId);
+	console.log(`[API] agent-exit sessionId=${sessionId} closed=${closed}`);
+	res.writeHead(200);
+	res.end(JSON.stringify({
+		success: true,
+		message: closed ? 'Session closed' : 'Session not found (may have already exited)',
+	}));
 }
 
 function handleApiLaunchAgent(json: Record<string, unknown>, res: http.ServerResponse, ctx: ServerContext): void {
@@ -85,6 +104,33 @@ export function createHttpServer(ctx: ServerContext): http.Server {
 
 			if (req.method === 'GET' && urlPath === '/api/roster') {
 				handleApiRoster(res, ctx);
+				return;
+			}
+
+			if (req.method === 'POST' && urlPath === '/api/agent-exit') {
+				const MAX_BODY_BYTES = 64 * 1024; // 64 KB
+				let body = '';
+				let exceeded = false;
+				req.on('data', (chunk: Buffer) => {
+					if (exceeded) return;
+					body += chunk.toString();
+					if (Buffer.byteLength(body) > MAX_BODY_BYTES) {
+						exceeded = true;
+						res.writeHead(413);
+						res.end(JSON.stringify({ error: 'Request body too large' }));
+						req.destroy();
+					}
+				});
+				req.on('end', () => {
+					if (exceeded) return;
+					try {
+						const json = JSON.parse(body) as Record<string, unknown>;
+						handleApiAgentExit(json, res);
+					} catch {
+						res.writeHead(400);
+						res.end(JSON.stringify({ error: 'Invalid JSON' }));
+					}
+				});
 				return;
 			}
 
