@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { loadKnownProjects } from '../src/projectStore.js';
 import type { RosterEntry } from './agentStore.js';
+import { copyPersistentAgent } from './agentStore.js';
 import { launchAgentOnTicket } from './clickupHandlers.js';
 import { WEBVIEW_DIR } from './serverContext.js';
 import type { ServerContext } from './serverContext.js';
@@ -41,6 +42,37 @@ function handleApiRoster(res: http.ServerResponse, ctx: ServerContext): void {
 	});
 	res.writeHead(200);
 	res.end(JSON.stringify({ roster }));
+}
+
+function handleApiCopyAgent(json: Record<string, unknown>, res: http.ServerResponse, ctx: ServerContext): void {
+	const sourceAgentId = json.sourceAgentId as string | undefined;
+	const name = json.name as string | undefined;
+	const roleShort = json.roleShort as string | undefined;
+	const roleFull = json.roleFull as string | undefined;
+
+	if (!sourceAgentId || !name || !roleShort || !roleFull) {
+		res.writeHead(400);
+		res.end(JSON.stringify({ success: false, error: 'Missing required fields: sourceAgentId, name, roleShort, roleFull' }));
+		return;
+	}
+
+	const newAgent = copyPersistentAgent(sourceAgentId, name, roleShort, roleFull, ctx.persistentAgents);
+	if (!newAgent) {
+		res.writeHead(400);
+		res.end(JSON.stringify({ success: false, error: `Source agent not found: ${sourceAgentId}` }));
+		return;
+	}
+
+	res.writeHead(200);
+	res.end(JSON.stringify({
+		success: true,
+		agent: {
+			id: newAgent.id,
+			name: newAgent.name,
+			roleShort: newAgent.roleShort,
+			workspacePath: newAgent.workspacePath,
+		},
+	}));
 }
 
 function handleApiLaunchAgent(json: Record<string, unknown>, res: http.ServerResponse, ctx: ServerContext): void {
@@ -107,6 +139,33 @@ export function createHttpServer(ctx: ServerContext): http.Server {
 					try {
 						const json = JSON.parse(body) as Record<string, unknown>;
 						handleApiLaunchAgent(json, res, ctx);
+					} catch {
+						res.writeHead(400);
+						res.end(JSON.stringify({ error: 'Invalid JSON' }));
+					}
+				});
+				return;
+			}
+
+			if (req.method === 'POST' && urlPath === '/api/copy-agent') {
+				const MAX_BODY_BYTES = 64 * 1024; // 64 KB
+				let body = '';
+				let exceeded = false;
+				req.on('data', (chunk: Buffer) => {
+					if (exceeded) return;
+					body += chunk.toString();
+					if (Buffer.byteLength(body) > MAX_BODY_BYTES) {
+						exceeded = true;
+						res.writeHead(413);
+						res.end(JSON.stringify({ error: 'Request body too large' }));
+						req.destroy();
+					}
+				});
+				req.on('end', () => {
+					if (exceeded) return;
+					try {
+						const json = JSON.parse(body) as Record<string, unknown>;
+						handleApiCopyAgent(json, res, ctx);
 					} catch {
 						res.writeHead(400);
 						res.end(JSON.stringify({ error: 'Invalid JSON' }));
