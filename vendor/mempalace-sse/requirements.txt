@@ -1,0 +1,4 @@
+mempalace
+mcp[server]
+uvicorn
+starlette

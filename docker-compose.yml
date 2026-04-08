@@ -10,5 +10,17 @@ services:
       - "7899:7899"
     restart: unless-stopped
 
+  mempalace:
+    build: ./vendor/mempalace-sse
+    volumes:
+      - mempalace-data:/data
+    ports:
+      - "3334:3334"
+    environment:
+      - MEMPALACE_PATH=/data/palace
+      - MEMPALACE_PORT=3334
+    restart: unless-stopped
+
 volumes:
   peers-data:
+  mempalace-data:

@@ -8,6 +8,8 @@ import {
 	buildSystemPrompt,
 	buildConferencePrompt,
 	expandHome,
+	ensureMempalaceMcpConfig,
+	mergeMcpConfigs,
 } from './agentStore.js';
 import { ensureMcpConfig, startConference, endConference } from './conferenceManager.js';
 import type { ConferenceState } from './conferenceManager.js';
@@ -28,7 +30,9 @@ export function handleStartConference(msg: Record<string, unknown>, ctx: ServerC
 		return;
 	}
 
-	const mcpConfigPath = ensureMcpConfig();
+	const peersMcpConfigPath = ensureMcpConfig();
+	const mempalaceMcpConfigPath = ensureMempalaceMcpConfig();
+	const mcpConfigPath = mergeMcpConfigs(peersMcpConfigPath, mempalaceMcpConfigPath);
 	const conferenceId = crypto.randomUUID();
 	const sid1 = crypto.randomUUID();
 	const sid2 = crypto.randomUUID();

@@ -17,22 +17,21 @@ The hub/worker architecture makes this worse: memories are synced as snapshots o
 
 ## What We're Building
 
-A **Node.js MCP server** (`memory-server`) that runs on the hub and exposes shared team memory via MCP tools. Workers connect to it over HTTP (not stdin/stdout like typical MCP servers). Every agent launched by the hub or any worker gets this MCP server in their config.
+A **MemPalace instance** running in Docker Compose, exposed as an SSE MCP server so all agents (hub and worker) connect to a single shared memory store over HTTP. MemPalace provides semantic vector search (ChromaDB), a temporal knowledge graph (SQLite), deduplication, and AAAK compression out of the box — no need to reimplement these.
 
-### Why not fork MemPalace
+### Why MemPalace in Docker (not a custom Node.js server)
 
-MemPalace is designed as a per-session MCP server (one `python -m mempalace.mcp_server` per Claude process, communicating over stdin/stdout). Our use case is fundamentally different:
+The original plan proposed building a custom Node.js MCP server with `better-sqlite3` and `@xenova/transformers`. MemPalace already solves the same problem with a mature implementation:
 
-- Multiple concurrent agents across multiple machines need the same memory store
-- We need a centralized service, not per-session processes
-- ChromaDB's embedded mode doesn't support concurrent writers
-- The wing/room/hall taxonomy adds metaphor overhead we don't need
-- Python dependency in a Node.js project
+- **Semantic vector search** via ChromaDB — embeddings, similarity search, dedup checking built in
+- **Temporal knowledge graph** — entity/predicate/entity triples with `valid_from`/`valid_to`
+- **19 MCP tools** — search, add, delete, knowledge graph CRUD, navigation, diary, status
+- **AAAK compression** — automatic memory consolidation we'd otherwise have to build
+- **No Node.js dependencies** — no `better-sqlite3`, no `@xenova/transformers`, no custom code to maintain
 
-We do borrow three good ideas from MemPalace:
-- **Semantic vector search** (ChromaDB concept, but we'll use a Node.js-native solution)
-- **Temporal knowledge graph** (entity → predicate → entity, with valid_from/valid_to)
-- **Layered recall** (always-loaded identity vs. on-demand deep search)
+MemPalace is designed as a per-session stdio MCP server, but we solve this by wrapping it with an SSE transport layer using the official Python `mcp` SDK. The wrapper imports MemPalace's tool handlers as a library and exposes them via HTTP/SSE — one Python process serving all agents concurrently.
+
+Running it in Docker (alongside the existing `peers-broker`) keeps the Python dependency isolated from the Node.js project. The container handles ChromaDB model downloads, storage persistence, and process lifecycle.
 
 ## Architecture
 
@@ -42,173 +41,188 @@ Hub machine                              Worker machine
 │ pixel-agents server  │                 │ pixel-agents worker  │
 │   :3333              │                 │   :3333              │
 │                      │                 │                      │
-│ memory-server :3334  │◄────HTTP────────│                      │
-│   ├─ vector store    │                 │                      │
-│   ├─ knowledge graph │                 │                      │
-│   └─ SQLite DB       │                 │                      │
+│ Docker Compose       │                 │                      │
+│  ├─ peers-broker     │                 │                      │
+│  │    :7899          │                 │                      │
+│  └─ mempalace        │◄────HTTP/SSE───│                      │
+│       :3334          │                 │                      │
+│     ├─ ChromaDB      │                 │                      │
+│     ├─ knowledge.db  │                 │                      │
+│     └─ SSE wrapper   │                 │                      │
 │                      │                 │                      │
-│ Agent (claude)───────┼─MCP over HTTP──►│                      │
+│ Agent (claude)───MCP SSE──►:3334       │                      │
 │                      │                 │ Agent (claude)───────┤
-│                      │                 │   └─MCP over HTTP────┼──► Hub :3334
+│                      │                 │   └─MCP SSE──────────┼──► Hub :3334
 └──────────────────────┘                 └──────────────────────┘
 ```
 
 ### Storage
 
-All state lives on the hub in `~/.pixel-agents/memory/`:
+All state lives inside the Docker container's persistent volume, mapped to `~/.pixel-agents/mempalace/`:
 
-| File | Purpose |
-|------|---------|
-| `vectors.db` | SQLite with `sqlite-vss` extension for vector search |
-| `knowledge.db` | SQLite for temporal knowledge graph (entities, triples) |
+| Directory | Purpose |
+|-----------|---------|
+| `palace/` | ChromaDB vector store (embeddings + metadata) |
+| `palace/knowledge.db` | SQLite temporal knowledge graph (entities, triples) |
 
-Using SQLite for both stores (instead of ChromaDB) because:
-- Node.js native via `better-sqlite3` — no separate process
-- `sqlite-vss` provides vector similarity search (cosine/L2)
-- Single file, concurrent reads, WAL mode for concurrent writes
-- Already battle-tested in the Node.js ecosystem
-- No new runtime dependencies (no Python, no Java)
+ChromaDB uses SQLite internally for metadata and a local vector index. WAL mode enables concurrent reads. The SSE wrapper serializes writes through a single process, avoiding ChromaDB's concurrent-writer limitation.
 
 ### Embeddings
 
-For vector search to work without API calls, we need local embeddings. Options:
+Handled entirely by MemPalace/ChromaDB. ChromaDB uses `all-MiniLM-L6-v2` by default (384-dim embeddings, downloaded once into the container volume). No configuration needed — it just works.
 
-| Option | Size | Speed | Quality | Dependency |
-|--------|------|-------|---------|------------|
-| `@xenova/transformers` (ONNX) | ~100MB model | ~50ms/embed | Good (MiniLM-L6) | npm package |
-| `fastembed` | ~100MB model | ~30ms/embed | Good | npm + ONNX runtime |
-| TF-IDF (no model) | 0 | <1ms | Decent for keywords | None |
+## Docker Compose Service
 
-**Recommendation: `@xenova/transformers`** with `all-MiniLM-L6-v2`. It's a single npm install, runs on CPU, downloads the model once (~23MB quantized), and produces 384-dim embeddings good enough for our use case. Falls back to TF-IDF keyword matching if the model fails to load.
+Added alongside the existing `peers-broker`:
 
-## MCP Server Design
+```yaml
+services:
+  peers-broker:
+    # ... existing config unchanged ...
 
-### Transport: SSE (Server-Sent Events)
+  mempalace:
+    build:
+      context: ./vendor/mempalace-sse
+      dockerfile: Dockerfile
+    volumes:
+      - mempalace-data:/data
+    ports:
+      - "3334:3334"
+    environment:
+      - MEMPALACE_PATH=/data/palace
+      - MEMPALACE_PORT=3334
+    restart: unless-stopped
 
-Standard MCP supports two transports: stdio and SSE. Since our memory server is a shared HTTP service (not a per-session process), we use SSE transport. This is already supported by Claude Code's `--mcp-config`:
-
-```json
-{
-  "mcpServers": {
-    "memory": {
-      "type": "sse",
-      "url": "http://<hub-ip>:3334/mcp"
-    }
-  }
-}
+volumes:
+  peers-data:
+  mempalace-data:
 ```
 
-Workers use the hub's IP. Hub agents use `localhost`. The `ensureMemoryMcpConfig()` function generates this config file, similar to how `ensureMcpConfig()` works for peers.
+### SSE Wrapper (`vendor/mempalace-sse/`)
 
-### MCP Tools
+A thin Python service that wraps MemPalace's tool handlers with SSE transport:
 
-**10 tools total** — intentionally limited to keep agent prompts lean.
-
-#### Search & Recall
-
-| Tool | Parameters | Returns |
-|------|-----------|---------|
-| `memory_search` | `query: string`, `project?: string`, `limit?: number` | Top-N semantically similar memories with metadata |
-| `memory_recall` | `topic: string` | Structured summary: related facts, decisions, and history for a topic |
-
-#### Write
-
-| Tool | Parameters | Returns |
-|------|-----------|---------|
-| `memory_save` | `content: string`, `type: 'decision' \| 'discovery' \| 'preference' \| 'context'`, `project?: string`, `tags?: string[]` | Saved memory ID |
-| `memory_update` | `id: string`, `content: string` | Updated memory |
-| `memory_forget` | `id: string` | Confirmation |
-
-#### Knowledge Graph
-
-| Tool | Parameters | Returns |
-|------|-----------|---------|
-| `memory_fact_add` | `subject: string`, `predicate: string`, `object: string`, `project?: string` | Fact ID |
-| `memory_fact_query` | `entity: string`, `as_of?: string` | All current facts about an entity |
-| `memory_fact_invalidate` | `id: string`, `reason?: string` | Confirmation |
-
-#### Status
-
-| Tool | Parameters | Returns |
-|------|-----------|---------|
-| `memory_status` | — | Stats: total memories, facts, projects, last updated |
-| `memory_project_summary` | `project: string` | Key decisions, active facts, recent memories for a project |
-
-### What the tools do NOT include
-
-- No wings/rooms/halls taxonomy — memories are flat with `type` and `project` tags
-- No compression/AAAK — adds complexity, and our memories are already concise
-- No diary system — agents have MEMORY.md for personal notes, shared memory is for team knowledge
-- No save hooks — agents are instructed to save explicitly, not auto-captured
-
-## Data Model
-
-### Memories Table (vector store)
-
-```sql
-CREATE TABLE memories (
-  id TEXT PRIMARY KEY,
-  content TEXT NOT NULL,
-  type TEXT NOT NULL,          -- 'decision', 'discovery', 'preference', 'context'
-  project TEXT,                -- project name or null for global
-  tags TEXT,                   -- JSON array of tags
-  agent_name TEXT,             -- who saved this
-  agent_id TEXT,               -- persistent agent UUID
-  created_at TEXT NOT NULL,    -- ISO 8601
-  updated_at TEXT,
-  embedding BLOB               -- 384-dim float32 vector
-);
+```
+vendor/mempalace-sse/
+  Dockerfile          — Python 3.12, pip install mempalace + mcp[server]
+  server.py           — SSE MCP server importing MemPalace internals
+  requirements.txt    — mempalace, mcp[server]
 ```
 
-### Entities Table (knowledge graph)
+**`Dockerfile`:**
 
-```sql
-CREATE TABLE entities (
-  id TEXT PRIMARY KEY,
-  name TEXT NOT NULL UNIQUE,
-  type TEXT,                   -- 'project', 'service', 'person', 'tool', 'concept'
-  properties TEXT              -- JSON object
-);
+```dockerfile
+FROM python:3.12-slim
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+COPY server.py .
+EXPOSE 3334
+CMD ["python", "server.py"]
 ```
 
-### Facts Table (knowledge graph)
+**`server.py`** (conceptual — imports MemPalace's Palace class and registers its tools as MCP handlers over SSE):
 
-```sql
-CREATE TABLE facts (
-  id TEXT PRIMARY KEY,
-  subject_id TEXT NOT NULL REFERENCES entities(id),
-  predicate TEXT NOT NULL,     -- 'uses', 'depends_on', 'decided', 'prefers', 'avoids'
-  object_id TEXT NOT NULL REFERENCES entities(id),
-  project TEXT,
-  agent_name TEXT,             -- who recorded this
-  valid_from TEXT NOT NULL,    -- ISO 8601
-  valid_to TEXT,               -- null = still valid
-  invalidation_reason TEXT
-);
+```python
+from mcp.server import Server
+from mcp.server.sse import SseServerTransport
+from starlette.applications import Starlette
+from starlette.routing import Route
+from mempalace.palace import Palace
+
+palace = Palace(path=os.environ.get("MEMPALACE_PATH", "/data/palace"))
+app = Server("mempalace")
+
+# Register each MemPalace tool as an MCP tool handler
+# e.g., @app.tool() for search, add_drawer, kg_query, etc.
+# Each handler delegates to palace.search(), palace.add(), etc.
+
+sse = SseServerTransport("/messages/")
+starlette_app = Starlette(routes=[
+    Route("/sse", endpoint=sse.handle_sse_connection),
+    Route("/messages/", endpoint=sse.handle_post_message, methods=["POST"]),
+])
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(starlette_app, host="0.0.0.0", port=int(os.environ.get("MEMPALACE_PORT", "3334")))
 ```
+
+The wrapper creates a single `Palace` instance shared across all SSE connections. Since Python's GIL serializes writes and ChromaDB's `PersistentClient` is thread-safe for reads, this handles concurrent agent access safely.
+
+## MCP Tools (from MemPalace)
+
+MemPalace exposes **19 tools** organized into categories. Agents access them as `mcp__mempalace__<tool_name>`.
+
+### Palace (Read) — 7 tools
+
+| Tool | Purpose |
+|------|---------|
+| `mempalace_status` | Palace overview: drawer/wing/room counts |
+| `mempalace_list_wings` | All wings with counts |
+| `mempalace_list_rooms` | Rooms within a wing |
+| `mempalace_get_taxonomy` | Full wing/room/count tree |
+| `mempalace_search` | Semantic search with wing/room filters |
+| `mempalace_check_duplicate` | Similarity check before filing |
+| `mempalace_get_aaak_spec` | AAAK dialect reference |
+
+### Palace (Write) — 2 tools
+
+| Tool | Purpose |
+|------|---------|
+| `mempalace_add_drawer` | Store content (with auto-dedup) |
+| `mempalace_delete_drawer` | Remove by ID |
+
+### Knowledge Graph — 5 tools
+
+| Tool | Purpose |
+|------|---------|
+| `mempalace_kg_query` | Entity relationships with temporal filtering |
+| `mempalace_kg_add` | Add facts |
+| `mempalace_kg_invalidate` | Mark facts as ended |
+| `mempalace_kg_timeline` | Chronological entity story |
+| `mempalace_kg_stats` | Graph overview |
+
+### Navigation — 3 tools
+
+| Tool | Purpose |
+|------|---------|
+| `mempalace_traverse` | Walk the graph from a room across wings |
+| `mempalace_find_tunnels` | Find rooms bridging two wings |
+| `mempalace_graph_stats` | Connectivity overview |
+
+### Agent Diary — 2 tools
+
+| Tool | Purpose |
+|------|---------|
+| `mempalace_diary_write` | Write AAAK diary entry |
+| `mempalace_diary_read` | Read recent entries |
+
+### What we DON'T use
+
+- The wing/room/hall taxonomy is available but not mandated in agent prompts — agents can use flat storage if they prefer
+- Auto-save hooks — agents are instructed to save explicitly, not auto-captured
 
 ## Integration with Hub/Worker
 
-### Phase 1: Memory Server Module
+### Phase 1: Docker Compose + SSE Wrapper
 
 **New files:**
 
 | File | Purpose |
 |------|---------|
-| `standalone/memory/memoryServer.ts` | HTTP + SSE MCP server, starts on `:3334` |
-| `standalone/memory/vectorStore.ts` | SQLite + sqlite-vss wrapper, embedding + search |
-| `standalone/memory/knowledgeGraph.ts` | Entity/fact CRUD, temporal queries |
-| `standalone/memory/embeddings.ts` | `@xenova/transformers` wrapper, model loading |
-| `standalone/memory/tools.ts` | MCP tool definitions and handlers |
+| `vendor/mempalace-sse/Dockerfile` | Python container with mempalace + mcp SDK |
+| `vendor/mempalace-sse/server.py` | SSE transport wrapper around MemPalace |
+| `vendor/mempalace-sse/requirements.txt` | Python dependencies |
 
 **Modified files:**
 
 | File | Change |
 |------|--------|
-| `standalone/server.ts` | Start memory server alongside main server (hub mode only) |
-| `standalone/constants.ts` | `MEMORY_SERVER_PORT = 3334` |
+| `docker-compose.yml` | Add `mempalace` service on `:3334` with persistent volume |
+| `standalone/constants.ts` | `MEMPALACE_SERVER_PORT = 3334`, `MEMPALACE_SERVER_URL` |
 
-The memory server starts automatically when the hub starts. Workers don't run their own memory server — they connect to the hub's.
+The mempalace container starts alongside `peers-broker` via `docker compose up`. No changes to `server.ts` — the memory service is fully managed by Docker, not by the Node.js server.
 
 ### Phase 2: MCP Config Generation
 
@@ -216,20 +230,20 @@ The memory server starts automatically when the hub starts. Workers don't run th
 
 | File | Change |
 |------|--------|
-| `standalone/agentStore.ts` | New `ensureMemoryMcpConfig(hubHost: string)` function |
-| `standalone/itermFocus.ts` | Pass memory MCP config alongside peers MCP config |
+| `standalone/agentStore.ts` | New `ensureMempalaceMcpConfig(hubHost: string)` function |
+| `standalone/itermFocus.ts` | Pass mempalace MCP config alongside peers MCP config |
 
 MCP config merging: if an agent also needs peers MCP (conference mode), both configs are merged into a single JSON file. The `--mcp-config` flag only accepts one file.
 
 ```typescript
 // agentStore.ts
-export function ensureMemoryMcpConfig(hubHost: string = 'localhost'): string {
-  const configPath = path.join(SETTINGS_DIR, 'memory-mcp-config.json');
+export function ensureMempalaceMcpConfig(hubHost: string = 'localhost'): string {
+  const configPath = path.join(SETTINGS_DIR, 'mempalace-mcp-config.json');
   const config = {
     mcpServers: {
-      memory: {
+      mempalace: {
         type: 'sse',
-        url: `http://${hubHost}:${MEMORY_SERVER_PORT}/mcp`,
+        url: `http://${hubHost}:${MEMPALACE_SERVER_PORT}/sse`,
       },
     },
   };
@@ -251,40 +265,41 @@ For workers, `hubHost` is the hub's IP (already known from `--hub` flag). For hu
 Added to every agent's system prompt:
 
 ```
-## Shared Team Memory
+## Shared Team Memory (MemPalace)
 
-You have access to a shared memory service via MCP tools (prefixed `mcp__memory__`).
+You have access to a shared memory palace via MCP tools (prefixed `mcp__mempalace__`).
 
 **When starting work:**
-- Call `mcp__memory__memory_search` with your task description to find relevant past decisions and context
-- Call `mcp__memory__memory_fact_query` for entities related to your task
+- Call `mcp__mempalace__mempalace_search` with your task description to find relevant past decisions and context
+- Call `mcp__mempalace__mempalace_kg_query` for entities related to your task
 
 **When you learn something important:**
-- Save decisions with `mcp__memory__memory_save` (type: 'decision')
-- Save discoveries with `mcp__memory__memory_save` (type: 'discovery')
-- Record facts with `mcp__memory__memory_fact_add` (e.g., "payment-service uses Stripe API")
+- Save decisions and discoveries with `mcp__mempalace__mempalace_add_drawer`
+- Check for duplicates first with `mcp__mempalace__mempalace_check_duplicate`
+- Record facts with `mcp__mempalace__mempalace_kg_add` (e.g., "payment-service uses Stripe API")
+- Write session summaries with `mcp__mempalace__mempalace_diary_write`
 
 **What NOT to save:**
 - Routine code changes (that's what git is for)
 - Temporary debugging notes
 - Anything specific to this session only
 
-Your personal MEMORY.md is still for your own working notes. The shared memory is for knowledge the whole team benefits from.
+Your personal MEMORY.md is still for your own working notes. The shared memory palace is for knowledge the whole team benefits from.
 ```
 
 Added to Darryl's system prompt:
 
 ```
-## Shared Team Memory
+## Shared Team Memory (MemPalace)
 
 Before assigning a ticket, search the shared memory to inform your decision:
-- `mcp__memory__memory_search` — find past work related to the ticket
-- `mcp__memory__memory_fact_query` — check what's known about involved services/components
-- `mcp__memory__memory_project_summary` — get an overview of a project's current state
+- `mcp__mempalace__mempalace_search` — find past work related to the ticket
+- `mcp__mempalace__mempalace_kg_query` — check what's known about involved services/components
+- `mcp__mempalace__mempalace_status` — get an overview of the palace
 
 After making an assignment decision, save it:
-- `mcp__memory__memory_save` with type 'decision' — record why you chose this agent
-- `mcp__memory__memory_fact_add` — record any new facts learned from the ticket
+- `mcp__mempalace__mempalace_add_drawer` — record the decision and reasoning
+- `mcp__mempalace__mempalace_kg_add` — record any new facts learned from the ticket
 ```
 
 ### Phase 4: Worker-Side Config
@@ -293,13 +308,13 @@ After making an assignment decision, save it:
 
 | File | Change |
 |------|--------|
-| `standalone/workerMode.ts` | On registration, receive hub's memory server URL. Use it when generating MCP configs for local agent launches |
-| `standalone/workerRegistry.ts` | Include `memoryServerUrl` in `workerRegistered` response |
+| `standalone/workerMode.ts` | On registration, receive hub's mempalace server URL. Use it when generating MCP configs for local agent launches |
+| `standalone/workerRegistry.ts` | Include `mempalaceServerUrl` in `workerRegistered` response |
 
-The hub already sends config data on worker registration. We add the memory server URL:
+The hub already sends config data on worker registration. We add the mempalace server URL:
 
 ```
-<- { type: "workerRegistered", agents: [...], clickupConfig: {...}, memoryServerUrl: "http://192.168.1.10:3334/mcp" }
+<- { type: "workerRegistered", agents: [...], clickupConfig: {...}, mempalaceServerUrl: "http://192.168.1.10:3334/sse" }
 ```
 
 Workers pass this URL when building MCP configs for their local Darryl sessions.
@@ -308,7 +323,7 @@ Workers pass this URL when building MCP configs for their local Darryl sessions.
 
 **What happens to existing MEMORY.md files:**
 
-Nothing. They stay as-is. Agents continue to have personal MEMORY.md files for session-to-session notes. The shared memory service is additive — it handles the cross-agent, cross-session, cross-machine knowledge that MEMORY.md was never designed for.
+Nothing. They stay as-is. Agents continue to have personal MEMORY.md files for session-to-session notes. The shared memory palace is additive — it handles the cross-agent, cross-session, cross-machine knowledge that MEMORY.md was never designed for.
 
 Over time, agents will naturally put team-relevant knowledge in shared memory and keep personal working notes in MEMORY.md. No migration needed.
 
@@ -322,29 +337,30 @@ Long-term, as agents rely more on shared memory, the MEMORY.md files will shrink
 
 | Step | What | Effort | Dependencies |
 |------|------|--------|-------------|
-| 1 | `embeddings.ts` — model loading, embed function, fallback | Small | npm: `@xenova/transformers` |
-| 2 | `vectorStore.ts` — SQLite + vector search, CRUD | Medium | npm: `better-sqlite3`, `sqlite-vss` |
-| 3 | `knowledgeGraph.ts` — entities, facts, temporal queries | Medium | npm: `better-sqlite3` (shared) |
-| 4 | `tools.ts` — MCP tool definitions, parameter validation | Medium | Steps 2-3 |
-| 5 | `memoryServer.ts` — HTTP/SSE server, MCP protocol | Medium | Step 4 |
-| 6 | Start memory server from `server.ts` (hub only) | Small | Step 5 |
-| 7 | `ensureMemoryMcpConfig()` + inject in `launchAgentSession()` | Small | Step 6 |
-| 8 | System prompt updates for all agents + Darryl | Small | Step 7 |
-| 9 | Worker registration: send memory server URL | Small | Step 7 |
-| 10 | Worker mode: use hub memory URL in local MCP configs | Small | Step 9 |
-| 11 | Add `mcp__memory__*` to `PERMISSION_EXEMPT_TOOLS` | Small | Step 7 |
-| 12 | Add `'memory'` category to `TOOL_ACTIVITY_CATEGORY` | Small | Step 7 |
+| 1 | `vendor/mempalace-sse/` — Dockerfile, requirements.txt, server.py | Medium | None |
+| 2 | Update `docker-compose.yml` — add mempalace service + volume | Small | Step 1 |
+| 3 | Test: `docker compose up`, verify SSE endpoint responds | Small | Step 2 |
+| 4 | `ensureMempalaceMcpConfig()` + inject in `launchAgentSession()` | Small | Step 3 |
+| 5 | System prompt updates for all agents + Darryl | Small | Step 4 |
+| 6 | Worker registration: send mempalace server URL | Small | Step 4 |
+| 7 | Worker mode: use hub mempalace URL in local MCP configs | Small | Step 6 |
+| 8 | Add `mcp__mempalace__*` to `PERMISSION_EXEMPT_TOOLS` | Small | Step 4 |
+| 9 | Add `'memory'` category to `TOOL_ACTIVITY_CATEGORY` | Small | Step 4 |
+| 10 | `MEMPALACE_SERVER_PORT` + `MEMPALACE_SERVER_URL` in constants | Small | None |
 
-Steps 1-3 can be done in parallel. Steps 7-12 can be done in parallel.
+Steps 1 and 10 can be done in parallel. Steps 4-9 can be done in parallel (after step 3).
 
 ## New Dependencies
 
-| Package | Purpose | Size |
-|---------|---------|------|
-| `better-sqlite3` | SQLite driver (WAL mode, concurrent reads) | ~2MB |
-| `@xenova/transformers` | Local embeddings (ONNX runtime) | ~8MB + ~23MB model (downloaded once) |
+| Dependency | Where | Purpose |
+|------------|-------|---------|
+| Docker (already required) | Host | Container runtime for mempalace service |
+| `mempalace` (Python, in container) | Docker | Memory palace with vector search + knowledge graph |
+| `mcp[server]` (Python, in container) | Docker | SSE transport for MCP protocol |
+| `uvicorn` (Python, in container) | Docker | ASGI server for SSE endpoint |
+| `starlette` (Python, in container) | Docker | HTTP routing for SSE endpoint |
 
-`sqlite-vss` is complex to install cross-platform. **Alternative**: skip the C extension and do vector search in JS — load all vectors into memory, compute cosine similarity in a loop. With <100k memories this is plenty fast (<10ms). This keeps dependencies to just `better-sqlite3` and `@xenova/transformers`.
+**No new npm dependencies.** All Python dependencies are isolated in the Docker container. The Node.js project only needs to generate MCP config JSON pointing at the container's URL.
 
 ## What This Enables
 
@@ -360,12 +376,13 @@ Steps 1-3 can be done in parallel. Steps 7-12 can be done in parallel.
 
 | Risk | Impact | Mitigation |
 |------|--------|------------|
-| Agents spam shared memory with noise | Search quality degrades | Strict system prompt guidance on what to save. Type field forces categorization. Can add dedup check later. |
-| sqlite-vss install fails on some machines | No vector search | Skip sqlite-vss entirely — do cosine similarity in JS. Simpler, works everywhere. |
-| Model download fails (no internet) | No embeddings | Fall back to TF-IDF keyword matching. Degrade gracefully. |
-| Memory server is single point of failure | All agents lose shared memory | Agents still have personal MEMORY.md. Memory server failure = degraded, not broken. |
+| Agents spam shared memory with noise | Search quality degrades | Strict system prompt guidance on what to save. MemPalace's built-in dedup check helps. AAAK compression consolidates over time. |
+| Docker not available on a machine | No shared memory | Agents still have personal MEMORY.md. Shared memory is additive, not required. |
+| ChromaDB model download fails (no internet on first run) | No embeddings | Pre-bake the model into the Docker image, or download on build. Container always has what it needs. |
+| Memory server is single point of failure | All agents lose shared memory | Agents still have personal MEMORY.md. Memory service failure = degraded, not broken. Persistent volume survives container restarts. |
 | Network latency to hub | Slow MCP tool calls for workers | SSE is persistent connection. Searches should be <100ms even over LAN. |
-| Memory grows unbounded | Disk usage, search slows | Add `memory_status` reporting. Future: auto-archival of old memories with low access count. |
+| Memory grows unbounded | Disk usage, search slows | `mempalace_status` for monitoring. AAAK compression reduces volume. Future: archival of old memories. |
+| Concurrent writes via SSE wrapper | Data corruption | Single Python process with GIL serializes writes. ChromaDB PersistentClient is thread-safe for reads. SSE wrapper handles concurrency correctly. |
 
 ## Not In Scope
 
@@ -373,5 +390,4 @@ Steps 1-3 can be done in parallel. Steps 7-12 can be done in parallel.
 - **Memory UI in the webview** — useful but separate feature, can be added later
 - **Memory permissions** — all agents can read/write everything, no access control
 - **Replication** — single hub is the source of truth, no multi-hub sync
-- **AAAK compression** — premature optimization, memories are already short
-- **Import from MemPalace** — if someone has an existing palace, migration could be added later but isn't a launch requirement
+- **Multiple palace instances** — one shared palace for all agents, not per-project

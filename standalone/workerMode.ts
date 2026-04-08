@@ -103,6 +103,7 @@ function handleHubMessage(
 function handleRegistered(msg: Record<string, unknown>, ctx: ServerContext): void {
 	const hubAgents = msg.agents as PersistentAgent[] | undefined;
 	const clickupConfig = msg.clickupConfig as ClickUpConfig | null | undefined;
+	const mempalaceServerUrl = msg.mempalaceServerUrl as string | undefined;
 
 	// Merge agents: hub wins on conflicts, keep local-only agents
 	if (hubAgents) {
@@ -114,7 +115,12 @@ function handleRegistered(msg: Record<string, unknown>, ctx: ServerContext): voi
 		ctx.clickupConfig = clickupConfig;
 	}
 
-	console.log(`[Worker] Registered with hub. Received ${hubAgents?.length ?? 0} agents.`);
+	// Store mempalace server URL so worker agents can connect to hub's mempalace
+	if (mempalaceServerUrl) {
+		ctx.mempalaceServerUrl = mempalaceServerUrl;
+	}
+
+	console.log(`[Worker] Registered with hub. Received ${hubAgents?.length ?? 0} agents, mempalace: ${mempalaceServerUrl ?? 'none'}.`);
 }
 
 // ── Agent merge logic ───────────────────────────────────────

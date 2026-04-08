@@ -308,6 +308,7 @@ async function main(): Promise<void> {
 		workerIdentity,
 		workers: new Map(),
 		workerAssignments: isWorkerMode ? [] : loadAssignments(),
+		mempalaceServerUrl: null,
 	};
 
 	// ── Workspace path cache (decoded from project hash) ────
