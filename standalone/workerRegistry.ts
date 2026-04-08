@@ -63,10 +63,18 @@ export function registerWorker(
 	// Derive the hub's reachable address from the WebSocket's local address
 	// (the IP the worker actually connected to), falling back to os.hostname()
 	const socket = (ws as unknown as { _socket?: { localAddress?: string } })._socket;
-	const localAddr = socket?.localAddress;
-	const hubHost = (localAddr && localAddr !== '::' && localAddr !== '0.0.0.0')
+	let localAddr = socket?.localAddress;
+	// Strip IPv4-mapped IPv6 prefix (e.g. "::ffff:192.168.1.10" → "192.168.1.10")
+	if (localAddr?.startsWith('::ffff:')) {
+		localAddr = localAddr.slice(7);
+	}
+	let hubHost = (localAddr && localAddr !== '::' && localAddr !== '0.0.0.0')
 		? localAddr
 		: os.hostname();
+	// Wrap bare IPv6 addresses in brackets for valid URL construction
+	if (hubHost.includes(':')) {
+		hubHost = `[${hubHost}]`;
+	}
 	ws.send(JSON.stringify({
 		type: 'workerRegistered',
 		agents,

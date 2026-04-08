@@ -15,7 +15,7 @@ services:
     volumes:
       - mempalace-data:/data
     ports:
-      - "3334:3334"
+      - "127.0.0.1:3334:3334"  # Bind to localhost by default; for LAN worker access, change to "0.0.0.0:3334:3334"
     environment:
       - MEMPALACE_PATH=/data/palace
       - MEMPALACE_PORT=3334
