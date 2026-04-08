@@ -12,7 +12,7 @@ import sys
 
 import uvicorn
 from mcp import types
-from mcp.server import Server, ServerRequestContext
+from mcp.server import Server
 from mcp.server.sse import SseServerTransport
 from starlette.applications import Starlette
 from starlette.responses import Response
@@ -519,66 +519,37 @@ TOOL_HANDLERS = {
 }
 
 # ---------------------------------------------------------------------------
-# MCP Server handlers
+# MCP Server with decorator-based handlers
 # ---------------------------------------------------------------------------
+mcp_server = Server("mempalace")
 
 
-async def handle_list_tools(
-    ctx: ServerRequestContext,
-    params: types.PaginatedRequestParams | None,
-) -> types.ListToolsResult:
+@mcp_server.list_tools()
+async def handle_list_tools() -> list[types.Tool]:
     """Return all 19 mempalace tools."""
-    return types.ListToolsResult(tools=TOOL_DEFINITIONS)
+    return TOOL_DEFINITIONS
 
 
+@mcp_server.call_tool()
 async def handle_call_tool(
-    ctx: ServerRequestContext,
-    params: types.CallToolRequestParams,
-) -> types.CallToolResult:
+    name: str, arguments: dict | None
+) -> list[types.TextContent | types.ImageContent | types.EmbeddedResource]:
     """Dispatch a tool call to the corresponding mempalace function."""
-    name = params.name
-    arguments = params.arguments or {}
+    arguments = arguments or {}
 
     handler = TOOL_HANDLERS.get(name)
     if handler is None:
-        return types.CallToolResult(
-            content=[
-                types.TextContent(
-                    type="text",
-                    text=json.dumps({"error": f"Unknown tool: {name}"}),
-                )
-            ],
-            isError=True,
-        )
+        raise ValueError(f"Unknown tool: {name}")
 
     try:
         result = handler(arguments)
         # mempalace tool functions return dicts
         text = json.dumps(result, default=str, ensure_ascii=False)
-        return types.CallToolResult(
-            content=[types.TextContent(type="text", text=text)]
-        )
+        return [types.TextContent(type="text", text=text)]
     except Exception as e:
         logger.exception("Tool %s failed", name)
-        return types.CallToolResult(
-            content=[
-                types.TextContent(
-                    type="text",
-                    text=json.dumps({"error": str(e)}),
-                )
-            ],
-            isError=True,
-        )
+        raise
 
-
-# ---------------------------------------------------------------------------
-# Build the MCP server
-# ---------------------------------------------------------------------------
-mcp_server = Server(
-    "mempalace",
-    on_list_tools=handle_list_tools,
-    on_call_tool=handle_call_tool,
-)
 
 # ---------------------------------------------------------------------------
 # SSE transport via Starlette
