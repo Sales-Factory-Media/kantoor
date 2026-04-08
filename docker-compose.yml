@@ -15,7 +15,7 @@ services:
     volumes:
       - mempalace-data:/data
     ports:
-      - "127.0.0.1:3334:3334"  # Bind to localhost by default; for LAN worker access, change to "0.0.0.0:3334:3334"
+      - "3334:3334"  # Exposed on all interfaces so remote workers can reach it; no auth layer yet (see plans/05-shared-memory-service.md)
     environment:
       - MEMPALACE_PATH=/data/palace
       - MEMPALACE_PORT=3334

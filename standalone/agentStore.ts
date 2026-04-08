@@ -78,8 +78,8 @@ export function mergeMcpConfigs(...configPaths: string[]): string {
 			if (content.mcpServers) {
 				Object.assign(mergedServers, content.mcpServers);
 			}
-		} catch {
-			// Skip unreadable config files
+		} catch (err) {
+			console.warn(`[MCP Config] Failed to read/parse ${configPath}:`, err);
 		}
 	}
 	const mergedPath = path.join(SETTINGS_DIR, 'merged-mcp-config.json');
