@@ -247,7 +247,7 @@ export function ensureMempalaceMcpConfig(hubHost: string = 'localhost'): string 
       },
     },
   };
-  fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf-8');
+  writeJson(configPath, config);
   return configPath;
 }
 ```
@@ -366,7 +366,7 @@ Steps 1 and 10 can be done in parallel. Steps 4-9 can be done in parallel (after
 
 **Before:** Agent starts work. Reads its own MEMORY.md. Has no idea what other agents have done, decided, or discovered. Repeats past mistakes. Makes conflicting decisions.
 
-**After:** Agent starts work. Searches shared memory: "What do we know about the payment service?" Gets back: 3 past decisions, 2 known issues, the fact that the Stripe API key is in a specific env var, and that Jim tried upgrading the SDK last week but hit a rate limit bug. Agent proceeds with full team context.
+**After:** Agent starts work. Searches shared memory: "What do we know about the payment service?" Gets back: 3 past decisions, 2 known issues, that the payment service uses Stripe, and that Jim tried upgrading the SDK last week but hit a rate limit bug. Agent proceeds with full team context.
 
 **Before (Darryl):** Darryl sees a ticket about the auth service. Matches agent by role text. Doesn't know that Pam already fixed a similar auth bug last week and documented the root cause.
 
@@ -388,6 +388,6 @@ Steps 1 and 10 can be done in parallel. Steps 4-9 can be done in parallel (after
 
 - **Auto-ingestion of JSONL transcripts** — too noisy, agents should explicitly save what matters
 - **Memory UI in the webview** — useful but separate feature, can be added later
-- **Memory permissions** — all agents can read/write everything, no access control
+- **Authentication / network binding** — the mempalace server currently has no access control. In production, consider adding a shared secret / auth token and/or binding to localhost by default with an explicit opt-in to listen on LAN. For now, this is acceptable for trusted local networks.
 - **Replication** — single hub is the source of truth, no multi-hub sync
 - **Multiple palace instances** — one shared palace for all agents, not per-project

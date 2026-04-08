@@ -60,12 +60,18 @@ export function registerWorker(
 
 	// Send registration response with agents and clickup config
 	const agents = loadPersistentAgents();
-	const hubHostname = os.hostname();
+	// Derive the hub's reachable address from the WebSocket's local address
+	// (the IP the worker actually connected to), falling back to os.hostname()
+	const socket = (ws as unknown as { _socket?: { localAddress?: string } })._socket;
+	const localAddr = socket?.localAddress;
+	const hubHost = (localAddr && localAddr !== '::' && localAddr !== '0.0.0.0')
+		? localAddr
+		: os.hostname();
 	ws.send(JSON.stringify({
 		type: 'workerRegistered',
 		agents,
 		clickupConfig: ctx.clickupConfig,
-		mempalaceServerUrl: `http://${hubHostname}:${MEMPALACE_SERVER_PORT}/sse`,
+		mempalaceServerUrl: `http://${hubHost}:${MEMPALACE_SERVER_PORT}/sse`,
 	}));
 
 	broadcastWorkerStatus(ctx);

@@ -3,6 +3,7 @@ import * as path from 'path';
 import * as os from 'os';
 import * as crypto from 'crypto';
 import { MEMPALACE_SERVER_PORT } from './constants.js';
+import { writeJson } from './serverHelpers.js';
 
 const SETTINGS_DIR = path.join(os.homedir(), '.pixel-agents');
 const AGENTS_FILE = path.join(SETTINGS_DIR, 'agents.json');
@@ -61,7 +62,7 @@ export function ensureMempalaceMcpConfig(hubHost: string = 'localhost'): string 
 			},
 		},
 	};
-	fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf-8');
+	writeJson(configPath, config);
 	return configPath;
 }
 
@@ -82,7 +83,7 @@ export function mergeMcpConfigs(...configPaths: string[]): string {
 		}
 	}
 	const mergedPath = path.join(SETTINGS_DIR, 'merged-mcp-config.json');
-	fs.writeFileSync(mergedPath, JSON.stringify({ mcpServers: mergedServers }, null, 2), 'utf-8');
+	writeJson(mergedPath, { mcpServers: mergedServers });
 	return mergedPath;
 }
 
@@ -188,8 +189,9 @@ export function buildSystemPrompt(agent: PersistentAgent, projectDescription?: s
 		'- Routine code changes (that\'s what git is for)',
 		'- Temporary debugging notes',
 		'- Anything specific to this session only',
+		'- Secrets, credentials, tokens, API keys, customer data, personal data, or other sensitive/PII. Do not store secret values or references to where secrets are kept in MemPalace; keep those in code/infrastructure documentation and approved secret-management systems.',
 		'',
-		'Your personal MEMORY.md is still for your own working notes. The shared memory palace is for knowledge the whole team benefits from.',
+		'Your personal MEMORY.md is still for your own working notes. The shared memory palace is only for safe, durable knowledge the whole team benefits from.',
 	);
 	lines.push(
 		'',
@@ -295,6 +297,8 @@ export function buildDarrylSystemPrompt(agent: PersistentAgent, roster: RosterEn
 		'After making an assignment decision, save it:',
 		'- `mcp__mempalace__mempalace_add_drawer` — record the decision and reasoning',
 		'- `mcp__mempalace__mempalace_kg_add` — record any new facts learned from the ticket',
+		'- Never store secrets, credentials, tokens, API keys, personal data, or other sensitive information in MemPalace.',
+		'- If a ticket contains sensitive details, omit or redact them before saving any memory entry.',
 	);
 
 	lines.push(

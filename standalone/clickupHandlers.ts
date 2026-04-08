@@ -172,7 +172,14 @@ export function launchAgentOnTicket(
 	}
 
 	ensureAgentMemory(agentId);
-	const mempalaceHost = ctx.mempalaceServerUrl ? new URL(ctx.mempalaceServerUrl).hostname : undefined;
+	let mempalaceHost: string | undefined;
+	if (ctx.mempalaceServerUrl) {
+		try {
+			mempalaceHost = new URL(ctx.mempalaceServerUrl).hostname;
+		} catch {
+			mempalaceHost = undefined;
+		}
+	}
 	if (!launchPersistentAgent(pa, persistentAgents, callInTask, mempalaceHost)) {
 		return { success: false, error: 'Failed to launch agent session' };
 	}
@@ -312,7 +319,14 @@ Ticket URL: ${ticketUrl}
 	ensureAgentMemory(darryl.id);
 
 	const cwd = expandHome(darryl.workspacePath || '~');
-	const mempalaceHost = ctx.mempalaceServerUrl ? new URL(ctx.mempalaceServerUrl).hostname : undefined;
+	let mempalaceHost: string | undefined;
+	if (ctx.mempalaceServerUrl) {
+		try {
+			mempalaceHost = new URL(ctx.mempalaceServerUrl).hostname;
+		} catch {
+			mempalaceHost = undefined;
+		}
+	}
 	const mcpConfigPath = ensureMempalaceMcpConfig(mempalaceHost);
 	if (!launchAgentSession(newSessionId, cwd, systemPrompt, initialTask, { mcpConfigPath, extraFlags: ['--dangerously-skip-permissions'] })) {
 		console.log(`[Standalone] Failed to launch Darryl for ticket ${ticketId}`);
