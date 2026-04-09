@@ -467,7 +467,7 @@ export function ArtDirectorPanel({
         style={{
           position: 'absolute',
           top: 10,
-          left: 10,
+          left: 360,
           zIndex: 'var(--pixel-controls-z)',
           width: 340,
           maxHeight: 'calc(100% - 20px)',
