@@ -19,6 +19,10 @@ export const JAN_ROLE_SHORT = 'Art Director';
 export const JAN_CLICKUP_USERNAME = 'Jan Levinson';
 export const JAN_WORKSPACE = '~/Projects/kantoor-workspace';
 
+// ── Designer ──────────────────────────────────────────────
+export const DESIGNER_ROLE_SHORT = 'Designer';
+export const DESIGNER_MAX_PARALLEL = 5;
+
 // ── Multi-Worker ───────────────────────────────────────────
 export const WORKER_HEARTBEAT_INTERVAL_MS = 30_000;
 export const WORKER_HEARTBEAT_TIMEOUT_MS = 90_000;

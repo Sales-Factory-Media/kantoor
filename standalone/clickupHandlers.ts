@@ -2,7 +2,7 @@ import * as path from 'path';
 import * as os from 'os';
 import * as crypto from 'crypto';
 import { loadKnownProjects } from '../src/projectStore.js';
-import { CLICKUP_POLL_INTERVAL_MS, DARRYL_ROLE_SHORT, DARRYL_CLICKUP_USERNAME, DARRYL_ESCALATION_USERNAME, DARRYL_WORKSPACE, JAN_ROLE_SHORT, JAN_CLICKUP_USERNAME, JAN_WORKSPACE, SERVER_PORT } from './constants.js';
+import { CLICKUP_POLL_INTERVAL_MS, DARRYL_ROLE_SHORT, DARRYL_CLICKUP_USERNAME, DARRYL_ESCALATION_USERNAME, DARRYL_WORKSPACE, JAN_ROLE_SHORT, JAN_CLICKUP_USERNAME, JAN_WORKSPACE, DESIGNER_ROLE_SHORT, DESIGNER_MAX_PARALLEL, SERVER_PORT } from './constants.js';
 import { launchAgentSession } from './itermFocus.js';
 import {
 	savePersistentAgents,
@@ -10,8 +10,10 @@ import {
 	generateAgentId,
 	buildDarrylSystemPrompt,
 	buildJanSystemPrompt,
+	buildDesignerSystemPrompt,
 	expandHome,
 	ensureMempalaceMcpConfig,
+	pickRandomName,
 } from './agentStore.js';
 import type { RosterEntry } from './agentStore.js';
 import { fetchListTasks, addTaskComment } from './clickupClient.js';
@@ -432,7 +434,11 @@ Ticket URL: ${ticketUrl}
 - Each briefing should explore a genuinely different direction
 - Launch the PM agent via the HTTP API with instructions to create the tickets
 - When the PM is done, review the 5 briefings for diversity and quality
-- Launch 5 UX Designer agents to work on them in parallel
+- Launch 5 UX Designer agents in parallel using the /api/launch-designers endpoint:
+  \`\`\`
+  curl -X POST http://localhost:${SERVER_PORT}/api/launch-designers -H 'Content-Type: application/json' -d '{"workspacePath":"<project-workspace-path>","tickets":[{"ticketId":"<id>","ticketName":"<name>","ticketUrl":"<url>"},...]}'
+  \`\`\`
+  IMPORTANT: Use the workspace path of the PROJECT being designed (e.g. ~/Projects/brightmind), NOT the kantoor-workspace. Designers must run inside the project directory they work on.
 
 5. Update your memory file with your decisions`;
 
@@ -455,4 +461,122 @@ Ticket URL: ${ticketUrl}
 	if (!launchAgentSession(newSessionId, cwd, systemPrompt, initialTask, { mcpConfigPath, extraFlags: ['--dangerously-skip-permissions'] })) {
 		console.log(`[Standalone] Failed to launch Jan for ticket ${ticketId}`);
 	}
+}
+
+// ── Designer parallel launch ────────────────────────────────
+
+export interface DesignerTicketAssignment {
+	ticketId: string;
+	ticketName: string;
+	ticketUrl: string;
+}
+
+/**
+ * Launch multiple designer agents in parallel, each assigned to one briefing ticket.
+ * Designers run in the specified project workspace directory (not centralized).
+ * Reuses idle designer agents for the workspace or creates new ones as needed.
+ */
+export function handleLaunchDesigners(msg: Record<string, unknown>, ctx: ServerContext): { success: boolean; launched: number; error?: string } {
+	const workspacePath = msg.workspacePath as string;
+	const rawTickets = msg.tickets as DesignerTicketAssignment[] | undefined;
+
+	if (!workspacePath) {
+		return { success: false, launched: 0, error: 'Missing required field: workspacePath' };
+	}
+	if (!rawTickets || !Array.isArray(rawTickets) || rawTickets.length === 0) {
+		return { success: false, launched: 0, error: 'Missing or empty tickets array' };
+	}
+
+	const tickets = rawTickets.slice(0, DESIGNER_MAX_PARALLEL);
+	const { persistentAgents } = ctx;
+
+	// Resolve project description for the workspace
+	const knownProjects = loadKnownProjects();
+	const projName = path.basename(workspacePath);
+	const project = knownProjects.find(k => k.name === projName);
+	const projectDescription = project?.description;
+
+	// Find idle designer agents for this workspace
+	const idleDesigners = persistentAgents.filter(
+		p => p.roleShort === DESIGNER_ROLE_SHORT
+			&& p.workspacePath === workspacePath
+			&& !p.currentSessionId,
+	);
+
+	// Resolve mempalace host once
+	let mempalaceHost: string | undefined;
+	if (ctx.mempalaceServerUrl) {
+		try {
+			mempalaceHost = new URL(ctx.mempalaceServerUrl).hostname;
+		} catch {
+			mempalaceHost = undefined;
+		}
+	}
+
+	let launched = 0;
+
+	for (let i = 0; i < tickets.length; i++) {
+		const ticket = tickets[i];
+		let designer: typeof persistentAgents[0];
+
+		if (i < idleDesigners.length) {
+			// Reuse existing idle designer
+			designer = idleDesigners[i];
+		} else {
+			// Create a new designer agent for this workspace
+			designer = {
+				id: generateAgentId(),
+				name: pickRandomName(persistentAgents),
+				roleShort: DESIGNER_ROLE_SHORT,
+				roleFull: 'UX/UI Designer. Reads design briefings from ClickUp, creates designs in Figma on playground boards, and delivers diverse creative explorations.',
+				workspacePath,
+			};
+			persistentAgents.push(designer);
+		}
+
+		// Build designer-specific system prompt
+		const systemPrompt = buildDesignerSystemPrompt(designer, projectDescription);
+
+		const initialTask = `You have been assigned a design briefing via ClickUp ticket ${ticket.ticketId}: "${ticket.ticketName}"
+Ticket URL: ${ticket.ticketUrl}
+
+## Steps
+
+1. FIRST: Move the ticket to "in progress" using mcp__clickup__clickup_update_task (task_id: "${ticket.ticketId}", status: "in progress")
+2. Read the full ticket with mcp__clickup__clickup_get_task (task_id: "${ticket.ticketId}")
+3. Read the ticket's comments with mcp__clickup__clickup_get_task_comments (task_id: "${ticket.ticketId}") for additional context
+4. Search MemPalace for relevant design decisions and component knowledge
+5. Create your design on a clean Figma playground board:
+   - Name your page/frame: \`${ticket.ticketId} — ${ticket.ticketName}\`
+   - Focus on creating a genuinely unique design direction
+   - Follow the design principles in your system prompt
+6. Take screenshots of your work using figma_take_screenshot
+7. Post your results as a comment on the ClickUp ticket with screenshots and a summary of your design approach
+8. Move the ticket to "qa test" using mcp__clickup__clickup_update_task (task_id: "${ticket.ticketId}", status: "qa test")
+9. Update your memory file with what you designed and key decisions`;
+
+		// Launch the designer
+		const newSessionId = crypto.randomUUID();
+		designer.currentSessionId = newSessionId;
+		ensureAgentMemory(designer.id);
+
+		const cwd = expandHome(designer.workspacePath || '~');
+		const mcpConfigPath = ensureMempalaceMcpConfig(mempalaceHost);
+		if (launchAgentSession(newSessionId, cwd, systemPrompt, initialTask, { mcpConfigPath, extraFlags: ['--dangerously-skip-permissions'] })) {
+			launched++;
+			console.log(`[Standalone] Launched designer "${designer.name}" for ticket ${ticket.ticketId} in ${cwd}`);
+		} else {
+			designer.currentSessionId = undefined;
+			console.log(`[Standalone] Failed to launch designer "${designer.name}" for ticket ${ticket.ticketId}`);
+		}
+	}
+
+	// Save all agent changes at once
+	savePersistentAgents(persistentAgents);
+
+	if (launched === 0) {
+		return { success: false, launched: 0, error: 'Failed to launch any designer agents' };
+	}
+
+	return { success: true, launched };
 }
