@@ -11,6 +11,7 @@ import { DebugView } from './components/DebugView.js'
 import { AgentSidebar } from './components/AgentSidebar.js'
 import { ConversationPanel } from './components/ConversationPanel.js'
 import { ForemanPanel } from './components/ForemanPanel.js'
+import { ArtDirectorPanel } from './components/ArtDirectorPanel.js'
 
 // Game state lives outside React — updated imperatively by message handlers
 const officeStateRef = { current: null as OfficeState | null }
@@ -33,6 +34,7 @@ function App() {
   const [zoom, setZoom] = useState(defaultZoom)
   const panRef = useRef({ x: 0, y: 0 })
   const [foremanOpen, setForemanOpen] = useState(false)
+  const [artDirectorOpen, setArtDirectorOpen] = useState(false)
 
   const handleToggleDebugMode = useCallback(() => setIsDebugMode((prev) => !prev), [])
 
@@ -120,6 +122,21 @@ function App() {
         workers={workers}
       />
 
+      <ArtDirectorPanel
+        visible={artDirectorOpen}
+        onClose={() => setArtDirectorOpen(false)}
+        clickupTickets={clickupTickets}
+        clickupConfigured={clickupConfigured}
+        clickupListId={clickupListId}
+        offlineAgents={offlineAgents}
+        officeState={officeState}
+        agents={agents}
+        agentTools={agentTools}
+        agentStatuses={agentStatuses}
+        knownProjects={knownProjects}
+        workers={workers}
+      />
+
       <BottomToolbar
         onOpenClaude={handleOpenClaude}
         workspaceFolders={workspaceFolders}
@@ -149,6 +166,7 @@ function App() {
         onSaveAgentMeta={saveAgentMeta}
         onForgetAgent={forgetAgent}
         onOpenForeman={() => setForemanOpen(true)}
+        onOpenArtDirector={() => setArtDirectorOpen(true)}
       />
 
       {isDebugMode && (
