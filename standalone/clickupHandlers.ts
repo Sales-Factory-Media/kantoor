@@ -2,7 +2,7 @@ import * as path from 'path';
 import * as os from 'os';
 import * as crypto from 'crypto';
 import { loadKnownProjects } from '../src/projectStore.js';
-import { CLICKUP_POLL_INTERVAL_MS, DARRYL_ROLE_SHORT, DARRYL_CLICKUP_USERNAME, DARRYL_ESCALATION_USERNAME, DARRYL_WORKSPACE, JAN_ROLE_SHORT, JAN_WORKSPACE, SERVER_PORT } from './constants.js';
+import { CLICKUP_POLL_INTERVAL_MS, DARRYL_ROLE_SHORT, DARRYL_CLICKUP_USERNAME, DARRYL_ESCALATION_USERNAME, DARRYL_WORKSPACE, JAN_ROLE_SHORT, JAN_CLICKUP_USERNAME, JAN_WORKSPACE, SERVER_PORT } from './constants.js';
 import { launchAgentSession } from './itermFocus.js';
 import {
 	savePersistentAgents,
@@ -51,6 +51,7 @@ export async function handleClickupRefresh(ctx: ServerContext): Promise<void> {
 		ctx.clickupNextFetchAt = Date.now() + CLICKUP_POLL_INTERVAL_MS;
 		ctx.broadcastSink.postMessage({ type: 'clickupTickets', statuses, nextFetchAt: ctx.clickupNextFetchAt });
 		autoDarrylPickup(ctx);
+		autoJanPickup(ctx);
 	} catch (err) {
 		console.error('[Standalone] ClickUp fetch error:', err);
 		ctx.broadcastSink.postMessage({ type: 'clickupError', error: String(err) });
@@ -140,6 +141,34 @@ export function autoDarrylPickup(ctx: ServerContext): void {
 	}
 
 	broadcastWorkerStatus(ctx);
+}
+
+export function autoJanPickup(ctx: ServerContext): void {
+	if (ctx.isWorkerMode) return;
+
+	// Collect all TODO tickets assigned to Jan
+	const todoTickets: Array<{ id: string; name: string; url: string }> = [];
+	for (const group of ctx.clickupTickets) {
+		if (group.name.toLowerCase() !== 'to do') continue;
+		for (const task of group.tasks) {
+			if (task.assignees.some(a => a.username === JAN_CLICKUP_USERNAME)) {
+				todoTickets.push({ id: task.id, name: task.name, url: task.url });
+			}
+		}
+	}
+
+	if (todoTickets.length === 0) return;
+
+	// Jan handles one ticket at a time (like Darryl on the hub)
+	const jan = ctx.persistentAgents.find(p => p.name === 'Jan');
+	if (jan?.currentSessionId) return; // Already busy
+
+	const ticket = todoTickets[0];
+	console.log(`[Standalone] Auto-pickup: Jan taking ticket ${ticket.id}`);
+	handleJanDesignBriefing(
+		{ ticketId: ticket.id, ticketName: ticket.name, ticketUrl: ticket.url },
+		ctx,
+	);
 }
 
 // ── Ticket work ──────────────────────────────────────────────

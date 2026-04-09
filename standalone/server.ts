@@ -38,6 +38,7 @@ import {
 	handleDarrylHandleTicket,
 	handleJanDesignBriefing,
 	autoDarrylPickup,
+	autoJanPickup,
 } from './clickupHandlers.js';
 import {
 	handleStartConference,
@@ -214,9 +215,10 @@ function handleWebviewReady(ws: WebSocket, ctx: ServerContext): void {
 	// Send worker status
 	broadcastWorkerStatus(ctx);
 
-	// Try auto-pickup on client connect (Darryl may have become free since last poll)
+	// Try auto-pickup on client connect (agents may have become free since last poll)
 	if (!ctx.isWorkerMode) {
 		autoDarrylPickup(ctx);
+		autoJanPickup(ctx);
 	}
 }
 
