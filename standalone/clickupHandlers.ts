@@ -2,7 +2,7 @@ import * as path from 'path';
 import * as os from 'os';
 import * as crypto from 'crypto';
 import { loadKnownProjects } from '../src/projectStore.js';
-import { CLICKUP_POLL_INTERVAL_MS, DARRYL_ROLE_SHORT, DARRYL_CLICKUP_USERNAME, DARRYL_ESCALATION_USERNAME, DARRYL_WORKSPACE, JAN_ROLE_SHORT, JAN_CLICKUP_USERNAME, JAN_WORKSPACE, DESIGNER_ROLE_SHORT, SERVER_PORT } from './constants.js';
+import { CLICKUP_POLL_INTERVAL_MS, DARRYL_ROLE_SHORT, DARRYL_CLICKUP_USERNAME, DARRYL_ESCALATION_USERNAME, DARRYL_WORKSPACE, JAN_ROLE_SHORT, JAN_CLICKUP_USERNAME, JAN_WORKSPACE, PM_ROLE_SHORT, PM_WORKSPACE, DESIGNER_ROLE_SHORT, SERVER_PORT } from './constants.js';
 import { launchAgentSession } from './itermFocus.js';
 import {
 	savePersistentAgents,
@@ -10,6 +10,7 @@ import {
 	generateAgentId,
 	buildDarrylSystemPrompt,
 	buildJanSystemPrompt,
+	buildPMSystemPrompt,
 	buildDesignerSystemPrompt,
 	buildJanReviewPrompt,
 	expandHome,
@@ -433,17 +434,26 @@ Ticket URL: ${ticketUrl}
 - Move the ticket back to "to do" using mcp__clickup__clickup_update_task (status: "to do")
 
 ### If complete — Start Phase 1 (UX Exploration):
-- Delegate to a PM agent to create 5 diverse UX design briefings as ClickUp sub-tickets
-- Each briefing should explore a genuinely different direction
-- Launch the PM agent via the HTTP API with instructions to create the tickets
-- When the PM is done, review the 5 briefings for diversity and quality
-- Launch UX Designer agents ONE AT A TIME using the /api/launch-designer endpoint:
-  \`\`\`
-  curl -X POST http://localhost:${SERVER_PORT}/api/launch-designer -H 'Content-Type: application/json' -d '{"workspacePath":"<project-workspace-path>","ticketId":"<id>","ticketName":"<name>","ticketUrl":"<url>"}'
-  \`\`\`
-  IMPORTANT: Only one designer can run at a time (they share the same local Figma instance).
-  Launch the first designer, wait for it to finish (ticket moves to "qa test"), then launch the next.
-  Use the workspace path of the PROJECT being designed (e.g. ~/Projects/brightmind), NOT the kantoor-workspace.
+
+**Step A — Delegate to PM agent to create 5 UX briefings:**
+Launch the PM agent via the HTTP API. The PM will read the briefing and create 5 diverse UX design sub-tickets.
+\`\`\`
+curl -X POST http://localhost:${SERVER_PORT}/api/launch-pm -H 'Content-Type: application/json' -d '{"ticketId":"${ticketId}","ticketName":"${ticketName}","ticketUrl":"${ticketUrl}","listId":"<list-id-from-ticket>"}'
+\`\`\`
+Find the list ID from the ticket details (it's in the "list" field). Wait for the PM to finish (ticket status moves to "qa test").
+
+**Step B — Review the 5 briefings for diversity:**
+Once the PM is done, read the 5 sub-tickets it created. Verify they are genuinely different directions, not minor variations.
+If any briefings are too similar, comment on them with specific feedback.
+
+**Step C — Launch designers ONE AT A TIME:**
+For each of the 5 briefing sub-tickets, launch a designer:
+\`\`\`
+curl -X POST http://localhost:${SERVER_PORT}/api/launch-designer -H 'Content-Type: application/json' -d '{"workspacePath":"<project-workspace-path>","ticketId":"<id>","ticketName":"<name>","ticketUrl":"<url>"}'
+\`\`\`
+IMPORTANT: Only one designer can run at a time (they share the same local Figma instance).
+Launch the first designer, wait for it to finish (ticket moves to "qa test"), then launch the next.
+Use the workspace path of the PROJECT being designed (e.g. ~/Projects/brightmind), NOT the kantoor-workspace.
 
 5. Update your memory file with your decisions`;
 
@@ -469,6 +479,108 @@ Ticket URL: ${ticketUrl}
 	if (!launchAgentSession(newSessionId, cwd, systemPrompt, initialTask, { mcpConfigPath, extraFlags: ['--dangerously-skip-permissions'] })) {
 		console.log(`[Standalone] Failed to launch Jan for ticket ${ticketId}`);
 	}
+}
+
+// ── PM (Project Manager) launch ─────────────────────────────
+
+/**
+ * Launch the PM agent on a design briefing ticket.
+ * The PM reads the briefing, analyzes context, and creates 5 diverse UX design
+ * briefing sub-tickets in ClickUp. Called by Jan when she receives a complete briefing.
+ */
+export function handleLaunchPM(msg: Record<string, unknown>, ctx: ServerContext): { success: boolean; error?: string } {
+	const ticketId = msg.ticketId as string;
+	const ticketName = msg.ticketName as string;
+	const ticketUrl = msg.ticketUrl as string;
+	const listId = msg.listId as string;
+
+	if (!ticketId || !ticketName || !ticketUrl) {
+		return { success: false, error: 'Missing required fields: ticketId, ticketName, ticketUrl' };
+	}
+
+	const { persistentAgents } = ctx;
+
+	// Check if PM is already running
+	const activePM = persistentAgents.find(
+		p => p.roleShort === PM_ROLE_SHORT && p.currentSessionId,
+	);
+	if (activePM) {
+		return { success: false, error: `PM "${activePM.name}" is already running. Wait for it to finish before launching another.` };
+	}
+
+	// Find an idle PM or create one
+	let pm = persistentAgents.find(
+		p => p.roleShort === PM_ROLE_SHORT && !p.currentSessionId,
+	);
+
+	if (!pm) {
+		pm = {
+			id: generateAgentId(),
+			name: pickRandomName(persistentAgents),
+			roleShort: PM_ROLE_SHORT,
+			roleFull: 'Project Manager in Jan\'s design pipeline. Analyzes technical briefings and creates 5 diverse UX design briefing tickets.',
+			workspacePath: PM_WORKSPACE,
+		};
+		persistentAgents.push(pm);
+	}
+
+	const systemPrompt = buildPMSystemPrompt(pm);
+
+	const listIdInstruction = listId
+		? `Use list_id "${listId}" when creating the sub-tickets.`
+		: 'Read the parent ticket to find which list it belongs to, and create sub-tickets in that same list.';
+
+	const initialTask = `You have been assigned a design briefing by Jan (Art Director) via ClickUp ticket ${ticketId}: "${ticketName}"
+Ticket URL: ${ticketUrl}
+
+## Steps
+
+1. FIRST: Move the ticket to "in progress" using mcp__clickup__clickup_update_task (task_id: "${ticketId}", status: "in progress")
+2. Read the full ticket with mcp__clickup__clickup_get_task (task_id: "${ticketId}", subtasks: true)
+3. Read the ticket's comments with mcp__clickup__clickup_get_task_comments (task_id: "${ticketId}") for additional context from Jan
+4. If the ticket has a parent, read the parent ticket too for broader project context
+5. Search MemPalace for relevant design decisions and component knowledge
+6. Analyze the briefing and identify 5 genuinely DIFFERENT UX design directions
+7. Create 5 ClickUp sub-tickets, each as a subtask of ticket "${ticketId}" (use parent: "${ticketId}")
+   ${listIdInstruction}
+   - Name each ticket: "UX Direction {N}: {Direction Title}"
+   - Include the full briefing format from your system prompt
+   - Set priority to "normal"
+   - Tag each ticket with "UX-prototype-briefing" using mcp__clickup__clickup_add_tag_to_task
+8. After creating all 5 tickets, comment on the parent ticket "${ticketId}" with a summary of the 5 directions you created
+9. Move the ticket to "qa test" using mcp__clickup__clickup_update_task (task_id: "${ticketId}", status: "qa test")
+10. Update MemPalace with your design directions and reasoning
+11. Update your memory file`;
+
+	// Launch the PM
+	const newSessionId = crypto.randomUUID();
+	pm.currentSessionId = newSessionId;
+	pm.currentTicketId = ticketId;
+	pm.currentTicketName = ticketName;
+	pm.currentTicketUrl = ticketUrl;
+	ensureAgentMemory(pm.id);
+
+	let mempalaceHost: string | undefined;
+	if (ctx.mempalaceServerUrl) {
+		try {
+			mempalaceHost = new URL(ctx.mempalaceServerUrl).hostname;
+		} catch {
+			mempalaceHost = undefined;
+		}
+	}
+
+	const cwd = expandHome(pm.workspacePath || '~');
+	const mcpConfigPath = ensureMempalaceMcpConfig(mempalaceHost);
+	if (launchAgentSession(newSessionId, cwd, systemPrompt, initialTask, { mcpConfigPath, extraFlags: ['--dangerously-skip-permissions'] })) {
+		savePersistentAgents(persistentAgents);
+		console.log(`[Standalone] Launched PM "${pm.name}" for ticket ${ticketId}`);
+		return { success: true };
+	}
+
+	pm.currentSessionId = undefined;
+	savePersistentAgents(persistentAgents);
+	console.log(`[Standalone] Failed to launch PM "${pm.name}" for ticket ${ticketId}`);
+	return { success: false, error: 'Failed to launch PM session' };
 }
 
 // ── Designer launch (sequential, one at a time) ────────────
