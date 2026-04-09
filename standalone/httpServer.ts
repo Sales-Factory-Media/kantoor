@@ -3,7 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { loadKnownProjects } from '../src/projectStore.js';
 import type { RosterEntry } from './agentStore.js';
-import { launchAgentOnTicket, handleLaunchDesigners } from './clickupHandlers.js';
+import { launchAgentOnTicket, handleLaunchDesigner } from './clickupHandlers.js';
 import { WEBVIEW_DIR } from './serverContext.js';
 import type { ServerContext } from './serverContext.js';
 
@@ -88,7 +88,7 @@ export function createHttpServer(ctx: ServerContext): http.Server {
 				return;
 			}
 
-			if (req.method === 'POST' && urlPath === '/api/launch-designers') {
+			if (req.method === 'POST' && urlPath === '/api/launch-designer') {
 				const MAX_BODY_BYTES = 64 * 1024;
 				let body = '';
 				let exceeded = false;
@@ -106,7 +106,7 @@ export function createHttpServer(ctx: ServerContext): http.Server {
 					if (exceeded) return;
 					try {
 						const json = JSON.parse(body) as Record<string, unknown>;
-						const result = handleLaunchDesigners(json, ctx);
+						const result = handleLaunchDesigner(json, ctx);
 						res.writeHead(result.success ? 200 : 400);
 						res.end(JSON.stringify(result));
 					} catch {

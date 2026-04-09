@@ -37,7 +37,7 @@ import {
 	handleClickupConfigure,
 	handleDarrylHandleTicket,
 	handleJanDesignBriefing,
-	handleLaunchDesigners,
+	handleLaunchDesigner,
 	autoDarrylPickup,
 	autoJanPickup,
 } from './clickupHandlers.js';
@@ -244,9 +244,9 @@ const messageHandlers: Record<string, (ws: WebSocket, msg: Record<string, unknow
 	updateProjectDescription: (_ws, msg, ctx) => handleUpdateProjectDescription(msg, ctx),
 	darrylHandleTicket: (_ws, msg, ctx) => handleDarrylHandleTicket(msg, ctx),
 	janDesignBriefing: (_ws, msg, ctx) => handleJanDesignBriefing(msg, ctx),
-	launchDesigners: (_ws, msg, ctx) => {
-		const result = handleLaunchDesigners(msg, ctx);
-		ctx.broadcastSink.postMessage({ type: 'designersLaunched', ...result });
+	launchDesigner: (_ws, msg, ctx) => {
+		const result = handleLaunchDesigner(msg, ctx);
+		ctx.broadcastSink.postMessage({ type: 'designerLaunched', ...result });
 	},
 };
 
