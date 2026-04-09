@@ -2,6 +2,8 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import * as crypto from 'crypto';
+import { MEMPALACE_SERVER_PORT } from './constants.js';
+import { writeJson } from './serverHelpers.js';
 
 const SETTINGS_DIR = path.join(os.homedir(), '.pixel-agents');
 const AGENTS_FILE = path.join(SETTINGS_DIR, 'agents.json');
@@ -48,6 +50,48 @@ export function ensureAgentMemory(agentId: string): void {
 	if (!fs.existsSync(memPath)) {
 		fs.writeFileSync(memPath, '# Memory\n\nThis file is your persistent memory. Update it as you work.\n', 'utf-8');
 	}
+}
+
+function normalizeUrlHost(host: string): string {
+	if (host.startsWith('[') && host.endsWith(']')) return host;
+	if (host.includes(':')) return `[${host}]`;
+	return host;
+}
+
+export function ensureMempalaceMcpConfig(hubHost: string = 'localhost'): string {
+	const configPath = path.join(SETTINGS_DIR, 'mempalace-mcp-config.json');
+	const normalizedHost = normalizeUrlHost(hubHost);
+	const config = {
+		mcpServers: {
+			mempalace: {
+				type: 'sse' as const,
+				url: `http://${normalizedHost}:${MEMPALACE_SERVER_PORT}/sse`,
+			},
+		},
+	};
+	writeJson(configPath, config);
+	return configPath;
+}
+
+/**
+ * Merge multiple MCP config files into a single combined config file.
+ * Each config file should have a `mcpServers` object; all servers are merged.
+ */
+export function mergeMcpConfigs(...configPaths: string[]): string {
+	const mergedServers: Record<string, unknown> = {};
+	for (const configPath of configPaths) {
+		try {
+			const content = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+			if (content.mcpServers) {
+				Object.assign(mergedServers, content.mcpServers);
+			}
+		} catch (err) {
+			console.warn(`[MCP Config] Failed to read/parse ${configPath}:`, err);
+		}
+	}
+	const mergedPath = path.join(SETTINGS_DIR, 'merged-mcp-config.json');
+	writeJson(mergedPath, { mcpServers: mergedServers });
+	return mergedPath;
 }
 
 export function deleteAgentData(agentId: string): void {
@@ -132,6 +176,34 @@ export function buildSystemPrompt(agent: PersistentAgent, projectDescription?: s
 			projectDescription,
 		);
 	}
+	lines.push(
+		'',
+		'## Shared Team Memory (MemPalace)',
+		'',
+		'You have access to a shared memory palace via MCP tools (prefixed `mcp__mempalace__`).',
+		'',
+		'**When starting work:**',
+		'- Call `mcp__mempalace__mempalace_search` with your task description to find relevant past decisions and context',
+		'- Call `mcp__mempalace__mempalace_kg_query` for entities related to your task',
+		'',
+		'**When you learn something important or make a significant change:**',
+		'- Save decisions and discoveries with `mcp__mempalace__mempalace_add_drawer`',
+		'- Check for duplicates first with `mcp__mempalace__mempalace_check_duplicate`',
+		'- Record facts with `mcp__mempalace__mempalace_kg_add` (e.g., "payment-service uses Stripe API")',
+		'- Write session summaries with `mcp__mempalace__mempalace_diary_write`',
+		'',
+		'**After any significant change** (architecture decisions, API changes, config changes, new integrations, bug root causes):',
+		'- Update MemPalace so other agents benefit from your discoveries',
+		'- Use `mempalace_add_drawer` for decisions/context and `mempalace_kg_add` for facts about services/components',
+		'',
+		'**What NOT to save:**',
+		'- Routine code changes (that\'s what git is for)',
+		'- Temporary debugging notes',
+		'- Anything specific to this session only',
+		'- Secrets, credentials, tokens, API keys, customer data, personal data, or other sensitive/PII. Do not store secret values or references to where secrets are kept in MemPalace; keep those in code/infrastructure documentation and approved secret-management systems.',
+		'',
+		'Your personal MEMORY.md is still for your own working notes. The shared memory palace is only for safe, durable knowledge the whole team benefits from.',
+	);
 	lines.push(
 		'',
 		'## Git Conventions (Gitflow + ClickUp Integration)',
@@ -223,6 +295,23 @@ export function buildDarrylSystemPrompt(agent: PersistentAgent, roster: RosterEn
 		}
 		lines.push(`  - Status: ${entry.isOnline ? 'ONLINE (busy)' : 'OFFLINE (available)'}`);
 	}
+
+	lines.push(
+		'',
+		'## Shared Team Memory (MemPalace)',
+		'',
+		'Before assigning a ticket, search the shared memory to inform your decision:',
+		'- `mcp__mempalace__mempalace_search` — find past work related to the ticket',
+		'- `mcp__mempalace__mempalace_kg_query` — check what\'s known about involved services/components',
+		'- `mcp__mempalace__mempalace_status` — get an overview of the palace',
+		'',
+		'After making an assignment decision or any significant change, update MemPalace:',
+		'- `mcp__mempalace__mempalace_add_drawer` — record the decision and reasoning',
+		'- `mcp__mempalace__mempalace_kg_add` — record any new facts learned from the ticket',
+		'- Always update MemPalace after architecture decisions, workflow changes, or discoveries that other agents would benefit from',
+		'- Never store secrets, credentials, tokens, API keys, personal data, or other sensitive information in MemPalace.',
+		'- If a ticket contains sensitive details, omit or redact them before saving any memory entry.',
+	);
 
 	lines.push(
 		'',

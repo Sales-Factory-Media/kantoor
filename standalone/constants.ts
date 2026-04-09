@@ -18,3 +18,7 @@ export const DARRYL_WORKSPACE = '~/Projects/kantoor-workspace';
 export const WORKER_HEARTBEAT_INTERVAL_MS = 30_000;
 export const WORKER_HEARTBEAT_TIMEOUT_MS = 90_000;
 export const WORKER_RECONNECT_INTERVAL_MS = 5_000;
+
+// ── MemPalace ─────────────────────────────────────────────
+export const MEMPALACE_SERVER_PORT = 3334;
+export const MEMPALACE_SERVER_URL = `http://localhost:${MEMPALACE_SERVER_PORT}`;

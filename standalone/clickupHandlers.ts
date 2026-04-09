@@ -10,6 +10,7 @@ import {
 	generateAgentId,
 	buildDarrylSystemPrompt,
 	expandHome,
+	ensureMempalaceMcpConfig,
 } from './agentStore.js';
 import type { RosterEntry } from './agentStore.js';
 import { fetchListTasks, addTaskComment } from './clickupClient.js';
@@ -171,7 +172,15 @@ export function launchAgentOnTicket(
 	}
 
 	ensureAgentMemory(agentId);
-	if (!launchPersistentAgent(pa, persistentAgents, callInTask)) {
+	let mempalaceHost: string | undefined;
+	if (ctx.mempalaceServerUrl) {
+		try {
+			mempalaceHost = new URL(ctx.mempalaceServerUrl).hostname;
+		} catch {
+			mempalaceHost = undefined;
+		}
+	}
+	if (!launchPersistentAgent(pa, persistentAgents, callInTask, mempalaceHost)) {
 		return { success: false, error: 'Failed to launch agent session' };
 	}
 	return { success: true };
@@ -310,7 +319,16 @@ Ticket URL: ${ticketUrl}
 	ensureAgentMemory(darryl.id);
 
 	const cwd = expandHome(darryl.workspacePath || '~');
-	if (!launchAgentSession(newSessionId, cwd, systemPrompt, initialTask, { extraFlags: ['--dangerously-skip-permissions'] })) {
+	let mempalaceHost: string | undefined;
+	if (ctx.mempalaceServerUrl) {
+		try {
+			mempalaceHost = new URL(ctx.mempalaceServerUrl).hostname;
+		} catch {
+			mempalaceHost = undefined;
+		}
+	}
+	const mcpConfigPath = ensureMempalaceMcpConfig(mempalaceHost);
+	if (!launchAgentSession(newSessionId, cwd, systemPrompt, initialTask, { mcpConfigPath, extraFlags: ['--dangerously-skip-permissions'] })) {
 		console.log(`[Standalone] Failed to launch Darryl for ticket ${ticketId}`);
 	}
 }

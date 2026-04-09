@@ -108,13 +108,14 @@ on run argv
 	set initialPrompt to item 4 of argv
 	set mcpConfig to item 5 of argv
 	set extraFlags to item 6 of argv
-	set cmd to "cd " & quoted form of cwd & " && claude --model 'claude-opus-4-6[1m]' --session-id " & sid & " --append-system-prompt " & quoted form of sysPrompt
+	set cmd to "cd " & quoted form of cwd & " && claude --model 'claude-opus-4-6[1m]' --session-id " & sid
 	if mcpConfig is not "" then
 		set cmd to cmd & " --mcp-config " & quoted form of mcpConfig
 	end if
 	if extraFlags is not "" then
 		set cmd to cmd & " " & extraFlags
 	end if
+	set cmd to cmd & " --append-system-prompt " & quoted form of sysPrompt
 	if initialPrompt is not "" then
 		set cmd to cmd & " " & quoted form of initialPrompt
 	end if

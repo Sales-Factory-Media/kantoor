@@ -18,11 +18,19 @@ vi.mock('crypto', () => ({
 	randomUUID: () => 'test-uuid-1234',
 }));
 
+const mockWriteJson = vi.fn();
+vi.mock('./serverHelpers.js', () => ({
+	writeJson: (...args: unknown[]) => mockWriteJson(...args),
+}));
+
+import * as fs from 'fs';
 import {
 	pickRandomName,
 	buildSystemPrompt,
 	buildDarrylSystemPrompt,
 	getAgentMemoryPath,
+	ensureMempalaceMcpConfig,
+	mergeMcpConfigs,
 } from './agentStore.js';
 import type { RosterEntry } from './agentStore.js';
 
@@ -204,5 +212,148 @@ describe('getAgentMemoryPath', () => {
 	it('returns correct path for agent ID', () => {
 		const memPath = getAgentMemoryPath('abc-123');
 		expect(memPath).toBe('/mock-home/.pixel-agents/agents/abc-123/MEMORY.md');
+	});
+});
+
+describe('ensureMempalaceMcpConfig', () => {
+	beforeEach(() => {
+		mockWriteJson.mockClear();
+	});
+
+	it('defaults to localhost when no host provided', () => {
+		ensureMempalaceMcpConfig();
+		expect(mockWriteJson).toHaveBeenCalledWith(
+			expect.stringContaining('mempalace-mcp-config.json'),
+			expect.objectContaining({
+				mcpServers: {
+					mempalace: { type: 'sse', url: 'http://localhost:3334/sse' },
+				},
+			}),
+		);
+	});
+
+	it('uses provided IPv4 host as-is', () => {
+		ensureMempalaceMcpConfig('192.168.1.10');
+		expect(mockWriteJson).toHaveBeenCalledWith(
+			expect.any(String),
+			expect.objectContaining({
+				mcpServers: {
+					mempalace: { type: 'sse', url: 'http://192.168.1.10:3334/sse' },
+				},
+			}),
+		);
+	});
+
+	it('wraps bare IPv6 address in brackets', () => {
+		ensureMempalaceMcpConfig('::1');
+		expect(mockWriteJson).toHaveBeenCalledWith(
+			expect.any(String),
+			expect.objectContaining({
+				mcpServers: {
+					mempalace: { type: 'sse', url: 'http://[::1]:3334/sse' },
+				},
+			}),
+		);
+	});
+
+	it('wraps full IPv6 address in brackets', () => {
+		ensureMempalaceMcpConfig('fe80::1');
+		expect(mockWriteJson).toHaveBeenCalledWith(
+			expect.any(String),
+			expect.objectContaining({
+				mcpServers: {
+					mempalace: { type: 'sse', url: 'http://[fe80::1]:3334/sse' },
+				},
+			}),
+		);
+	});
+
+	it('does not double-bracket already-bracketed IPv6', () => {
+		ensureMempalaceMcpConfig('[::1]');
+		expect(mockWriteJson).toHaveBeenCalledWith(
+			expect.any(String),
+			expect.objectContaining({
+				mcpServers: {
+					mempalace: { type: 'sse', url: 'http://[::1]:3334/sse' },
+				},
+			}),
+		);
+	});
+
+	it('returns the config file path', () => {
+		const result = ensureMempalaceMcpConfig();
+		expect(result).toBe('/mock-home/.pixel-agents/mempalace-mcp-config.json');
+	});
+});
+
+describe('mergeMcpConfigs', () => {
+	beforeEach(() => {
+		mockWriteJson.mockClear();
+		vi.mocked(fs.readFileSync).mockReset();
+	});
+
+	it('merges servers from multiple config files', () => {
+		vi.mocked(fs.readFileSync)
+			.mockReturnValueOnce(JSON.stringify({ mcpServers: { serverA: { url: 'a' } } }))
+			.mockReturnValueOnce(JSON.stringify({ mcpServers: { serverB: { url: 'b' } } }));
+
+		mergeMcpConfigs('/path/a.json', '/path/b.json');
+		expect(mockWriteJson).toHaveBeenCalledWith(
+			expect.stringContaining('merged-mcp-config.json'),
+			{
+				mcpServers: {
+					serverA: { url: 'a' },
+					serverB: { url: 'b' },
+				},
+			},
+		);
+	});
+
+	it('later configs override earlier ones for same server name', () => {
+		vi.mocked(fs.readFileSync)
+			.mockReturnValueOnce(JSON.stringify({ mcpServers: { srv: { url: 'first' } } }))
+			.mockReturnValueOnce(JSON.stringify({ mcpServers: { srv: { url: 'second' } } }));
+
+		mergeMcpConfigs('/a.json', '/b.json');
+		expect(mockWriteJson).toHaveBeenCalledWith(
+			expect.any(String),
+			{ mcpServers: { srv: { url: 'second' } } },
+		);
+	});
+
+	it('logs warning and continues when a config file is invalid JSON', () => {
+		const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+		vi.mocked(fs.readFileSync)
+			.mockReturnValueOnce('not valid json')
+			.mockReturnValueOnce(JSON.stringify({ mcpServers: { good: { url: 'ok' } } }));
+
+		mergeMcpConfigs('/bad.json', '/good.json');
+		expect(warnSpy).toHaveBeenCalledWith(
+			expect.stringContaining('/bad.json'),
+			expect.anything(),
+		);
+		expect(mockWriteJson).toHaveBeenCalledWith(
+			expect.any(String),
+			{ mcpServers: { good: { url: 'ok' } } },
+		);
+		warnSpy.mockRestore();
+	});
+
+	it('handles configs without mcpServers key', () => {
+		vi.mocked(fs.readFileSync)
+			.mockReturnValueOnce(JSON.stringify({ otherKey: 'value' }))
+			.mockReturnValueOnce(JSON.stringify({ mcpServers: { srv: { url: 'a' } } }));
+
+		mergeMcpConfigs('/empty.json', '/valid.json');
+		expect(mockWriteJson).toHaveBeenCalledWith(
+			expect.any(String),
+			{ mcpServers: { srv: { url: 'a' } } },
+		);
+	});
+
+	it('returns the merged config file path', () => {
+		vi.mocked(fs.readFileSync).mockReturnValueOnce(JSON.stringify({ mcpServers: {} }));
+		const result = mergeMcpConfigs('/a.json');
+		expect(result).toBe('/mock-home/.pixel-agents/merged-mcp-config.json');
 	});
 });

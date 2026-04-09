@@ -1,6 +1,7 @@
 import * as fs from 'fs';
+import * as os from 'os';
 import type { WebSocket } from 'ws';
-import { WORKER_HEARTBEAT_TIMEOUT_MS } from './constants.js';
+import { WORKER_HEARTBEAT_TIMEOUT_MS, MEMPALACE_SERVER_PORT } from './constants.js';
 import { WORKER_ASSIGNMENTS_FILE, SETTINGS_DIR } from './serverContext.js';
 import type { ServerContext, WorkerInfo, WorkerAssignment } from './serverContext.js';
 import { loadPersistentAgents, getAgentMemoryPath, ensureAgentMemory } from './agentStore.js';
@@ -59,10 +60,26 @@ export function registerWorker(
 
 	// Send registration response with agents and clickup config
 	const agents = loadPersistentAgents();
+	// Derive the hub's reachable address from the WebSocket's local address
+	// (the IP the worker actually connected to), falling back to os.hostname()
+	const socket = (ws as unknown as { _socket?: { localAddress?: string } })._socket;
+	let localAddr = socket?.localAddress;
+	// Strip IPv4-mapped IPv6 prefix (e.g. "::ffff:192.168.1.10" → "192.168.1.10")
+	if (localAddr?.startsWith('::ffff:')) {
+		localAddr = localAddr.slice(7);
+	}
+	let hubHost = (localAddr && localAddr !== '::' && localAddr !== '0.0.0.0')
+		? localAddr
+		: os.hostname();
+	// Wrap bare IPv6 addresses in brackets for valid URL construction
+	if (hubHost.includes(':')) {
+		hubHost = `[${hubHost}]`;
+	}
 	ws.send(JSON.stringify({
 		type: 'workerRegistered',
 		agents,
 		clickupConfig: ctx.clickupConfig,
+		mempalaceServerUrl: `http://${hubHost}:${MEMPALACE_SERVER_PORT}/sse`,
 	}));
 
 	broadcastWorkerStatus(ctx);

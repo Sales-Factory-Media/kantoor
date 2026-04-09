@@ -9,6 +9,7 @@ import {
 	deleteAgentData,
 	buildSystemPrompt,
 	expandHome,
+	ensureMempalaceMcpConfig,
 } from './agentStore.js';
 import type { PersistentAgent } from './agentStore.js';
 import { readJson, writeJson, getOfflineAgents } from './serverHelpers.js';
@@ -16,7 +17,7 @@ import { SEATS_FILE, SETTINGS_FILE } from './serverContext.js';
 import type { ServerContext } from './serverContext.js';
 
 // ── Launch helper (shared by agent handlers + clickup handlers) ─
-export function launchPersistentAgent(pa: PersistentAgent, persistentAgents: PersistentAgent[], callInTask?: string): boolean {
+export function launchPersistentAgent(pa: PersistentAgent, persistentAgents: PersistentAgent[], callInTask?: string, mempalaceHost?: string): boolean {
 	const newSessionId = crypto.randomUUID();
 	pa.currentSessionId = newSessionId;
 	savePersistentAgents(persistentAgents);
@@ -25,8 +26,9 @@ export function launchPersistentAgent(pa: PersistentAgent, persistentAgents: Per
 	const project = knownProjects.find(p => p.workspacePath === pa.workspacePath);
 	const prompt = buildSystemPrompt(pa, project?.description);
 	const cwd = expandHome(pa.workspacePath || '~');
+	const mcpConfigPath = ensureMempalaceMcpConfig(mempalaceHost);
 	console.log(`[Standalone] Launching agent "${pa.name}" with session ${newSessionId} in ${cwd}${callInTask ? ` with task: ${callInTask}` : ''}`);
-	return launchAgentSession(newSessionId, cwd, prompt, callInTask);
+	return launchAgentSession(newSessionId, cwd, prompt, callInTask, { mcpConfigPath });
 }
 
 // ── Message handlers ─────────────────────────────────────────

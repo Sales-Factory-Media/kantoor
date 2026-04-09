@@ -87,4 +87,6 @@ export interface ServerContext {
 	workerIdentity: WorkerIdentity | null;
 	workers: Map<string, WorkerInfo>; // keyed by worker name
 	workerAssignments: WorkerAssignment[];
+	// MemPalace (worker-only: URL received from hub during registration)
+	mempalaceServerUrl: string | null;
 }
