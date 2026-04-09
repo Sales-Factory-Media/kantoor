@@ -3,7 +3,7 @@ import type { ToolActivity } from '../office/types.js'
 import type { OfficeState } from '../office/engine/officeState.js'
 import type { OfflineAgent, KnownProject } from '../hooks/useExtensionMessages.js'
 import { vscode } from '../vscodeApi.js'
-import { FOREMAN_ROOM_NAME } from '../constants.js'
+import { FOREMAN_ROOM_NAME, ART_DIRECTOR_ROOM_NAME } from '../constants.js'
 
 interface AgentSidebarProps {
   officeState: OfficeState
@@ -17,6 +17,7 @@ interface AgentSidebarProps {
   onSaveAgentMeta: () => void
   onForgetAgent: (sessionId: string) => void
   onOpenForeman?: () => void
+  onOpenArtDirector?: () => void
   peersBrokerAvailable?: boolean
 }
 
@@ -103,7 +104,7 @@ function groupByRoom(
   // Seed with rooms from officeState + known projects (with workspace paths)
   for (const room of officeState.rooms) {
     const g = ensure(room.projectName)
-    if (room.isConferenceRoom || room.isWarehouse || room.isGarage || room.isForeman) g.isSpecialRoom = true
+    if (room.isConferenceRoom || room.isWarehouse || room.isGarage || room.isForeman || room.isArtDirector) g.isSpecialRoom = true
   }
   for (const kp of knownProjects) {
     const g = ensure(kp.name)
@@ -574,6 +575,7 @@ export interface AgentRoomListProps {
   onHireForRoom?: (workspacePath: string) => void
   onRemoveRoom?: (name: string) => void
   onOpenForeman?: () => void
+  onOpenArtDirector?: () => void
 }
 
 export function AgentRoomList({
@@ -598,6 +600,7 @@ export function AgentRoomList({
   onHireForRoom,
   onRemoveRoom,
   onOpenForeman,
+  onOpenArtDirector,
 }: AgentRoomListProps) {
   const [hoveredId, setHoveredId] = useState<number | null>(null)
   const [hoveredRoom, setHoveredRoom] = useState<string | null>(null)
@@ -939,22 +942,25 @@ export function AgentRoomList({
           </div>
           {specialRooms.map(([projectName, group]) => {
             const isForeman = projectName === FOREMAN_ROOM_NAME
+            const isArtDirector = projectName === ART_DIRECTOR_ROOM_NAME
+            const isClickable = (isForeman && onOpenForeman) || (isArtDirector && onOpenArtDirector)
+            const handleClick = isForeman && onOpenForeman ? onOpenForeman : isArtDirector && onOpenArtDirector ? onOpenArtDirector : undefined
             return (
             <div key={projectName}>
               {/* Room header */}
               <div
-                onClick={isForeman && onOpenForeman ? onOpenForeman : undefined}
+                onClick={handleClick}
                 style={{
                   padding: '3px 6px',
                   fontSize: '18px',
-                  color: isForeman ? 'var(--pixel-accent)' : group.liveAgents.length > 0 ? 'var(--pixel-green)' : 'var(--pixel-text-dim)',
+                  color: isClickable ? 'var(--pixel-accent)' : group.liveAgents.length > 0 ? 'var(--pixel-green)' : 'var(--pixel-text-dim)',
                   background: group.liveAgents.length > 0 ? 'rgba(90, 200, 140, 0.08)' : 'rgba(255, 255, 255, 0.03)',
                   borderBottom: '1px solid var(--pixel-border)',
                   overflow: 'hidden',
                   textOverflow: 'ellipsis',
                   whiteSpace: 'nowrap',
                   userSelect: 'none',
-                  cursor: isForeman ? 'pointer' : 'default',
+                  cursor: isClickable ? 'pointer' : 'default',
                 }}
               >
                 {projectName}
@@ -980,6 +986,7 @@ export function AgentSidebar({
   onSaveAgentMeta,
   onForgetAgent,
   onOpenForeman,
+  onOpenArtDirector,
   peersBrokerAvailable,
 }: AgentSidebarProps) {
   const [collapsed, setCollapsed] = useState(false)
@@ -1462,6 +1469,7 @@ export function AgentSidebar({
             }}
             onRemoveRoom={(name) => setConfirmRoomDelete({ name })}
             onOpenForeman={onOpenForeman}
+            onOpenArtDirector={onOpenArtDirector}
           />
         )}
       </div>

@@ -113,6 +113,9 @@ export const GARAGE_CAR_SLOT_HEIGHT = 3
 export const FOREMAN_ROOM_NAME = 'Darryl\'s Office'
 export const FOREMAN_ROOM_WIDTH = 8
 export const FOREMAN_FLOOR_COLOR: FloorColor = { h: 25, s: 35, b: 10, c: 0 }
+export const ART_DIRECTOR_ROOM_NAME = 'Jan\'s Office'
+export const ART_DIRECTOR_ROOM_WIDTH = 8
+export const ART_DIRECTOR_FLOOR_COLOR: FloorColor = { h: 320, s: 25, b: 10, c: 0 }
 export const ROOM_LABEL_FONT_SIZE_PX = 10
 export const ROOM_LABEL_COLOR = '#ffffff'
 export const ROOM_LABEL_SHADOW_COLOR = 'rgba(0, 0, 0, 0.5)'
@@ -210,3 +213,6 @@ export const PULSE_ANIMATION_DURATION_SEC = 1.5
 
 // ── Foreman (Darryl) ───────────────────────────────────────
 export const DARRYL_CLICKUP_USERNAME = 'Darryl Philbin'
+
+// ── Art Director (Jan) ────────────────────────────────────
+export const JAN_CLICKUP_USERNAME = 'Jan Levinson'

@@ -36,7 +36,10 @@ import {
 	handleClickupStartWork,
 	handleClickupConfigure,
 	handleDarrylHandleTicket,
+	handleJanDesignBriefing,
+	handleLaunchDesigner,
 	autoDarrylPickup,
+	autoJanPickup,
 } from './clickupHandlers.js';
 import {
 	handleStartConference,
@@ -213,9 +216,10 @@ function handleWebviewReady(ws: WebSocket, ctx: ServerContext): void {
 	// Send worker status
 	broadcastWorkerStatus(ctx);
 
-	// Try auto-pickup on client connect (Darryl may have become free since last poll)
+	// Try auto-pickup on client connect (agents may have become free since last poll)
 	if (!ctx.isWorkerMode) {
 		autoDarrylPickup(ctx);
+		autoJanPickup(ctx);
 	}
 }
 
@@ -239,6 +243,11 @@ const messageHandlers: Record<string, (ws: WebSocket, msg: Record<string, unknow
 	endConference: (_ws, msg, ctx) => handleEndConference(msg, ctx),
 	updateProjectDescription: (_ws, msg, ctx) => handleUpdateProjectDescription(msg, ctx),
 	darrylHandleTicket: (_ws, msg, ctx) => handleDarrylHandleTicket(msg, ctx),
+	janDesignBriefing: (_ws, msg, ctx) => handleJanDesignBriefing(msg, ctx),
+	launchDesigner: (_ws, msg, ctx) => {
+		const result = handleLaunchDesigner(msg, ctx);
+		ctx.broadcastSink.postMessage({ type: 'designerLaunched', ...result });
+	},
 };
 
 // Not supported in standalone mode

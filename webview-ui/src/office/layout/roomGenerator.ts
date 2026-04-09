@@ -25,6 +25,9 @@ import {
   FOREMAN_ROOM_NAME,
   FOREMAN_ROOM_WIDTH,
   FOREMAN_FLOOR_COLOR,
+  ART_DIRECTOR_ROOM_NAME,
+  ART_DIRECTOR_ROOM_WIDTH,
+  ART_DIRECTOR_FLOOR_COLOR,
 } from '../../constants.js'
 
 export interface RoomInfo {
@@ -43,6 +46,8 @@ export interface RoomInfo {
   isGarage?: boolean
   /** Whether this is the foreman's office */
   isForeman?: boolean
+  /** Whether this is the art director's office */
+  isArtDirector?: boolean
 }
 
 export interface GeneratedLayout {
@@ -103,7 +108,7 @@ export function generateRoomLayout(
   const totalRows = Math.max(baseRows, garageTotalHeight)
 
   const projectColsTotal = roomSpecs.reduce((sum, r) => sum + r.roomWidth, 0) + ROOM_GAP_COLS * (roomSpecs.length - 1)
-  const specialColsTotal = CONFERENCE_ROOM_WIDTH + ROOM_GAP_COLS + warehouseWidth + ROOM_GAP_COLS + FOREMAN_ROOM_WIDTH
+  const specialColsTotal = CONFERENCE_ROOM_WIDTH + ROOM_GAP_COLS + warehouseWidth + ROOM_GAP_COLS + FOREMAN_ROOM_WIDTH + ROOM_GAP_COLS + ART_DIRECTOR_ROOM_WIDTH
   const rightSideCols = Math.max(projectColsTotal, specialColsTotal)
   const totalCols = garageColOffset + rightSideCols
 
@@ -600,6 +605,89 @@ export function generateRoomLayout(
     seatUids: [],
     activitySpots: [],
     isForeman: true,
+  })
+
+  // ── Art Director's Office (Jan) ────────────────────────────
+  const adCol = fmCol + fmWidth + ROOM_GAP_COLS
+  const adRow = row1Height + ROOM_GAP_ROWS + ROOM_LABEL_ROWS
+  const adWidth = ART_DIRECTOR_ROOM_WIDTH
+
+  for (let r = 0; r < ROOM_HEIGHT; r++) {
+    for (let c = 0; c < adWidth; c++) {
+      const tileRow = adRow + r
+      const tileCol = adCol + c
+      if (tileRow >= totalRows || tileCol >= totalCols) continue
+      const idx = tileRow * totalCols + tileCol
+
+      const isTopWall = r === 0
+      const isBottomWall = r === ROOM_HEIGHT - 1
+      const isLeftWall = c === 0
+      const isRightWall = c === adWidth - 1
+
+      if (isBottomWall) {
+        const doorCol = Math.floor(adWidth / 2)
+        if (c === doorCol) {
+          tiles[idx] = TileType.FLOOR_1
+          tileColors[idx] = ART_DIRECTOR_FLOOR_COLOR
+        } else {
+          tiles[idx] = TileType.WALL
+          tileColors[idx] = DEFAULT_WALL_COLOR
+        }
+        continue
+      }
+
+      if (isTopWall || isLeftWall || isRightWall) {
+        tiles[idx] = TileType.WALL
+        tileColors[idx] = DEFAULT_WALL_COLOR
+        continue
+      }
+
+      tiles[idx] = TileType.FLOOR_1
+      tileColors[idx] = ART_DIRECTOR_FLOOR_COLOR
+    }
+  }
+
+  // Jan's desk in the center-back
+  furniture.push({
+    uid: 'artdirector:desk-0',
+    type: FurnitureType.DESK,
+    col: adCol + 3,
+    row: adRow + 1,
+  })
+
+  // Chair behind the desk (Jan's seat)
+  furniture.push({
+    uid: 'artdirector:chair-0',
+    type: FurnitureType.CHAIR,
+    col: adCol + 3,
+    row: adRow + 3,
+  })
+
+  // Visitor chair for designers coming for reviews
+  furniture.push({
+    uid: 'artdirector:chair-1',
+    type: FurnitureType.CHAIR,
+    col: adCol + 4,
+    row: adRow + 3,
+  })
+
+  // Bookshelf on the left wall (design references)
+  furniture.push({
+    uid: 'artdirector:bookshelf',
+    type: FurnitureType.BOOKSHELF,
+    col: adCol + 1,
+    row: adRow + 1,
+  })
+
+  rooms.push({
+    projectName: ART_DIRECTOR_ROOM_NAME,
+    col: adCol,
+    row: adRow,
+    width: adWidth,
+    height: ROOM_HEIGHT,
+    seatUids: [],
+    activitySpots: [],
+    isArtDirector: true,
   })
 
   return {

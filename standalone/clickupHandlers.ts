@@ -2,15 +2,18 @@ import * as path from 'path';
 import * as os from 'os';
 import * as crypto from 'crypto';
 import { loadKnownProjects } from '../src/projectStore.js';
-import { CLICKUP_POLL_INTERVAL_MS, DARRYL_ROLE_SHORT, DARRYL_CLICKUP_USERNAME, DARRYL_ESCALATION_USERNAME, DARRYL_WORKSPACE, SERVER_PORT } from './constants.js';
+import { CLICKUP_POLL_INTERVAL_MS, DARRYL_ROLE_SHORT, DARRYL_CLICKUP_USERNAME, DARRYL_ESCALATION_USERNAME, DARRYL_WORKSPACE, JAN_ROLE_SHORT, JAN_CLICKUP_USERNAME, JAN_WORKSPACE, DESIGNER_ROLE_SHORT, SERVER_PORT } from './constants.js';
 import { launchAgentSession } from './itermFocus.js';
 import {
 	savePersistentAgents,
 	ensureAgentMemory,
 	generateAgentId,
 	buildDarrylSystemPrompt,
+	buildJanSystemPrompt,
+	buildDesignerSystemPrompt,
 	expandHome,
 	ensureMempalaceMcpConfig,
+	pickRandomName,
 } from './agentStore.js';
 import type { RosterEntry } from './agentStore.js';
 import { fetchListTasks, addTaskComment } from './clickupClient.js';
@@ -50,6 +53,7 @@ export async function handleClickupRefresh(ctx: ServerContext): Promise<void> {
 		ctx.clickupNextFetchAt = Date.now() + CLICKUP_POLL_INTERVAL_MS;
 		ctx.broadcastSink.postMessage({ type: 'clickupTickets', statuses, nextFetchAt: ctx.clickupNextFetchAt });
 		autoDarrylPickup(ctx);
+		autoJanPickup(ctx);
 	} catch (err) {
 		console.error('[Standalone] ClickUp fetch error:', err);
 		ctx.broadcastSink.postMessage({ type: 'clickupError', error: String(err) });
@@ -139,6 +143,34 @@ export function autoDarrylPickup(ctx: ServerContext): void {
 	}
 
 	broadcastWorkerStatus(ctx);
+}
+
+export function autoJanPickup(ctx: ServerContext): void {
+	if (ctx.isWorkerMode) return;
+
+	// Collect all TODO tickets assigned to Jan
+	const todoTickets: Array<{ id: string; name: string; url: string }> = [];
+	for (const group of ctx.clickupTickets) {
+		if (group.name.toLowerCase() !== 'to do') continue;
+		for (const task of group.tasks) {
+			if (task.assignees.some(a => a.username === JAN_CLICKUP_USERNAME)) {
+				todoTickets.push({ id: task.id, name: task.name, url: task.url });
+			}
+		}
+	}
+
+	if (todoTickets.length === 0) return;
+
+	// Jan handles one ticket at a time (like Darryl on the hub)
+	const jan = ctx.persistentAgents.find(p => p.name === 'Jan');
+	if (jan?.currentSessionId) return; // Already busy
+
+	const ticket = todoTickets[0];
+	console.log(`[Standalone] Auto-pickup: Jan taking ticket ${ticket.id}`);
+	handleJanDesignBriefing(
+		{ ticketId: ticket.id, ticketName: ticket.name, ticketUrl: ticket.url },
+		ctx,
+	);
 }
 
 // ── Ticket work ──────────────────────────────────────────────
@@ -331,4 +363,211 @@ Ticket URL: ${ticketUrl}
 	if (!launchAgentSession(newSessionId, cwd, systemPrompt, initialTask, { mcpConfigPath, extraFlags: ['--dangerously-skip-permissions'] })) {
 		console.log(`[Standalone] Failed to launch Darryl for ticket ${ticketId}`);
 	}
+}
+
+// ── Jan (Art Director) orchestration ────────────────────────
+
+export function handleJanDesignBriefing(msg: Record<string, unknown>, ctx: ServerContext): void {
+	const ticketId = msg.ticketId as string;
+	const ticketName = msg.ticketName as string;
+	const ticketUrl = msg.ticketUrl as string;
+	const { persistentAgents } = ctx;
+
+	// Find or create Jan
+	let jan = persistentAgents.find(p => p.name === 'Jan');
+	if (!jan) {
+		jan = {
+			id: generateAgentId(),
+			name: 'Jan',
+			roleShort: JAN_ROLE_SHORT,
+			roleFull: 'The Art Director. Receives design briefings, delegates to PM and designers, reviews output, and maintains design quality standards.',
+			workspacePath: JAN_WORKSPACE,
+		};
+		persistentAgents.push(jan);
+		savePersistentAgents(persistentAgents);
+	}
+
+	// If Jan already has an active session, skip relaunch
+	if (jan.currentSessionId) {
+		console.log(`[Standalone] Jan already has an active session ${jan.currentSessionId}, skipping relaunch for ticket ${ticketId}`);
+		return;
+	}
+
+	// Build roster (excluding Jan)
+	const knownProjects = loadKnownProjects();
+	const roster: RosterEntry[] = persistentAgents
+		.filter(p => p.id !== jan!.id)
+		.map(p => {
+			const projName = path.basename(p.workspacePath);
+			const proj = knownProjects.find(k => k.name === projName);
+			return {
+				id: p.id,
+				name: p.name,
+				roleShort: p.roleShort,
+				roleFull: p.roleFull,
+				workspacePath: p.workspacePath,
+				projectName: proj?.name ?? projName,
+				projectDescription: proj?.description,
+				isOnline: !!p.currentSessionId,
+			};
+		});
+
+	// Build prompts
+	const systemPrompt = buildJanSystemPrompt(jan, roster, SERVER_PORT);
+
+	const initialTask = `You have received a design briefing via ClickUp ticket ${ticketId}: "${ticketName}"
+Ticket URL: ${ticketUrl}
+
+## Steps
+
+1. FIRST: Move the ticket to "in progress" using mcp__clickup__clickup_update_task (task_id: "${ticketId}", status: "in progress")
+2. Read the full ticket with mcp__clickup__clickup_get_task (task_id: "${ticketId}")
+3. Read the ticket's comments with mcp__clickup__clickup_get_task_comments (task_id: "${ticketId}") for additional context
+4. Assess the briefing: Is it clear enough to start design work? Does it have user needs, constraints, and goals?
+
+### If NOT complete (needs more info):
+- Comment on the ticket with specific questions using mcp__clickup__clickup_create_task_comment
+- Move the ticket back to "to do" using mcp__clickup__clickup_update_task (status: "to do")
+
+### If complete — Start Phase 1 (UX Exploration):
+- Delegate to a PM agent to create 5 diverse UX design briefings as ClickUp sub-tickets
+- Each briefing should explore a genuinely different direction
+- Launch the PM agent via the HTTP API with instructions to create the tickets
+- When the PM is done, review the 5 briefings for diversity and quality
+- Launch UX Designer agents ONE AT A TIME using the /api/launch-designer endpoint:
+  \`\`\`
+  curl -X POST http://localhost:${SERVER_PORT}/api/launch-designer -H 'Content-Type: application/json' -d '{"workspacePath":"<project-workspace-path>","ticketId":"<id>","ticketName":"<name>","ticketUrl":"<url>"}'
+  \`\`\`
+  IMPORTANT: Only one designer can run at a time (they share the same local Figma instance).
+  Launch the first designer, wait for it to finish (ticket moves to "qa test"), then launch the next.
+  Use the workspace path of the PROJECT being designed (e.g. ~/Projects/brightmind), NOT the kantoor-workspace.
+
+5. Update your memory file with your decisions`;
+
+	// Launch Jan
+	const newSessionId = crypto.randomUUID();
+	jan.currentSessionId = newSessionId;
+	savePersistentAgents(persistentAgents);
+	ensureAgentMemory(jan.id);
+
+	const cwd = expandHome(jan.workspacePath || '~');
+	let mempalaceHost: string | undefined;
+	if (ctx.mempalaceServerUrl) {
+		try {
+			mempalaceHost = new URL(ctx.mempalaceServerUrl).hostname;
+		} catch {
+			mempalaceHost = undefined;
+		}
+	}
+	const mcpConfigPath = ensureMempalaceMcpConfig(mempalaceHost);
+	if (!launchAgentSession(newSessionId, cwd, systemPrompt, initialTask, { mcpConfigPath, extraFlags: ['--dangerously-skip-permissions'] })) {
+		console.log(`[Standalone] Failed to launch Jan for ticket ${ticketId}`);
+	}
+}
+
+// ── Designer launch (sequential, one at a time) ────────────
+
+/**
+ * Launch a single designer agent on a briefing ticket.
+ * Designers run in the specified project workspace directory (not centralized).
+ * Reuses an idle designer agent for the workspace or creates a new one.
+ *
+ * Jan should call this once per briefing ticket. Only one designer runs at a time
+ * to avoid Figma MCP conflicts (all agents share the same local Figma instance).
+ * Use ClickUp ticket status to track which briefings are done and which are next.
+ */
+export function handleLaunchDesigner(msg: Record<string, unknown>, ctx: ServerContext): { success: boolean; error?: string } {
+	const workspacePath = msg.workspacePath as string;
+	const ticketId = msg.ticketId as string;
+	const ticketName = msg.ticketName as string;
+	const ticketUrl = msg.ticketUrl as string;
+
+	if (!workspacePath) {
+		return { success: false, error: 'Missing required field: workspacePath' };
+	}
+	if (!ticketId || !ticketName || !ticketUrl) {
+		return { success: false, error: 'Missing required fields: ticketId, ticketName, ticketUrl' };
+	}
+
+	const { persistentAgents } = ctx;
+
+	// Check if any designer is already running (only one at a time to avoid Figma conflicts)
+	const activeDesigner = persistentAgents.find(
+		p => p.roleShort === DESIGNER_ROLE_SHORT && p.currentSessionId,
+	);
+	if (activeDesigner) {
+		return { success: false, error: `Designer "${activeDesigner.name}" is already running. Wait for it to finish before launching another. Check ClickUp ticket status to know when it's done.` };
+	}
+
+	// Resolve project description
+	const knownProjects = loadKnownProjects();
+	const projName = path.basename(workspacePath);
+	const project = knownProjects.find(k => k.name === projName);
+	const projectDescription = project?.description;
+
+	// Find an idle designer for this workspace, or create one
+	let designer = persistentAgents.find(
+		p => p.roleShort === DESIGNER_ROLE_SHORT
+			&& p.workspacePath === workspacePath
+			&& !p.currentSessionId,
+	);
+
+	if (!designer) {
+		designer = {
+			id: generateAgentId(),
+			name: pickRandomName(persistentAgents),
+			roleShort: DESIGNER_ROLE_SHORT,
+			roleFull: 'UX/UI Designer. Reads design briefings from ClickUp, creates designs in Figma on playground boards, and delivers diverse creative explorations.',
+			workspacePath,
+		};
+		persistentAgents.push(designer);
+	}
+
+	// Build designer-specific system prompt
+	const systemPrompt = buildDesignerSystemPrompt(designer, projectDescription);
+
+	const initialTask = `You have been assigned a design briefing via ClickUp ticket ${ticketId}: "${ticketName}"
+Ticket URL: ${ticketUrl}
+
+## Steps
+
+1. FIRST: Move the ticket to "in progress" using mcp__clickup__clickup_update_task (task_id: "${ticketId}", status: "in progress")
+2. Read the full ticket with mcp__clickup__clickup_get_task (task_id: "${ticketId}")
+3. Read the ticket's comments with mcp__clickup__clickup_get_task_comments (task_id: "${ticketId}") for additional context
+4. Search MemPalace for relevant design decisions and component knowledge
+5. Create your design on a clean Figma playground board:
+   - Name your page/frame: \`${ticketId} — ${ticketName}\`
+   - Focus on creating a genuinely unique design direction
+   - Follow the design principles in your system prompt
+6. Take screenshots of your work using figma_take_screenshot
+7. Post your results as a comment on the ClickUp ticket with screenshots and a summary of your design approach
+8. Move the ticket to "qa test" using mcp__clickup__clickup_update_task (task_id: "${ticketId}", status: "qa test")
+9. Update your memory file with what you designed and key decisions`;
+
+	// Launch the designer
+	const newSessionId = crypto.randomUUID();
+	designer.currentSessionId = newSessionId;
+	ensureAgentMemory(designer.id);
+
+	let mempalaceHost: string | undefined;
+	if (ctx.mempalaceServerUrl) {
+		try {
+			mempalaceHost = new URL(ctx.mempalaceServerUrl).hostname;
+		} catch {
+			mempalaceHost = undefined;
+		}
+	}
+
+	const cwd = expandHome(designer.workspacePath || '~');
+	const mcpConfigPath = ensureMempalaceMcpConfig(mempalaceHost);
+	if (launchAgentSession(newSessionId, cwd, systemPrompt, initialTask, { mcpConfigPath, extraFlags: ['--dangerously-skip-permissions'] })) {
+		savePersistentAgents(persistentAgents);
+		console.log(`[Standalone] Launched designer "${designer.name}" for ticket ${ticketId} in ${cwd}`);
+		return { success: true };
+	}
+
+	designer.currentSessionId = undefined;
+	savePersistentAgents(persistentAgents);
+	console.log(`[Standalone] Failed to launch designer "${designer.name}" for ticket ${ticketId}`);
+	return { success: false, error: 'Failed to launch designer session' };
 }
