@@ -4,7 +4,7 @@ import { WebSocketServer } from 'ws';
 import type { WebSocket } from 'ws';
 import type { MessageSink } from '../src/types.js';
 import { loadKnownProjects, addKnownProject } from '../src/projectStore.js';
-import { SERVER_PORT, DESIGNER_ROLE_SHORT, JAN_ROLE_SHORT, REVIEW_TRIGGER_DELAY_MS } from './constants.js';
+import { SERVER_PORT, DESIGNER_ROLE_SHORT, VISUAL_DESIGNER_ROLE_SHORT, JAN_ROLE_SHORT, REVIEW_TRIGGER_DELAY_MS } from './constants.js';
 import { ProjectScanner, decodeProjectHash, getLiveSessionIds } from './projectScanner.js';
 import { StandaloneAgentManager } from './standaloneAgentManager.js';
 import {
@@ -437,9 +437,9 @@ async function main(): Promise<void> {
 				pa.currentTicketUrl = undefined;
 				savePersistentAgents(persistentAgents);
 
-				// Designer finished → trigger Jan's review
-				if (pa.roleShort === DESIGNER_ROLE_SHORT && completedTicket && !isWorkerMode) {
-					console.log(`[Standalone] Designer "${pa.name}" finished ticket ${completedTicket.ticketId}, triggering Jan review`);
+				// Designer (UX or Visual) finished → trigger Jan's review
+				if ((pa.roleShort === DESIGNER_ROLE_SHORT || pa.roleShort === VISUAL_DESIGNER_ROLE_SHORT) && completedTicket && !isWorkerMode) {
+					console.log(`[Standalone] ${pa.roleShort} "${pa.name}" finished ticket ${completedTicket.ticketId}, triggering Jan review`);
 					setTimeout(() => handleJanReviewDesigner(completedTicket, ctx), REVIEW_TRIGGER_DELAY_MS);
 				}
 

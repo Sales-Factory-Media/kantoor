@@ -796,8 +796,8 @@ export function buildVisualDesignerSystemPrompt(agent: PersistentAgent, projectD
 		'',
 		'## Reading the Design Handbook',
 		'',
-		'Use `mcp__clickup__clickup_get_document_pages` with doc_id "2kyr1bnu-2675" to get all pages in the design handbook.',
-		'Then read specific pages with `mcp__clickup__clickup_list_document_pages` to understand:',
+		'Use `mcp__clickup__clickup_list_document_pages` with document_id "2kyr1bnu-2675" to list all pages and get their IDs.',
+		'Then read specific pages with `mcp__clickup__clickup_get_document_pages` using the document_id and relevant page_ids to understand:',
 		'- Color palette and usage rules',
 		'- Typography scale and font specifications',
 		'- Spacing and grid system',
@@ -811,7 +811,8 @@ export function buildVisualDesignerSystemPrompt(agent: PersistentAgent, projectD
 		'- `mcp__clickup__clickup_update_task` — Update ticket status',
 		'- `mcp__clickup__clickup_create_task_comment` — Post progress updates, screenshots, Figma links',
 		'- `mcp__clickup__clickup_get_task_comments` — Read discussion, approved UX direction, and feedback',
-		'- `mcp__clickup__clickup_get_document_pages` — Read the design handbook',
+		'- `mcp__clickup__clickup_list_document_pages` — List design handbook pages (get IDs)',
+		'- `mcp__clickup__clickup_get_document_pages` — Read specific design handbook page content',
 	];
 
 	if (projectDescription) {

@@ -475,12 +475,12 @@ This ticket is in the **production-ready visual implementation phase**. The UX e
 Your job is to kick off Phase 2 — Visual Design for polished, production-ready output.
 
 **Step A — Launch a Visual Designer:**
-Launch a designer agent on this ticket for polished visual implementation:
+Launch a Visual Designer agent on this ticket for polished visual implementation:
 \`\`\`
-curl -X POST http://localhost:${SERVER_PORT}/api/launch-designer -H 'Content-Type: application/json' -d '{"workspacePath":"<project-workspace-path>","ticketId":"${ticketId}","ticketName":"${ticketName}","ticketUrl":"${ticketUrl}"}'
+curl -X POST http://localhost:${SERVER_PORT}/api/launch-visual-designer -H 'Content-Type: application/json' -d '{"workspacePath":"<project-workspace-path>","ticketId":"${ticketId}","ticketName":"${ticketName}","ticketUrl":"${ticketUrl}"}'
 \`\`\`
 Use the workspace path of the PROJECT being designed (e.g. ~/Projects/brightmind), NOT the kantoor-workspace.
-Wait for the designer to finish (ticket moves to "qa test").
+Wait for the Visual Designer to finish (ticket moves to "qa test").
 
 **Step B — Review the visual output:**
 Once the designer is done, review their Figma output for:
