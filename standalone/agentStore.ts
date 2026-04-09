@@ -21,6 +21,10 @@ export interface PersistentAgent {
 	currentSessionId?: string;
 	lastSessionEnd?: string;
 	sessionCount?: number;
+	currentTicketId?: string;
+	currentTicketName?: string;
+	currentTicketUrl?: string;
+	lastTicketId?: string;
 }
 
 export function loadPersistentAgents(): PersistentAgent[] {
@@ -551,6 +555,60 @@ export function buildDesignerSystemPrompt(agent: PersistentAgent, projectDescrip
 	);
 
 	return lines.join('\n');
+}
+
+export function buildJanReviewPrompt(ticket: {
+	ticketId: string;
+	ticketName: string;
+	ticketUrl: string;
+	designerName: string;
+}): string {
+	return `You need to review the design work by ${ticket.designerName} on ClickUp ticket ${ticket.ticketId}: "${ticket.ticketName}"
+Ticket URL: ${ticket.ticketUrl}
+
+## Steps
+
+1. Read the full ticket with mcp__clickup__clickup_get_task (task_id: "${ticket.ticketId}")
+2. Read ALL comments on the ticket with mcp__clickup__clickup_get_task_comments (task_id: "${ticket.ticketId}")
+   - The designer posted screenshots and a summary of their approach in the comments
+3. If the designer referenced a Figma board, take a screenshot with figma_take_screenshot to see their work directly
+4. Evaluate the design against your Art Direction Principles:
+   - **Visual hierarchy** — Is the most important content prominent?
+   - **Consistency** — Does it align with the existing design system and brand?
+   - **Usability** — Is it intuitive and accessible?
+   - **Creativity** — Does it push boundaries while staying practical?
+   - **Technical feasibility** — Can this reasonably be implemented?
+5. Post your review as a structured ClickUp comment using mcp__clickup__clickup_create_task_comment (task_id: "${ticket.ticketId}"):
+
+   Format your review comment as:
+   \`\`\`
+   ## Art Direction Review
+
+   **Verdict: [APPROVED / REVISION NEEDED]**
+
+   ### Strengths
+   - [Specific things that work well]
+
+   ### Issues
+   - [Specific problems with actionable fixes — skip if APPROVED]
+
+   ### Required Changes
+   - [Numbered list of concrete changes needed — skip if APPROVED]
+   \`\`\`
+
+### If APPROVED:
+- Move the ticket to "complete" using mcp__clickup__clickup_update_task (task_id: "${ticket.ticketId}", status: "complete")
+- Comment that the design is approved and ready for the central design board
+
+### If REVISION NEEDED:
+- Move the ticket to "revision needed" using mcp__clickup__clickup_update_task (task_id: "${ticket.ticketId}", status: "revision needed")
+- Your structured feedback comment MUST include specific, actionable changes
+- The designer will be automatically relaunched with your feedback
+
+6. Notify the designer of your review via claude-peers:
+   - Call mcp__peers__list_peers with scope="machine" to find the designer
+   - If found, use mcp__peers__send_message to send a brief summary of your verdict and key feedback
+7. Update your memory file with your review decision and reasoning`;
 }
 
 export function buildConferencePrompt(agent: PersistentAgent, partnerName: string, topic: string): string {

@@ -11,11 +11,14 @@ import {
 	buildDarrylSystemPrompt,
 	buildJanSystemPrompt,
 	buildDesignerSystemPrompt,
+	buildJanReviewPrompt,
 	expandHome,
 	ensureMempalaceMcpConfig,
+	mergeMcpConfigs,
 	pickRandomName,
 } from './agentStore.js';
 import type { RosterEntry } from './agentStore.js';
+import { ensureMcpConfig as ensurePeersMcpConfig } from './conferenceManager.js';
 import { fetchListTasks, addTaskComment } from './clickupClient.js';
 import type { ClickUpConfig } from './clickupClient.js';
 import { readJson, writeJson } from './serverHelpers.js';
@@ -447,6 +450,9 @@ Ticket URL: ${ticketUrl}
 	// Launch Jan
 	const newSessionId = crypto.randomUUID();
 	jan.currentSessionId = newSessionId;
+	jan.currentTicketId = ticketId;
+	jan.currentTicketName = ticketName;
+	jan.currentTicketUrl = ticketUrl;
 	savePersistentAgents(persistentAgents);
 	ensureAgentMemory(jan.id);
 
@@ -481,6 +487,7 @@ export function handleLaunchDesigner(msg: Record<string, unknown>, ctx: ServerCo
 	const ticketId = msg.ticketId as string;
 	const ticketName = msg.ticketName as string;
 	const ticketUrl = msg.ticketUrl as string;
+	const revisionMode = msg.revisionMode as boolean | undefined;
 
 	if (!workspacePath) {
 		return { success: false, error: 'Missing required field: workspacePath' };
@@ -526,7 +533,15 @@ export function handleLaunchDesigner(msg: Record<string, unknown>, ctx: ServerCo
 	// Build designer-specific system prompt
 	const systemPrompt = buildDesignerSystemPrompt(designer, projectDescription);
 
-	const initialTask = `You have been assigned a design briefing via ClickUp ticket ${ticketId}: "${ticketName}"
+	const revisionPreamble = revisionMode
+		? `IMPORTANT: This is a REVISION. Jan (Art Director) has reviewed your previous work and requested changes.
+Read the ClickUp comments carefully — Jan's latest review comment contains specific, actionable feedback you MUST address.
+Focus on the requested changes while preserving what Jan approved.
+
+`
+		: '';
+
+	const initialTask = `${revisionPreamble}You have been assigned a design briefing via ClickUp ticket ${ticketId}: "${ticketName}"
 Ticket URL: ${ticketUrl}
 
 ## Steps
@@ -547,6 +562,9 @@ Ticket URL: ${ticketUrl}
 	// Launch the designer
 	const newSessionId = crypto.randomUUID();
 	designer.currentSessionId = newSessionId;
+	designer.currentTicketId = ticketId;
+	designer.currentTicketName = ticketName;
+	designer.currentTicketUrl = ticketUrl;
 	ensureAgentMemory(designer.id);
 
 	let mempalaceHost: string | undefined;
@@ -570,4 +588,131 @@ Ticket URL: ${ticketUrl}
 	savePersistentAgents(persistentAgents);
 	console.log(`[Standalone] Failed to launch designer "${designer.name}" for ticket ${ticketId}`);
 	return { success: false, error: 'Failed to launch designer session' };
+}
+
+// ── Jan review of designer output ───────────────────────────
+
+export function handleJanReviewDesigner(
+	completedTicket: { ticketId: string; ticketName: string; ticketUrl: string; designerName: string; workspacePath: string },
+	ctx: ServerContext,
+): void {
+	const { ticketId, ticketName, ticketUrl, designerName } = completedTicket;
+	const { persistentAgents } = ctx;
+
+	// Find or create Jan (same as handleJanDesignBriefing)
+	let jan = persistentAgents.find(p => p.name === 'Jan');
+	if (!jan) {
+		jan = {
+			id: generateAgentId(),
+			name: 'Jan',
+			roleShort: JAN_ROLE_SHORT,
+			roleFull: 'The Art Director. Receives design briefings, delegates to PM and designers, reviews output, and maintains design quality standards.',
+			workspacePath: JAN_WORKSPACE,
+		};
+		persistentAgents.push(jan);
+		savePersistentAgents(persistentAgents);
+	}
+
+	if (jan.currentSessionId) {
+		console.log(`[Standalone] Jan already has an active session ${jan.currentSessionId}, skipping review for ticket ${ticketId}`);
+		return;
+	}
+
+	// Build roster (excluding Jan)
+	const knownProjects = loadKnownProjects();
+	const roster: RosterEntry[] = persistentAgents
+		.filter(p => p.id !== jan!.id)
+		.map(p => {
+			const projName = path.basename(p.workspacePath);
+			const proj = knownProjects.find(k => k.name === projName);
+			return {
+				id: p.id,
+				name: p.name,
+				roleShort: p.roleShort,
+				roleFull: p.roleFull,
+				workspacePath: p.workspacePath,
+				projectName: proj?.name ?? projName,
+				projectDescription: proj?.description,
+				isOnline: !!p.currentSessionId,
+			};
+		});
+
+	const systemPrompt = buildJanSystemPrompt(jan, roster, SERVER_PORT);
+	const initialTask = buildJanReviewPrompt({ ticketId, ticketName, ticketUrl, designerName });
+
+	const newSessionId = crypto.randomUUID();
+	jan.currentSessionId = newSessionId;
+	jan.currentTicketId = ticketId;
+	jan.currentTicketName = ticketName;
+	jan.currentTicketUrl = ticketUrl;
+	savePersistentAgents(persistentAgents);
+	ensureAgentMemory(jan.id);
+
+	const cwd = expandHome(jan.workspacePath || '~');
+	let mempalaceHost: string | undefined;
+	if (ctx.mempalaceServerUrl) {
+		try {
+			mempalaceHost = new URL(ctx.mempalaceServerUrl).hostname;
+		} catch {
+			mempalaceHost = undefined;
+		}
+	}
+
+	// Merge peers + mempalace MCP configs for review session
+	const peersMcpConfigPath = ensurePeersMcpConfig();
+	const mempalaceMcpConfigPath = ensureMempalaceMcpConfig(mempalaceHost);
+	const mcpConfigPath = mergeMcpConfigs(peersMcpConfigPath, mempalaceMcpConfigPath);
+
+	if (!launchAgentSession(newSessionId, cwd, systemPrompt, initialTask, { mcpConfigPath, extraFlags: ['--dangerously-skip-permissions'] })) {
+		console.log(`[Standalone] Failed to launch Jan for review of ticket ${ticketId}`);
+	}
+}
+
+// ── Auto-revision pickup ────────────────────────────────────
+
+export function autoDesignerRevisionPickup(ctx: ServerContext): void {
+	if (ctx.isWorkerMode) return;
+
+	// Check if any designer is already running
+	const activeDesigner = ctx.persistentAgents.find(
+		p => p.roleShort === DESIGNER_ROLE_SHORT && p.currentSessionId,
+	);
+	if (activeDesigner) return;
+
+	// Find tickets in "revision needed" status
+	const revisionTickets: Array<{ id: string; name: string; url: string }> = [];
+	for (const group of ctx.clickupTickets) {
+		if (group.name.toLowerCase() !== 'revision needed') continue;
+		for (const task of group.tasks) {
+			revisionTickets.push({ id: task.id, name: task.name, url: task.url });
+		}
+	}
+
+	if (revisionTickets.length === 0) return;
+
+	const ticket = revisionTickets[0];
+
+	// Find the designer who previously worked on this ticket
+	const previousDesigner = ctx.persistentAgents.find(
+		p => p.roleShort === DESIGNER_ROLE_SHORT
+			&& !p.currentSessionId
+			&& p.lastTicketId === ticket.id,
+	);
+
+	if (!previousDesigner) {
+		console.log(`[Standalone] No idle designer found for revision ticket ${ticket.id}`);
+		return;
+	}
+
+	console.log(`[Standalone] Auto-revision: relaunching designer "${previousDesigner.name}" for ticket ${ticket.id}`);
+	handleLaunchDesigner(
+		{
+			workspacePath: previousDesigner.workspacePath,
+			ticketId: ticket.id,
+			ticketName: ticket.name,
+			ticketUrl: ticket.url,
+			revisionMode: true,
+		},
+		ctx,
+	);
 }
