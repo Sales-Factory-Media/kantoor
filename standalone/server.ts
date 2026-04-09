@@ -36,6 +36,7 @@ import {
 	handleClickupStartWork,
 	handleClickupConfigure,
 	handleDarrylHandleTicket,
+	handleJanDesignBriefing,
 	autoDarrylPickup,
 } from './clickupHandlers.js';
 import {
@@ -239,6 +240,7 @@ const messageHandlers: Record<string, (ws: WebSocket, msg: Record<string, unknow
 	endConference: (_ws, msg, ctx) => handleEndConference(msg, ctx),
 	updateProjectDescription: (_ws, msg, ctx) => handleUpdateProjectDescription(msg, ctx),
 	darrylHandleTicket: (_ws, msg, ctx) => handleDarrylHandleTicket(msg, ctx),
+	janDesignBriefing: (_ws, msg, ctx) => handleJanDesignBriefing(msg, ctx),
 };
 
 // Not supported in standalone mode

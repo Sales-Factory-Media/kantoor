@@ -2,13 +2,14 @@ import * as path from 'path';
 import * as os from 'os';
 import * as crypto from 'crypto';
 import { loadKnownProjects } from '../src/projectStore.js';
-import { CLICKUP_POLL_INTERVAL_MS, DARRYL_ROLE_SHORT, DARRYL_CLICKUP_USERNAME, DARRYL_ESCALATION_USERNAME, DARRYL_WORKSPACE, SERVER_PORT } from './constants.js';
+import { CLICKUP_POLL_INTERVAL_MS, DARRYL_ROLE_SHORT, DARRYL_CLICKUP_USERNAME, DARRYL_ESCALATION_USERNAME, DARRYL_WORKSPACE, JAN_ROLE_SHORT, JAN_WORKSPACE, SERVER_PORT } from './constants.js';
 import { launchAgentSession } from './itermFocus.js';
 import {
 	savePersistentAgents,
 	ensureAgentMemory,
 	generateAgentId,
 	buildDarrylSystemPrompt,
+	buildJanSystemPrompt,
 	expandHome,
 	ensureMempalaceMcpConfig,
 } from './agentStore.js';
@@ -330,5 +331,99 @@ Ticket URL: ${ticketUrl}
 	const mcpConfigPath = ensureMempalaceMcpConfig(mempalaceHost);
 	if (!launchAgentSession(newSessionId, cwd, systemPrompt, initialTask, { mcpConfigPath, extraFlags: ['--dangerously-skip-permissions'] })) {
 		console.log(`[Standalone] Failed to launch Darryl for ticket ${ticketId}`);
+	}
+}
+
+// ── Jan (Art Director) orchestration ────────────────────────
+
+export function handleJanDesignBriefing(msg: Record<string, unknown>, ctx: ServerContext): void {
+	const ticketId = msg.ticketId as string;
+	const ticketName = msg.ticketName as string;
+	const ticketUrl = msg.ticketUrl as string;
+	const { persistentAgents } = ctx;
+
+	// Find or create Jan
+	let jan = persistentAgents.find(p => p.name === 'Jan');
+	if (!jan) {
+		jan = {
+			id: generateAgentId(),
+			name: 'Jan',
+			roleShort: JAN_ROLE_SHORT,
+			roleFull: 'The Art Director. Receives design briefings, delegates to PM and designers, reviews output, and maintains design quality standards.',
+			workspacePath: JAN_WORKSPACE,
+		};
+		persistentAgents.push(jan);
+		savePersistentAgents(persistentAgents);
+	}
+
+	// If Jan already has an active session, skip relaunch
+	if (jan.currentSessionId) {
+		console.log(`[Standalone] Jan already has an active session ${jan.currentSessionId}, skipping relaunch for ticket ${ticketId}`);
+		return;
+	}
+
+	// Build roster (excluding Jan)
+	const knownProjects = loadKnownProjects();
+	const roster: RosterEntry[] = persistentAgents
+		.filter(p => p.id !== jan!.id)
+		.map(p => {
+			const projName = path.basename(p.workspacePath);
+			const proj = knownProjects.find(k => k.name === projName);
+			return {
+				id: p.id,
+				name: p.name,
+				roleShort: p.roleShort,
+				roleFull: p.roleFull,
+				workspacePath: p.workspacePath,
+				projectName: proj?.name ?? projName,
+				projectDescription: proj?.description,
+				isOnline: !!p.currentSessionId,
+			};
+		});
+
+	// Build prompts
+	const systemPrompt = buildJanSystemPrompt(jan, roster, SERVER_PORT);
+
+	const initialTask = `You have received a design briefing via ClickUp ticket ${ticketId}: "${ticketName}"
+Ticket URL: ${ticketUrl}
+
+## Steps
+
+1. FIRST: Move the ticket to "in progress" using mcp__clickup__clickup_update_task (task_id: "${ticketId}", status: "in progress")
+2. Read the full ticket with mcp__clickup__clickup_get_task (task_id: "${ticketId}")
+3. Read the ticket's comments with mcp__clickup__clickup_get_task_comments (task_id: "${ticketId}") for additional context
+4. Assess the briefing: Is it clear enough to start design work? Does it have user needs, constraints, and goals?
+
+### If NOT complete (needs more info):
+- Comment on the ticket with specific questions using mcp__clickup__clickup_create_task_comment
+- Move the ticket back to "to do" using mcp__clickup__clickup_update_task (status: "to do")
+
+### If complete — Start Phase 1 (UX Exploration):
+- Delegate to a PM agent to create 5 diverse UX design briefings as ClickUp sub-tickets
+- Each briefing should explore a genuinely different direction
+- Launch the PM agent via the HTTP API with instructions to create the tickets
+- When the PM is done, review the 5 briefings for diversity and quality
+- Launch 5 UX Designer agents to work on them in parallel
+
+5. Update your memory file with your decisions`;
+
+	// Launch Jan
+	const newSessionId = crypto.randomUUID();
+	jan.currentSessionId = newSessionId;
+	savePersistentAgents(persistentAgents);
+	ensureAgentMemory(jan.id);
+
+	const cwd = expandHome(jan.workspacePath || '~');
+	let mempalaceHost: string | undefined;
+	if (ctx.mempalaceServerUrl) {
+		try {
+			mempalaceHost = new URL(ctx.mempalaceServerUrl).hostname;
+		} catch {
+			mempalaceHost = undefined;
+		}
+	}
+	const mcpConfigPath = ensureMempalaceMcpConfig(mempalaceHost);
+	if (!launchAgentSession(newSessionId, cwd, systemPrompt, initialTask, { mcpConfigPath, extraFlags: ['--dangerously-skip-permissions'] })) {
+		console.log(`[Standalone] Failed to launch Jan for ticket ${ticketId}`);
 	}
 }
