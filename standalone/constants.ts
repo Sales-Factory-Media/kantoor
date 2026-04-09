@@ -25,6 +25,7 @@ export const PM_WORKSPACE = '~/Projects/kantoor-workspace';
 
 // ── Designer ──────────────────────────────────────────────
 export const DESIGNER_ROLE_SHORT = 'Designer';
+export const VISUAL_DESIGNER_ROLE_SHORT = 'Visual Designer';
 
 // ── Review / Feedback Loop ────────────────────────────────
 export const REVIEW_TRIGGER_DELAY_MS = 5000;

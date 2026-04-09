@@ -39,6 +39,7 @@ import {
 	handleJanDesignBriefing,
 	handleLaunchPM,
 	handleLaunchDesigner,
+	handleLaunchVisualDesigner,
 	handleJanReviewDesigner,
 	autoDesignerRevisionPickup,
 	autoDarrylPickup,
@@ -255,6 +256,10 @@ const messageHandlers: Record<string, (ws: WebSocket, msg: Record<string, unknow
 	launchDesigner: (_ws, msg, ctx) => {
 		const result = handleLaunchDesigner(msg, ctx);
 		ctx.broadcastSink.postMessage({ type: 'designerLaunched', ...result });
+	},
+	launchVisualDesigner: (_ws, msg, ctx) => {
+		const result = handleLaunchVisualDesigner(msg, ctx);
+		ctx.broadcastSink.postMessage({ type: 'visualDesignerLaunched', ...result });
 	},
 	janReviewDesigner: (_ws, msg, ctx) => handleJanReviewDesigner({
 		ticketId: msg.ticketId as string,
