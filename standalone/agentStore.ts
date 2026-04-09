@@ -52,7 +52,7 @@ export function ensureAgentMemory(agentId: string): void {
 	}
 	const memPath = getAgentMemoryPath(agentId);
 	if (!fs.existsSync(memPath)) {
-		fs.writeFileSync(memPath, '# Memory\n\nThis file is your persistent memory. Update it as you work.\n', 'utf-8');
+		fs.writeFileSync(memPath, '# Personal Scratchpad\n\nUse this for rough personal notes. MemPalace is the primary shared memory.\n', 'utf-8');
 	}
 }
 
@@ -147,6 +147,35 @@ export function pickRandomName(existingAgents: PersistentAgent[]): string {
 	return `${base} ${suffix}`;
 }
 
+function buildMemoryBlock(memoryPath: string, sessionCount?: number, lastSessionEnd?: string): string[] {
+	return [
+		'## IMPORTANT: Shared Team Memory (MemPalace)',
+		'',
+		'MemPalace is your primary source of institutional knowledge. **You MUST search it before starting any task.**',
+		'',
+		'**BEFORE YOU START (mandatory):**',
+		'1. Call `mcp__mempalace__mempalace_search` with a description of your task to find relevant past decisions, context, and patterns',
+		'2. Call `mcp__mempalace__mempalace_kg_query` for entities related to your task (services, components, features)',
+		'3. Read the results carefully — other agents may have already solved similar problems or made decisions you need to respect',
+		'',
+		'**WHEN YOU FINISH or make a significant decision:**',
+		'1. Save decisions and discoveries with `mcp__mempalace__mempalace_add_drawer` (check for duplicates first with `mcp__mempalace__mempalace_check_duplicate`)',
+		'2. Record facts with `mcp__mempalace__mempalace_kg_add` (e.g., "payment-service uses Stripe API")',
+		'3. Write a session summary with `mcp__mempalace__mempalace_diary_write`',
+		'',
+		'**What to save:** Architecture decisions, API changes, config changes, new integrations, bug root causes, design decisions, workflow changes — anything the team benefits from.',
+		'**What NOT to save:** Routine code changes, temporary debugging notes, session-only context, secrets/credentials/PII.',
+		'',
+		`You also have a personal scratchpad at: ${memoryPath}`,
+		'Use this only for rough personal notes. MemPalace is the authoritative shared memory.',
+		...(sessionCount && sessionCount > 0 ? [
+			'',
+			"You're returning to work. Search MemPalace for context from recent team activity.",
+			...(lastSessionEnd ? [`Your last session ended on ${lastSessionEnd}.`] : []),
+		] : []),
+	];
+}
+
 export function buildSystemPrompt(agent: PersistentAgent, projectDescription?: string): string {
 	const memoryPath = getAgentMemoryPath(agent.id);
 	const lines = [
@@ -157,21 +186,6 @@ export function buildSystemPrompt(agent: PersistentAgent, projectDescription?: s
 	} else if (agent.roleShort) {
 		lines.push(`Your role: ${agent.roleShort}.`);
 	}
-	lines.push(
-		'',
-		`Your persistent memory file is at: ${memoryPath}`,
-		'Read this file at the start of each session to recall context from previous sessions.',
-		'Update it as you work with important decisions, progress, patterns, and context you want to remember across sessions.',
-	);
-	if (agent.sessionCount && agent.sessionCount > 0) {
-		lines.push(
-			'',
-			"You're returning to work. Check your memory file for context from your previous sessions.",
-		);
-		if (agent.lastSessionEnd) {
-			lines.push(`Your last session ended on ${agent.lastSessionEnd}.`);
-		}
-	}
 	if (projectDescription) {
 		lines.push(
 			'',
@@ -180,34 +194,7 @@ export function buildSystemPrompt(agent: PersistentAgent, projectDescription?: s
 			projectDescription,
 		);
 	}
-	lines.push(
-		'',
-		'## Shared Team Memory (MemPalace)',
-		'',
-		'You have access to a shared memory palace via MCP tools (prefixed `mcp__mempalace__`).',
-		'',
-		'**When starting work:**',
-		'- Call `mcp__mempalace__mempalace_search` with your task description to find relevant past decisions and context',
-		'- Call `mcp__mempalace__mempalace_kg_query` for entities related to your task',
-		'',
-		'**When you learn something important or make a significant change:**',
-		'- Save decisions and discoveries with `mcp__mempalace__mempalace_add_drawer`',
-		'- Check for duplicates first with `mcp__mempalace__mempalace_check_duplicate`',
-		'- Record facts with `mcp__mempalace__mempalace_kg_add` (e.g., "payment-service uses Stripe API")',
-		'- Write session summaries with `mcp__mempalace__mempalace_diary_write`',
-		'',
-		'**After any significant change** (architecture decisions, API changes, config changes, new integrations, bug root causes):',
-		'- Update MemPalace so other agents benefit from your discoveries',
-		'- Use `mempalace_add_drawer` for decisions/context and `mempalace_kg_add` for facts about services/components',
-		'',
-		'**What NOT to save:**',
-		'- Routine code changes (that\'s what git is for)',
-		'- Temporary debugging notes',
-		'- Anything specific to this session only',
-		'- Secrets, credentials, tokens, API keys, customer data, personal data, or other sensitive/PII. Do not store secret values or references to where secrets are kept in MemPalace; keep those in code/infrastructure documentation and approved secret-management systems.',
-		'',
-		'Your personal MEMORY.md is still for your own working notes. The shared memory palace is only for safe, durable knowledge the whole team benefits from.',
-	);
+	lines.push('', ...buildMemoryBlock(memoryPath, agent.sessionCount, agent.lastSessionEnd));
 	lines.push(
 		'',
 		'## Git Conventions (Gitflow + ClickUp Integration)',
@@ -251,10 +238,6 @@ export function buildDarrylSystemPrompt(agent: PersistentAgent, roster: RosterEn
 	const memoryPath = getAgentMemoryPath(agent.id);
 	const lines = [
 		'You are Darryl, the Foreman of this development team.',
-		'',
-		`Your persistent memory file is at: ${memoryPath}`,
-		'Read this file at the start of each session to recall context from previous sessions.',
-		'Update it as you work with important decisions, progress, patterns, and context you want to remember across sessions.',
 		'',
 		'## Decision Framework',
 		'',
@@ -300,22 +283,7 @@ export function buildDarrylSystemPrompt(agent: PersistentAgent, roster: RosterEn
 		lines.push(`  - Status: ${entry.isOnline ? 'ONLINE (busy)' : 'OFFLINE (available)'}`);
 	}
 
-	lines.push(
-		'',
-		'## Shared Team Memory (MemPalace)',
-		'',
-		'Before assigning a ticket, search the shared memory to inform your decision:',
-		'- `mcp__mempalace__mempalace_search` — find past work related to the ticket',
-		'- `mcp__mempalace__mempalace_kg_query` — check what\'s known about involved services/components',
-		'- `mcp__mempalace__mempalace_status` — get an overview of the palace',
-		'',
-		'After making an assignment decision or any significant change, update MemPalace:',
-		'- `mcp__mempalace__mempalace_add_drawer` — record the decision and reasoning',
-		'- `mcp__mempalace__mempalace_kg_add` — record any new facts learned from the ticket',
-		'- Always update MemPalace after architecture decisions, workflow changes, or discoveries that other agents would benefit from',
-		'- Never store secrets, credentials, tokens, API keys, personal data, or other sensitive information in MemPalace.',
-		'- If a ticket contains sensitive details, omit or redact them before saving any memory entry.',
-	);
+	lines.push('', ...buildMemoryBlock(memoryPath));
 
 	lines.push(
 		'',
@@ -324,7 +292,6 @@ export function buildDarrylSystemPrompt(agent: PersistentAgent, roster: RosterEn
 		'- Only assign OFFLINE agents. Online agents are already busy with other work.',
 		'- Match the agent\'s workspace and role to the ticket\'s project and requirements.',
 		'- Use team mode for complex, multi-part tickets that benefit from parallel work.',
-		'- Update your memory file after each decision with what you decided and why.',
 	);
 
 	return lines.join('\n');
@@ -338,10 +305,6 @@ export function buildJanSystemPrompt(agent: PersistentAgent, roster: RosterEntry
 		'You lead the design pipeline — the design equivalent of Darryl (the Foreman) for development.',
 		'You are the entry point for all design work. You receive technical briefings, delegate to your team,',
 		'review their output, and maintain quality standards across the entire design process.',
-		'',
-		`Your persistent memory file is at: ${memoryPath}`,
-		'Read this file at the start of each session to recall context from previous sessions.',
-		'Update it as you work with important decisions, progress, patterns, and context you want to remember across sessions.',
 		'',
 		'## Your Role',
 		'',
@@ -451,18 +414,9 @@ export function buildJanSystemPrompt(agent: PersistentAgent, roster: RosterEntry
 		lines.push(`  - Status: ${entry.isOnline ? 'ONLINE (busy)' : 'OFFLINE (available)'}`);
 	}
 
+	lines.push('', ...buildMemoryBlock(memoryPath));
+
 	lines.push(
-		'',
-		'## Shared Team Memory (MemPalace)',
-		'',
-		'Before starting design work, search the shared memory for context:',
-		'- `mcp__mempalace__mempalace_search` — find past design decisions and context',
-		'- `mcp__mempalace__mempalace_kg_query` — check what\'s known about involved components/features',
-		'',
-		'After making design decisions, update MemPalace:',
-		'- `mcp__mempalace__mempalace_add_drawer` — record design decisions and art direction feedback',
-		'- `mcp__mempalace__mempalace_kg_add` — record facts about design components and patterns',
-		'- Never store secrets, credentials, tokens, API keys, personal data, or other sensitive information in MemPalace.',
 		'',
 		'## Rules',
 		'',
@@ -470,7 +424,6 @@ export function buildJanSystemPrompt(agent: PersistentAgent, roster: RosterEntry
 		'- Match the agent\'s role to the task (PM for briefing creation, UX Designer for exploration, Visual Designer for polish).',
 		'- Always ensure 5 genuinely diverse UX directions — reject briefings that are too similar.',
 		'- Provide specific, actionable art direction feedback — not vague praise.',
-		'- Update your memory file after each decision with what you decided and why.',
 	);
 
 	return lines.join('\n');
@@ -485,10 +438,6 @@ export function buildPMSystemPrompt(agent: PersistentAgent): string {
 		'technical briefing and produce 5 genuinely DIFFERENT UX design briefings — each one covers',
 		'the FULL scope of the design problem but proposes a completely different creative direction.',
 		'Think of it as "5 different designers each solving the same brief differently."',
-		'',
-		`Your persistent memory file is at: ${memoryPath}`,
-		'Read this file at the start of each session to recall context from previous sessions.',
-		'Update it as you work with important decisions, progress, patterns, and context you want to remember across sessions.',
 		'',
 		'## Your Role',
 		'',
@@ -565,16 +514,7 @@ export function buildPMSystemPrompt(agent: PersistentAgent): string {
 		'- `mcp__clickup__clickup_create_task_comment` — Leave comments on tickets',
 		'- `mcp__clickup__clickup_add_tag_to_task` — Tag each ticket with "UX-prototype-briefing"',
 		'',
-		'## Shared Team Memory (MemPalace)',
-		'',
-		'Before creating briefings, search the shared memory for context:',
-		'- `mcp__mempalace__mempalace_search` — find past design decisions and component knowledge',
-		'- `mcp__mempalace__mempalace_kg_query` — check what\'s known about the app component being designed',
-		'',
-		'After creating the 5 briefings, update MemPalace:',
-		'- `mcp__mempalace__mempalace_add_drawer` — record the 5 directions you created and your reasoning',
-		'- `mcp__mempalace__mempalace_kg_add` — record facts about the component and design context',
-		'- Never store secrets, credentials, tokens, API keys, personal data, or other sensitive information in MemPalace.',
+		...buildMemoryBlock(memoryPath),
 		'',
 		'## Rules',
 		'',
@@ -586,7 +526,6 @@ export function buildPMSystemPrompt(agent: PersistentAgent): string {
 		'- Include enough detail in each briefing for a Designer agent to work autonomously.',
 		'- Reference the specific app component (feed, growthpad, profile, bento, etc.) in each briefing.',
 		'- Use the Figma naming convention: `{ticket_id} — {Direction Title}`.',
-		'- Update your memory file after creating the briefings.',
 	];
 
 	return lines.join('\n');
@@ -601,10 +540,6 @@ export function buildDesignerSystemPrompt(agent: PersistentAgent, projectDescrip
 		'and produce design output using Figma. You work autonomously on your assigned briefing, creating designs',
 		'on a clean playground board — never on main design files.',
 		'',
-		`Your persistent memory file is at: ${memoryPath}`,
-		'Read this file at the start of each session to recall context from previous sessions.',
-		'Update it as you work with important decisions, progress, patterns, and context you want to remember across sessions.',
-		'',
 		'## Your Role',
 		'',
 		'As a Designer, you:',
@@ -617,7 +552,7 @@ export function buildDesignerSystemPrompt(agent: PersistentAgent, projectDescrip
 		'## Design Workflow',
 		'',
 		'1. Read the briefing ticket thoroughly — understand the user problem, constraints, and goals',
-		'2. Search the component wiki and MemPalace for existing design patterns and decisions',
+		'2. Search MemPalace for existing design patterns and decisions (see memory section below)',
 		'3. Create a new Figma page/frame on your playground board named: `{ticket_id} — {brief description}`',
 		'4. Design your unique interpretation of the briefing',
 		'5. Take screenshots of your work and attach them to the ClickUp ticket as comments',
@@ -681,18 +616,9 @@ export function buildDesignerSystemPrompt(agent: PersistentAgent, projectDescrip
 		);
 	}
 
+	lines.push('', ...buildMemoryBlock(memoryPath));
+
 	lines.push(
-		'',
-		'## Shared Team Memory (MemPalace)',
-		'',
-		'Before starting design work, search the shared memory for context:',
-		'- `mcp__mempalace__mempalace_search` — find past design decisions and context',
-		'- `mcp__mempalace__mempalace_kg_query` — check what\'s known about involved components/features',
-		'',
-		'After completing your design, update MemPalace:',
-		'- `mcp__mempalace__mempalace_add_drawer` — record your design approach and key decisions',
-		'- `mcp__mempalace__mempalace_kg_add` — record facts about design patterns you created or discovered',
-		'- Never store secrets, credentials, tokens, API keys, personal data, or other sensitive information in MemPalace.',
 		'',
 		'## Ticket Status on Completion',
 		'',
@@ -712,10 +638,6 @@ export function buildVisualDesignerSystemPrompt(agent: PersistentAgent, projectD
 		'You are a senior visual designer working in Jan\'s design pipeline. You receive approved UX directions',
 		'and produce polished, production-ready visual implementations in Figma. Unlike UX designers who explore',
 		'multiple directions, you focus on ONE approved direction and make it pixel-perfect.',
-		'',
-		`Your persistent memory file is at: ${memoryPath}`,
-		'Read this file at the start of each session to recall context from previous sessions.',
-		'Update it as you work with important decisions, progress, patterns, and context you want to remember across sessions.',
 		'',
 		'## Your Role',
 		'',
@@ -824,18 +746,9 @@ export function buildVisualDesignerSystemPrompt(agent: PersistentAgent, projectD
 		);
 	}
 
+	lines.push('', ...buildMemoryBlock(memoryPath));
+
 	lines.push(
-		'',
-		'## Shared Team Memory (MemPalace)',
-		'',
-		'Before starting design work, search the shared memory for context:',
-		'- `mcp__mempalace__mempalace_search` — find past design decisions and context',
-		'- `mcp__mempalace__mempalace_kg_query` — check what\'s known about involved components/features',
-		'',
-		'After completing your design, update MemPalace:',
-		'- `mcp__mempalace__mempalace_add_drawer` — record your design approach and key decisions',
-		'- `mcp__mempalace__mempalace_kg_add` — record facts about design patterns you created or discovered',
-		'- Never store secrets, credentials, tokens, API keys, personal data, or other sensitive information in MemPalace.',
 		'',
 		'## Ticket Status on Completion',
 		'',
@@ -898,7 +811,7 @@ Ticket URL: ${ticket.ticketUrl}
 6. Notify the designer of your review via claude-peers:
    - Call mcp__peers__list_peers with scope="machine" to find the designer
    - If found, use mcp__peers__send_message to send a brief summary of your verdict and key feedback
-7. Update your memory file with your review decision and reasoning`;
+7. Update MemPalace with your review decision and reasoning (use \`mcp__mempalace__mempalace_add_drawer\` and \`mcp__mempalace__mempalace_kg_add\`)`;
 }
 
 export function buildConferencePrompt(agent: PersistentAgent, partnerName: string, topic: string): string {
@@ -927,7 +840,7 @@ export function buildConferencePrompt(agent: PersistentAgent, partnerName: strin
 		'- Take turns — send a message via `mcp__peers__send_message`, then check for replies via `mcp__peers__check_messages`',
 		'- After sending a message, wait ~10 seconds then call `mcp__peers__check_messages` to see if a reply arrived',
 		`- If ${partnerName} hasn't registered yet, wait a few seconds and retry \`mcp__peers__list_peers\` (with scope="machine")`,
-		'- When discussion is complete, call `mcp__peers__set_summary` with a summary of the outcomes, then also save to your memory file',
+		'- When discussion is complete, call `mcp__peers__set_summary` with a summary of the outcomes, then save to MemPalace via `mcp__mempalace__mempalace_add_drawer`',
 	];
 	return lines.join('\n');
 }

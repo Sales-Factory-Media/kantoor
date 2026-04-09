@@ -355,7 +355,7 @@ Ticket URL: ${ticketUrl}
 - Pick the best agent from your roster and launch them via the HTTP API
 - IMPORTANT: In the additionalPrompt, instruct them that when they finish, they must move the ticket to "qa test" using mcp__clickup__clickup_update_task (status: "qa test")
 
-6. Update your memory file with your decision`;
+6. Update MemPalace with your decision (use mcp__mempalace__mempalace_add_drawer)`;
 
 	// Launch Darryl
 	const newSessionId = crypto.randomUUID();
@@ -489,7 +489,7 @@ Once the designer is done, review their Figma output for:
 - Usability and accessibility
 Comment with specific art direction feedback if revisions are needed.`}
 
-5. Update your memory file with your decisions`;
+5. Update MemPalace with your decisions (use mcp__mempalace__mempalace_add_drawer)`;
 
 	// Launch Jan
 	const newSessionId = crypto.randomUUID();
@@ -583,8 +583,7 @@ Ticket URL: ${ticketUrl}
    - Tag each ticket with "UX-prototype-briefing" using mcp__clickup__clickup_add_tag_to_task
 8. After creating all 5 tickets, comment on the parent ticket "${ticketId}" with a summary of the 5 directions you created
 9. Move the ticket to "qa test" using mcp__clickup__clickup_update_task (task_id: "${ticketId}", status: "qa test")
-10. Update MemPalace with your design directions and reasoning
-11. Update your memory file`;
+10. Update MemPalace with your design directions and reasoning (use mcp__mempalace__mempalace_add_drawer and mcp__mempalace__mempalace_kg_add)`;
 
 	// Launch the PM
 	const newSessionId = crypto.randomUUID();
@@ -703,7 +702,7 @@ Ticket URL: ${ticketUrl}
 6. Take screenshots of your work using figma_take_screenshot
 7. Post your results as a comment on the ClickUp ticket with screenshots and a summary of your design approach
 8. Move the ticket to "qa test" using mcp__clickup__clickup_update_task (task_id: "${ticketId}", status: "qa test")
-9. Update your memory file with what you designed and key decisions`;
+9. Update MemPalace with what you designed and key decisions (use mcp__mempalace__mempalace_add_drawer)`;
 
 	// Launch the designer
 	const newSessionId = crypto.randomUUID();
@@ -821,7 +820,7 @@ Ticket URL: ${ticketUrl}
 8. Take screenshots of your work using figma_take_screenshot
 9. Post your results as a comment on the ClickUp ticket with screenshots and the Figma page link
 10. Move the ticket to "qa test" using mcp__clickup__clickup_update_task (task_id: "${ticketId}", status: "qa test")
-11. Update your memory file with what you designed and key decisions`;
+11. Update MemPalace with what you designed and key decisions (use mcp__mempalace__mempalace_add_drawer)`;
 
 	// Launch the visual designer
 	const newSessionId = crypto.randomUUID();

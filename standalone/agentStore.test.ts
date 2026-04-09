@@ -115,11 +115,12 @@ describe('buildSystemPrompt', () => {
 		expect(prompt).not.toContain('Head of quality');
 	});
 
-	it('includes memory path', () => {
+	it('includes memory path and MemPalace instructions', () => {
 		const agent = makeAgent();
 		const prompt = buildSystemPrompt(agent);
 		expect(prompt).toContain('MEMORY.md');
-		expect(prompt).toContain('Read this file at the start of each session');
+		expect(prompt).toContain('MemPalace');
+		expect(prompt).toContain('BEFORE YOU START');
 	});
 
 	it('omits role line when both roleShort and roleFull are empty', () => {
@@ -197,9 +198,11 @@ describe('buildDarrylSystemPrompt', () => {
 		expect(prompt).toContain('crm — Customer management app');
 	});
 
-	it('includes memory path', () => {
+	it('includes memory path and MemPalace instructions', () => {
 		const prompt = buildDarrylSystemPrompt(darryl, makeRoster(), 3333);
 		expect(prompt).toContain('MEMORY.md');
+		expect(prompt).toContain('MemPalace');
+		expect(prompt).toContain('BEFORE YOU START');
 	});
 
 	it('includes decision framework section', () => {
