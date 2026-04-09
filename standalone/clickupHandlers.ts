@@ -152,27 +152,35 @@ export function autoDarrylPickup(ctx: ServerContext): void {
 export function autoJanPickup(ctx: ServerContext): void {
 	if (ctx.isWorkerMode) return;
 
-	// Collect all TODO tickets assigned to Jan
-	const todoTickets: Array<{ id: string; name: string; url: string }> = [];
+	// Collect tickets assigned to Jan in "to refine" or "to do" status
+	const janTickets: Array<{ id: string; name: string; url: string; status: string }> = [];
 	for (const group of ctx.clickupTickets) {
-		if (group.name.toLowerCase() !== 'to do') continue;
+		const statusLower = group.name.toLowerCase();
+		if (statusLower !== 'to do' && statusLower !== 'to refine') continue;
 		for (const task of group.tasks) {
 			if (task.assignees.some(a => a.username === JAN_CLICKUP_USERNAME)) {
-				todoTickets.push({ id: task.id, name: task.name, url: task.url });
+				janTickets.push({ id: task.id, name: task.name, url: task.url, status: statusLower });
 			}
 		}
 	}
 
-	if (todoTickets.length === 0) return;
+	if (janTickets.length === 0) return;
 
 	// Jan handles one ticket at a time (like Darryl on the hub)
 	const jan = ctx.persistentAgents.find(p => p.name === 'Jan');
 	if (jan?.currentSessionId) return; // Already busy
 
-	const ticket = todoTickets[0];
-	console.log(`[Standalone] Auto-pickup: Jan taking ticket ${ticket.id}`);
+	// Prioritize "to refine" tickets (Phase 1) over "to do" (Phase 2)
+	janTickets.sort((a, b) => {
+		if (a.status === 'to refine' && b.status !== 'to refine') return -1;
+		if (a.status !== 'to refine' && b.status === 'to refine') return 1;
+		return 0;
+	});
+
+	const ticket = janTickets[0];
+	console.log(`[Standalone] Auto-pickup: Jan taking ticket ${ticket.id} (status: ${ticket.status})`);
 	handleJanDesignBriefing(
-		{ ticketId: ticket.id, ticketName: ticket.name, ticketUrl: ticket.url },
+		{ ticketId: ticket.id, ticketName: ticket.name, ticketUrl: ticket.url, ticketStatus: ticket.status },
 		ctx,
 	);
 }
@@ -375,6 +383,7 @@ export function handleJanDesignBriefing(msg: Record<string, unknown>, ctx: Serve
 	const ticketId = msg.ticketId as string;
 	const ticketName = msg.ticketName as string;
 	const ticketUrl = msg.ticketUrl as string;
+	const ticketStatus = (msg.ticketStatus as string | undefined) ?? 'to do';
 	const { persistentAgents } = ctx;
 
 	// Find or create Jan
@@ -419,21 +428,27 @@ export function handleJanDesignBriefing(msg: Record<string, unknown>, ctx: Serve
 	// Build prompts
 	const systemPrompt = buildJanSystemPrompt(jan, roster, SERVER_PORT);
 
-	const initialTask = `You have received a design briefing via ClickUp ticket ${ticketId}: "${ticketName}"
+	// Build initial task based on ticket status — two distinct modes
+	const isRefineMode = ticketStatus === 'to refine';
+
+	const initialTask = `You have received a design ticket via ClickUp ticket ${ticketId}: "${ticketName}"
 Ticket URL: ${ticketUrl}
+Current ticket status: **${ticketStatus}**
 
 ## Steps
 
 1. FIRST: Move the ticket to "in progress" using mcp__clickup__clickup_update_task (task_id: "${ticketId}", status: "in progress")
 2. Read the full ticket with mcp__clickup__clickup_get_task (task_id: "${ticketId}")
 3. Read the ticket's comments with mcp__clickup__clickup_get_task_comments (task_id: "${ticketId}") for additional context
-4. Assess the briefing: Is it clear enough to start design work? Does it have user needs, constraints, and goals?
+4. Assess the ticket: Is it clear enough to proceed? Does it have the information you need?
 
 ### If NOT complete (needs more info):
 - Comment on the ticket with specific questions using mcp__clickup__clickup_create_task_comment
-- Move the ticket back to "to do" using mcp__clickup__clickup_update_task (status: "to do")
+- Move the ticket back to "${ticketStatus}" using mcp__clickup__clickup_update_task (status: "${ticketStatus}")
 
-### If complete — Start Phase 1 (UX Exploration):
+${isRefineMode ? `### Mode: UX Exploration (ticket was "to refine")
+
+This ticket is in the **brainstorming/exploration phase**. Your job is to kick off Phase 1 — UX Exploration.
 
 **Step A — Delegate to PM agent to create 5 UX briefings:**
 Launch the PM agent via the HTTP API. The PM will read the briefing and create 5 diverse UX design sub-tickets.
@@ -453,7 +468,25 @@ curl -X POST http://localhost:${SERVER_PORT}/api/launch-designer -H 'Content-Typ
 \`\`\`
 IMPORTANT: Only one designer can run at a time (they share the same local Figma instance).
 Launch the first designer, wait for it to finish (ticket moves to "qa test"), then launch the next.
+Use the workspace path of the PROJECT being designed (e.g. ~/Projects/brightmind), NOT the kantoor-workspace.` : `### Mode: Visual Design (ticket was "to do")
+
+This ticket is in the **production-ready visual implementation phase**. The UX exploration is done — a direction has been chosen.
+Your job is to kick off Phase 2 — Visual Design for polished, production-ready output.
+
+**Step A — Launch a Visual Designer:**
+Launch a designer agent on this ticket for polished visual implementation:
+\`\`\`
+curl -X POST http://localhost:${SERVER_PORT}/api/launch-designer -H 'Content-Type: application/json' -d '{"workspacePath":"<project-workspace-path>","ticketId":"${ticketId}","ticketName":"${ticketName}","ticketUrl":"${ticketUrl}"}'
+\`\`\`
 Use the workspace path of the PROJECT being designed (e.g. ~/Projects/brightmind), NOT the kantoor-workspace.
+Wait for the designer to finish (ticket moves to "qa test").
+
+**Step B — Review the visual output:**
+Once the designer is done, review their Figma output for:
+- Brand consistency and design system alignment
+- Visual polish and production-readiness
+- Usability and accessibility
+Comment with specific art direction feedback if revisions are needed.`}
 
 5. Update your memory file with your decisions`;
 
