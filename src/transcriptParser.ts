@@ -20,6 +20,9 @@ export const PERMISSION_EXEMPT_TOOLS = new Set([
 	'Task', 'AskUserQuestion',
 	'mcp__peers__send_message', 'mcp__peers__check_messages',
 	'mcp__peers__list_peers', 'mcp__peers__set_summary',
+	// MemPalace read-only tools are exempt; write/mutation tools
+	// (add_drawer, delete_drawer, kg_add, kg_invalidate, diary_write)
+	// require the normal permission flow to avoid accidental data writes.
 	'mcp__mempalace__mempalace_status',
 	'mcp__mempalace__mempalace_list_wings',
 	'mcp__mempalace__mempalace_list_rooms',
@@ -27,17 +30,12 @@ export const PERMISSION_EXEMPT_TOOLS = new Set([
 	'mcp__mempalace__mempalace_search',
 	'mcp__mempalace__mempalace_check_duplicate',
 	'mcp__mempalace__mempalace_get_aaak_spec',
-	'mcp__mempalace__mempalace_add_drawer',
-	'mcp__mempalace__mempalace_delete_drawer',
 	'mcp__mempalace__mempalace_kg_query',
-	'mcp__mempalace__mempalace_kg_add',
-	'mcp__mempalace__mempalace_kg_invalidate',
 	'mcp__mempalace__mempalace_kg_timeline',
 	'mcp__mempalace__mempalace_kg_stats',
 	'mcp__mempalace__mempalace_traverse',
 	'mcp__mempalace__mempalace_find_tunnels',
 	'mcp__mempalace__mempalace_graph_stats',
-	'mcp__mempalace__mempalace_diary_write',
 	'mcp__mempalace__mempalace_diary_read',
 ]);
 

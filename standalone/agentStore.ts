@@ -52,13 +52,20 @@ export function ensureAgentMemory(agentId: string): void {
 	}
 }
 
+function normalizeUrlHost(host: string): string {
+	if (host.startsWith('[') && host.endsWith(']')) return host;
+	if (host.includes(':')) return `[${host}]`;
+	return host;
+}
+
 export function ensureMempalaceMcpConfig(hubHost: string = 'localhost'): string {
 	const configPath = path.join(SETTINGS_DIR, 'mempalace-mcp-config.json');
+	const normalizedHost = normalizeUrlHost(hubHost);
 	const config = {
 		mcpServers: {
 			mempalace: {
 				type: 'sse' as const,
-				url: `http://${hubHost}:${MEMPALACE_SERVER_PORT}/sse`,
+				url: `http://${normalizedHost}:${MEMPALACE_SERVER_PORT}/sse`,
 			},
 		},
 	};
@@ -179,11 +186,15 @@ export function buildSystemPrompt(agent: PersistentAgent, projectDescription?: s
 		'- Call `mcp__mempalace__mempalace_search` with your task description to find relevant past decisions and context',
 		'- Call `mcp__mempalace__mempalace_kg_query` for entities related to your task',
 		'',
-		'**When you learn something important:**',
+		'**When you learn something important or make a significant change:**',
 		'- Save decisions and discoveries with `mcp__mempalace__mempalace_add_drawer`',
 		'- Check for duplicates first with `mcp__mempalace__mempalace_check_duplicate`',
 		'- Record facts with `mcp__mempalace__mempalace_kg_add` (e.g., "payment-service uses Stripe API")',
 		'- Write session summaries with `mcp__mempalace__mempalace_diary_write`',
+		'',
+		'**After any significant change** (architecture decisions, API changes, config changes, new integrations, bug root causes):',
+		'- Update MemPalace so other agents benefit from your discoveries',
+		'- Use `mempalace_add_drawer` for decisions/context and `mempalace_kg_add` for facts about services/components',
 		'',
 		'**What NOT to save:**',
 		'- Routine code changes (that\'s what git is for)',
@@ -294,9 +305,10 @@ export function buildDarrylSystemPrompt(agent: PersistentAgent, roster: RosterEn
 		'- `mcp__mempalace__mempalace_kg_query` — check what\'s known about involved services/components',
 		'- `mcp__mempalace__mempalace_status` — get an overview of the palace',
 		'',
-		'After making an assignment decision, save it:',
+		'After making an assignment decision or any significant change, update MemPalace:',
 		'- `mcp__mempalace__mempalace_add_drawer` — record the decision and reasoning',
 		'- `mcp__mempalace__mempalace_kg_add` — record any new facts learned from the ticket',
+		'- Always update MemPalace after architecture decisions, workflow changes, or discoveries that other agents would benefit from',
 		'- Never store secrets, credentials, tokens, API keys, personal data, or other sensitive information in MemPalace.',
 		'- If a ticket contains sensitive details, omit or redact them before saving any memory entry.',
 	);
