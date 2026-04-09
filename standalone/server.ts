@@ -5,7 +5,7 @@ import type { WebSocket } from 'ws';
 import type { MessageSink } from '../src/types.js';
 import { loadKnownProjects, addKnownProject } from '../src/projectStore.js';
 import { SERVER_PORT, DESIGNER_ROLE_SHORT, JAN_ROLE_SHORT, REVIEW_TRIGGER_DELAY_MS } from './constants.js';
-import { ProjectScanner, decodeProjectHash } from './projectScanner.js';
+import { ProjectScanner, decodeProjectHash, getLiveSessionIds } from './projectScanner.js';
 import { StandaloneAgentManager } from './standaloneAgentManager.js';
 import {
 	loadPersistentAgents,
