@@ -3,7 +3,7 @@ import type { ToolActivity } from '../office/types.js'
 import type { OfficeState } from '../office/engine/officeState.js'
 import type { OfflineAgent, KnownProject } from '../hooks/useExtensionMessages.js'
 import { vscode } from '../vscodeApi.js'
-import { FOREMAN_ROOM_NAME, ART_DIRECTOR_ROOM_NAME } from '../constants.js'
+import { FOREMAN_ROOM_NAME } from '../constants.js'
 
 interface AgentSidebarProps {
   officeState: OfficeState
