@@ -3,7 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { loadKnownProjects } from '../src/projectStore.js';
 import type { RosterEntry } from './agentStore.js';
-import { launchAgentOnTicket, handleLaunchDesigner } from './clickupHandlers.js';
+import { launchAgentOnTicket, handleLaunchDesigner, handleJanReviewDesigner } from './clickupHandlers.js';
 import { WEBVIEW_DIR } from './serverContext.js';
 import type { ServerContext } from './serverContext.js';
 
@@ -109,6 +109,41 @@ export function createHttpServer(ctx: ServerContext): http.Server {
 						const result = handleLaunchDesigner(json, ctx);
 						res.writeHead(result.success ? 200 : 400);
 						res.end(JSON.stringify(result));
+					} catch {
+						res.writeHead(400);
+						res.end(JSON.stringify({ error: 'Invalid JSON' }));
+					}
+				});
+				return;
+			}
+
+			if (req.method === 'POST' && urlPath === '/api/review-designer') {
+				const MAX_BODY_BYTES = 64 * 1024;
+				let body = '';
+				let exceeded = false;
+				req.on('data', (chunk: Buffer) => {
+					if (exceeded) return;
+					body += chunk.toString();
+					if (Buffer.byteLength(body) > MAX_BODY_BYTES) {
+						exceeded = true;
+						res.writeHead(413);
+						res.end(JSON.stringify({ error: 'Request body too large' }));
+						req.destroy();
+					}
+				});
+				req.on('end', () => {
+					if (exceeded) return;
+					try {
+						const json = JSON.parse(body) as Record<string, unknown>;
+						handleJanReviewDesigner({
+							ticketId: json.ticketId as string,
+							ticketName: (json.ticketName as string) || '',
+							ticketUrl: (json.ticketUrl as string) || '',
+							designerName: (json.designerName as string) || 'unknown',
+							workspacePath: (json.workspacePath as string) || '',
+						}, ctx);
+						res.writeHead(200);
+						res.end(JSON.stringify({ success: true }));
 					} catch {
 						res.writeHead(400);
 						res.end(JSON.stringify({ error: 'Invalid JSON' }));

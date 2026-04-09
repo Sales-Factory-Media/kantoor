@@ -4,7 +4,7 @@ import { WebSocketServer } from 'ws';
 import type { WebSocket } from 'ws';
 import type { MessageSink } from '../src/types.js';
 import { loadKnownProjects, addKnownProject } from '../src/projectStore.js';
-import { SERVER_PORT } from './constants.js';
+import { SERVER_PORT, DESIGNER_ROLE_SHORT, JAN_ROLE_SHORT, REVIEW_TRIGGER_DELAY_MS } from './constants.js';
 import { ProjectScanner, decodeProjectHash } from './projectScanner.js';
 import { StandaloneAgentManager } from './standaloneAgentManager.js';
 import {
@@ -38,6 +38,8 @@ import {
 	handleDarrylHandleTicket,
 	handleJanDesignBriefing,
 	handleLaunchDesigner,
+	handleJanReviewDesigner,
+	autoDesignerRevisionPickup,
 	autoDarrylPickup,
 	autoJanPickup,
 } from './clickupHandlers.js';
@@ -220,6 +222,7 @@ function handleWebviewReady(ws: WebSocket, ctx: ServerContext): void {
 	if (!ctx.isWorkerMode) {
 		autoDarrylPickup(ctx);
 		autoJanPickup(ctx);
+		autoDesignerRevisionPickup(ctx);
 	}
 }
 
@@ -248,6 +251,13 @@ const messageHandlers: Record<string, (ws: WebSocket, msg: Record<string, unknow
 		const result = handleLaunchDesigner(msg, ctx);
 		ctx.broadcastSink.postMessage({ type: 'designerLaunched', ...result });
 	},
+	janReviewDesigner: (_ws, msg, ctx) => handleJanReviewDesigner({
+		ticketId: msg.ticketId as string,
+		ticketName: (msg.ticketName as string) || '',
+		ticketUrl: (msg.ticketUrl as string) || '',
+		designerName: (msg.designerName as string) || 'unknown',
+		workspacePath: (msg.workspacePath as string) || '',
+	}, ctx),
 };
 
 // Not supported in standalone mode
@@ -379,10 +389,36 @@ async function main(): Promise<void> {
 			const sessionId = path.basename(jsonlFile, '.jsonl');
 			const pa = findPersistentAgentBySession(sessionId);
 			if (pa) {
+				// Capture ticket info before clearing
+				const completedTicket = pa.currentTicketId ? {
+					ticketId: pa.currentTicketId,
+					ticketName: pa.currentTicketName || '',
+					ticketUrl: pa.currentTicketUrl || '',
+					designerName: pa.name,
+					workspacePath: pa.workspacePath,
+				} : null;
+
 				pa.lastSessionEnd = new Date().toISOString();
 				pa.sessionCount = (pa.sessionCount || 0) + 1;
+				if (pa.currentTicketId) {
+					pa.lastTicketId = pa.currentTicketId;
+				}
 				pa.currentSessionId = undefined;
+				pa.currentTicketId = undefined;
+				pa.currentTicketName = undefined;
+				pa.currentTicketUrl = undefined;
 				savePersistentAgents(persistentAgents);
+
+				// Designer finished → trigger Jan's review
+				if (pa.roleShort === DESIGNER_ROLE_SHORT && completedTicket && !isWorkerMode) {
+					console.log(`[Standalone] Designer "${pa.name}" finished ticket ${completedTicket.ticketId}, triggering Jan review`);
+					setTimeout(() => handleJanReviewDesigner(completedTicket, ctx), REVIEW_TRIGGER_DELAY_MS);
+				}
+
+				// Jan finished (review or briefing) → check for revision pickups
+				if (pa.roleShort === JAN_ROLE_SHORT && !isWorkerMode) {
+					setTimeout(() => autoDesignerRevisionPickup(ctx), REVIEW_TRIGGER_DELAY_MS);
+				}
 			}
 			agentManager.removeSession(jsonlFile);
 			broadcastSink.postMessage({ type: 'offlineAgents', agents: getOfflineAgents(agentManager, persistentAgents) });
