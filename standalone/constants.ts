@@ -19,6 +19,10 @@ export const JAN_ROLE_SHORT = 'Art Director';
 export const JAN_CLICKUP_USERNAME = 'Jan Levinson';
 export const JAN_WORKSPACE = '~/Projects/kantoor-workspace';
 
+// ── Project Manager ──────────────────────────────────────
+export const PM_ROLE_SHORT = 'Project Manager';
+export const PM_WORKSPACE = '~/Projects/kantoor-workspace';
+
 // ── Designer ──────────────────────────────────────────────
 export const DESIGNER_ROLE_SHORT = 'Designer';
 
