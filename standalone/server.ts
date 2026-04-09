@@ -289,6 +289,24 @@ async function main(): Promise<void> {
 	const agentManager = new StandaloneAgentManager();
 	let persistentAgents = loadPersistentAgents();
 
+	// ── Clear stale session IDs on startup ───────────────────
+	// Persistent agents may have currentSessionId from a previous server run
+	// where the session ended after the server stopped. Clear any that don't
+	// have a live claude process.
+	const liveOnStartup = getLiveSessionIds();
+	let clearedStale = false;
+	for (const pa of persistentAgents) {
+		if (pa.currentSessionId && !liveOnStartup.has(pa.currentSessionId)) {
+			console.log(`[Standalone] Clearing stale session ${pa.currentSessionId} from agent "${pa.name}"`);
+			pa.lastSessionEnd = pa.lastSessionEnd || new Date().toISOString();
+			pa.currentSessionId = undefined;
+			clearedStale = true;
+		}
+	}
+	if (clearedStale) {
+		savePersistentAgents(persistentAgents);
+	}
+
 	// ── WebSocket broadcast sink (webview clients only) ──────
 	const webviewClients = new Set<WebSocket>();
 

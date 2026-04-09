@@ -17,7 +17,7 @@ interface WatchedProject {
 }
 
 /** Get the set of session IDs that have a live claude process */
-function getLiveSessionIds(): Set<string> {
+export function getLiveSessionIds(): Set<string> {
 	const ids = new Set<string>();
 	try {
 		const output = execSync(

@@ -89,10 +89,30 @@ export function BottomToolbar({
           fontSize: '20px',
           color: 'var(--pixel-text-dim)',
           userSelect: 'none',
-          pointerEvents: 'none',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '8px',
         }}
       >
-        Watching... {countdown != null ? `(next fetch in ${countdown})` : 'Countdown not running'}
+        <span style={{ pointerEvents: 'none' }}>
+          Watching... {countdown != null ? `(next fetch in ${countdown})` : 'Countdown not running'}
+        </span>
+        {countdown != null && (
+          <button
+            onClick={() => vscode.postMessage({ type: 'clickupRefresh' })}
+            onMouseEnter={() => setHovered('fetchNow')}
+            onMouseLeave={() => setHovered(null)}
+            title="Fetch now"
+            style={{
+              ...btnBase,
+              fontSize: '16px',
+              padding: '2px 8px',
+              border: hovered === 'fetchNow' ? '2px solid var(--pixel-accent)' : '2px solid transparent',
+            }}
+          >
+            Fetch now
+          </button>
+        )}
       </div>
     )
   }
