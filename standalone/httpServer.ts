@@ -57,8 +57,9 @@ function handleApiLaunchAgent(json: Record<string, unknown>, res: http.ServerRes
 
 	const useTeam = json.useTeam as boolean | undefined;
 	const additionalPrompt = json.additionalPrompt as string | undefined;
+	const aiReviewMode = json.aiReviewMode as boolean | undefined;
 
-	const result = launchAgentOnTicket(agentId, ticketId, ticketName, ticketUrl, ctx, { useTeam, additionalPrompt });
+	const result = launchAgentOnTicket(agentId, ticketId, ticketName, ticketUrl, ctx, { useTeam, additionalPrompt, aiReviewMode });
 	if (result.success) {
 		res.writeHead(200);
 		res.end(JSON.stringify({ success: true }));

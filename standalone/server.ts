@@ -4,7 +4,7 @@ import { WebSocketServer } from 'ws';
 import type { WebSocket } from 'ws';
 import type { MessageSink } from '../src/types.js';
 import { loadKnownProjects, addKnownProject } from '../src/projectStore.js';
-import { SERVER_PORT, DESIGNER_ROLE_SHORT, VISUAL_DESIGNER_ROLE_SHORT, JAN_ROLE_SHORT, REVIEW_TRIGGER_DELAY_MS } from './constants.js';
+import { SERVER_PORT, DESIGNER_ROLE_SHORT, VISUAL_DESIGNER_ROLE_SHORT, VISUAL_QA_ROLE_SHORT, JAN_ROLE_SHORT, REVIEW_TRIGGER_DELAY_MS } from './constants.js';
 import { ProjectScanner, decodeProjectHash, getLiveSessionIds } from './projectScanner.js';
 import { StandaloneAgentManager } from './standaloneAgentManager.js';
 import {
@@ -12,6 +12,8 @@ import {
 	savePersistentAgents,
 	pickRandomName,
 	ensureAgentMemory,
+	seedDesignTeams,
+	buildOrganogram,
 } from './agentStore.js';
 import type { PersistentAgent } from './agentStore.js';
 import type { ClickUpConfig } from './clickupClient.js';
@@ -41,6 +43,8 @@ import {
 	handleLaunchDesigner,
 	handleLaunchVisualDesigner,
 	handleJanReviewDesigner,
+	handleVisualQaReview,
+	autoVisualQaPickup,
 	autoDesignerRevisionPickup,
 	autoDarrylPickup,
 	autoJanPickup,
@@ -220,6 +224,9 @@ function handleWebviewReady(ws: WebSocket, ctx: ServerContext): void {
 	// Send worker status
 	broadcastWorkerStatus(ctx);
 
+	// Send organogram snapshot
+	ws.send(JSON.stringify({ type: 'organogramSnapshot', organogram: buildOrganogram(persistentAgents) }));
+
 	// Try auto-pickup on client connect (agents may have become free since last poll)
 	if (!ctx.isWorkerMode) {
 		autoDarrylPickup(ctx);
@@ -260,6 +267,9 @@ const messageHandlers: Record<string, (ws: WebSocket, msg: Record<string, unknow
 	launchVisualDesigner: (_ws, msg, ctx) => {
 		const result = handleLaunchVisualDesigner(msg, ctx);
 		ctx.broadcastSink.postMessage({ type: 'visualDesignerLaunched', ...result });
+	},
+	getOrganogram: (ws, _msg, ctx) => {
+		ws.send(JSON.stringify({ type: 'organogramSnapshot', organogram: buildOrganogram(ctx.persistentAgents) }));
 	},
 	janReviewDesigner: (_ws, msg, ctx) => handleJanReviewDesigner({
 		ticketId: msg.ticketId as string,
@@ -315,6 +325,15 @@ async function main(): Promise<void> {
 	}
 	if (clearedStale) {
 		savePersistentAgents(persistentAgents);
+	}
+
+	// ── Seed design teams (UX + Visual: 1 PM + 1 QA + 5 workers each) ──
+	if (!isWorkerMode) {
+		const seeded = seedDesignTeams(persistentAgents);
+		if (seeded) {
+			savePersistentAgents(persistentAgents);
+			console.log('[Standalone] Seeded design teams (UX + Visual)');
+		}
 	}
 
 	// ── WebSocket broadcast sink (webview clients only) ──────
@@ -437,10 +456,21 @@ async function main(): Promise<void> {
 				pa.currentTicketUrl = undefined;
 				savePersistentAgents(persistentAgents);
 
-				// Designer (UX or Visual) finished → trigger Jan's review
-				if ((pa.roleShort === DESIGNER_ROLE_SHORT || pa.roleShort === VISUAL_DESIGNER_ROLE_SHORT) && completedTicket && !isWorkerMode) {
-					console.log(`[Standalone] ${pa.roleShort} "${pa.name}" finished ticket ${completedTicket.ticketId}, triggering Jan review`);
+				// Visual Designer finished → trigger Visual QA AI Review
+				if (pa.roleShort === VISUAL_DESIGNER_ROLE_SHORT && completedTicket && !isWorkerMode) {
+					console.log(`[Standalone] Visual Designer "${pa.name}" finished ticket ${completedTicket.ticketId}, triggering Visual QA AI Review`);
+					setTimeout(() => handleVisualQaReview(completedTicket, ctx), REVIEW_TRIGGER_DELAY_MS);
+				}
+
+				// UX Designer finished → trigger Jan's review (existing flow)
+				if (pa.roleShort === DESIGNER_ROLE_SHORT && completedTicket && !isWorkerMode) {
+					console.log(`[Standalone] UX Designer "${pa.name}" finished ticket ${completedTicket.ticketId}, triggering Jan review`);
 					setTimeout(() => handleJanReviewDesigner(completedTicket, ctx), REVIEW_TRIGGER_DELAY_MS);
+				}
+
+				// Visual QA finished → check for revision pickups (in case it sent a ticket back to "to do")
+				if (pa.roleShort === VISUAL_QA_ROLE_SHORT && !isWorkerMode) {
+					setTimeout(() => autoDesignerRevisionPickup(ctx), REVIEW_TRIGGER_DELAY_MS);
 				}
 
 				// Jan finished (review or briefing) → check for revision pickups

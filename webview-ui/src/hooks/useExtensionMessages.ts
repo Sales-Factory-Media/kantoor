@@ -70,6 +70,32 @@ export interface WorkerStatusEntry {
   isHub: boolean
 }
 
+export interface OrganogramNode {
+  id: string
+  name: string
+  roleShort: string
+  roleFull: string
+  teamId?: string
+  reportsToId?: string
+  isOnline: boolean
+  currentTicketId?: string
+  currentTicketName?: string
+}
+
+export interface OrganogramTeam {
+  id: string
+  name: string
+  pmId?: string
+  qaId?: string
+  workerIds: string[]
+}
+
+export interface OrganogramPayload {
+  root: OrganogramNode | null
+  teams: OrganogramTeam[]
+  agents: OrganogramNode[]
+}
+
 export interface ClickUpTask {
   id: string
   name: string
@@ -109,6 +135,7 @@ export interface ExtensionMessageState {
   activeConference: { conferenceId: string; agent1Id: string; agent2Id: string; topic: string } | null
   peersBrokerAvailable: boolean
   workers: WorkerStatusEntry[]
+  organogram: OrganogramPayload | null
 }
 
 export function useExtensionMessages(
@@ -132,6 +159,7 @@ export function useExtensionMessages(
   const [activeConference, setActiveConference] = useState<{ conferenceId: string; agent1Id: string; agent2Id: string; topic: string } | null>(null)
   const [peersBrokerAvailable, setPeersBrokerAvailable] = useState(false)
   const [workers, setWorkers] = useState<WorkerStatusEntry[]>([])
+  const [organogram, setOrganogram] = useState<OrganogramPayload | null>(null)
 
   // Ref to expose saveAgentMeta and forgetAgent outside the effect closure
   const saveAgentMetaRef = useRef<() => void>(() => {})
@@ -176,6 +204,8 @@ export function useExtensionMessages(
 
       if (msg.type === 'offlineAgents') {
         setOfflineAgents(msg.agents as OfflineAgent[])
+      } else if (msg.type === 'organogramSnapshot') {
+        setOrganogram(msg.organogram as OrganogramPayload)
       } else if (msg.type === 'knownProjects') {
         const projects = msg.projects as KnownProject[]
         knownProjectsRef.current = projects
@@ -544,5 +574,5 @@ export function useExtensionMessages(
   const saveAgentMeta = useCallback(() => saveAgentMetaRef.current(), [])
   const forgetAgent = useCallback((sessionId: string) => forgetAgentRef.current(sessionId), [])
 
-  return { agents, selectedAgent, selectAgent: setSelectedAgent, agentTools, agentStatuses, subagentTools, subagentCharacters, layoutReady, loadedAssets, workspaceFolders, agentConversation, offlineAgents, knownProjects, saveAgentMeta, forgetAgent, clickupTickets, clickupConfigured, clickupListId, clickupNextFetchAt, activeConference, peersBrokerAvailable, workers }
+  return { agents, selectedAgent, selectAgent: setSelectedAgent, agentTools, agentStatuses, subagentTools, subagentCharacters, layoutReady, loadedAssets, workspaceFolders, agentConversation, offlineAgents, knownProjects, saveAgentMeta, forgetAgent, clickupTickets, clickupConfigured, clickupListId, clickupNextFetchAt, activeConference, peersBrokerAvailable, workers, organogram }
 }

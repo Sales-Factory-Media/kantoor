@@ -79,6 +79,27 @@ scripts/                      — 7-stage asset extraction pipeline
   wall-tile-editor.html       — Browser UI for editing wall tile appearance
 ```
 
+## Dev Work AI Review (Darryl's flow)
+
+All dev work dispatched by Darryl goes through GitHub Copilot review before reaching humans. Worker finishes → moves ticket to `ai review` (NOT `qa test`) → Copilot reviews the PR. On the next polling cycle, `autoDarrylPickup` picks up `ai review` tickets assigned to Darryl (prioritized over `to do`) and dispatches Darryl with `ticketStatus = 'ai review'`. `handleDarrylHandleTicket` branches on this and gives Darryl an "AI Review dispatch" initial task: find the original implementer in the ticket comments (look for `Assigned to worker: ...`), reassign them via `POST /api/launch-agent` with `aiReviewMode: true`. The reassigned agent receives a feedback-processing initial task: move to `in progress`, read Copilot's PR comments, decide if anything actionable remains, then either fix-and-push-and-back-to-`ai review` or forward to `qa test`. Three-round soft cap: if a ticket has cycled through ai review 3+ times, Darryl tells the agent to be conservative and forward to qa test unless there's a real bug. Reviewer's character matches Visual QA: nitpicky but not hostage-taking.
+
+The `aiReviewMode` flag flows through `launchAgentOnTicket(ctx, options.aiReviewMode)` and the `/api/launch-agent` HTTP endpoint. The default dev system prompt (`buildSystemPrompt` in `agentStore.ts`) tells every worker to move finished work to `ai review` instead of `qa test` and explains the Copilot loop.
+
+## Design Teams (Jan's Office)
+
+Two teams under Jan (Art Director), each with 1 PM, 1 QA reviewer, and 5 worker designers. Defined statically in `TEAMS` (`standalone/agentStore.ts`); seeded on server startup via `seedDesignTeams()` (idempotent). Each `PersistentAgent` carries `teamId` and `reportsToId` for explicit hierarchy.
+
+- **UX Design Team** (`ux-design`): UX Project Manager → 5 UX Designers + 1 UX Quality Reviewer. Workflow: Jan (`to refine` ticket) → UX PM creates 5 briefings → UX Designers work in parallel from a free worker pool → Jan reviews → human review gate.
+- **Visual Design Team** (`visual-design`): Visual Project Manager → 5 Visual Designers + 1 Visual Quality Reviewer. Workflow: Jan (`to do` ticket) → free Visual Designer picks up → moves ticket to `ai review` → Visual QA agent auto-runs AI Review → Pass: ticket → `qa test` (human); Fail: ticket → `to do` with feedback (auto-revision picks it up). UX team does NOT yet have AI Review.
+
+**Figma lock**: Only one designer (UX OR Visual) can run at a time across both teams — they share the local Figma instance. The launch endpoint returns "all designers busy" if violated; PMs/Jan should retry.
+
+**Launch handlers**: `handleLaunchDesigner` / `handleLaunchVisualDesigner` pick a free worker from the relevant team (`teamId`-filtered). Workspace is reassigned at launch time. `handleVisualQaReview` is auto-triggered on `onSessionStale` for finished Visual Designers; `autoVisualQaPickup` recovers stranded `ai review` tickets after server restarts.
+
+**Organogram view**: Webview button under "Conference" in `AgentSidebar`. Renders a tree (Jan → PMs → workers + QA) from `organogramSnapshot` WS payload built by `buildOrganogram()`. Click a node to focus the character.
+
+**QA checklists**: Visual QA uses a placeholder rubric pending the formal checklist (ClickUp 86c99ab8f). UX QA exists in the org but has no automated workflow yet.
+
 ## Standalone Mode
 
 **Entry point**: `standalone/server.ts` → bundled as `dist/standalone.js` via `node esbuild-standalone.js`.
