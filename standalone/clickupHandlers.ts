@@ -1078,7 +1078,11 @@ export function autoVisualQaPickup(ctx: ServerContext): void {
 
 	for (const group of ctx.clickupTickets) {
 		if (group.name.toLowerCase() !== 'ai review') continue;
-		const ticket = group.tasks[0];
+		// Only pick up tickets assigned to Jan — Darryl's ai review tickets
+		// go through autoDarrylPickup → handleDarrylHandleTicket instead
+		const ticket = group.tasks.find(t =>
+			t.assignees.some(a => a.username === JAN_CLICKUP_USERNAME),
+		);
 		if (!ticket) continue;
 		console.log(`[Standalone] Auto-pickup: Visual QA taking stranded ai-review ticket ${ticket.id}`);
 		handleVisualQaReview({

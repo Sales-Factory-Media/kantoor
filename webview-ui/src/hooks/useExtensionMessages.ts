@@ -70,30 +70,22 @@ export interface WorkerStatusEntry {
   isHub: boolean
 }
 
+export type OrganogramNodeType = 'person' | 'team' | 'project'
+
 export interface OrganogramNode {
   id: string
+  parentId: string | null
   name: string
   roleShort: string
   roleFull: string
-  teamId?: string
-  reportsToId?: string
   isOnline: boolean
+  nodeType: OrganogramNodeType
   currentTicketId?: string
   currentTicketName?: string
 }
 
-export interface OrganogramTeam {
-  id: string
-  name: string
-  pmId?: string
-  qaId?: string
-  workerIds: string[]
-}
-
 export interface OrganogramPayload {
-  root: OrganogramNode | null
-  teams: OrganogramTeam[]
-  agents: OrganogramNode[]
+  nodes: OrganogramNode[]
 }
 
 export interface ClickUpTask {

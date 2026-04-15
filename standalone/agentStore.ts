@@ -4,6 +4,7 @@ import * as os from 'os';
 import * as crypto from 'crypto';
 import {
 	MEMPALACE_SERVER_PORT,
+	DARRYL_ROLE_SHORT,
 	DESIGNER_ROLE_SHORT,
 	VISUAL_DESIGNER_ROLE_SHORT,
 	UX_PM_ROLE_SHORT,
@@ -17,6 +18,7 @@ import {
 	JAN_WORKSPACE,
 } from './constants.js';
 import { writeJson } from './serverHelpers.js';
+import { loadKnownProjects } from '../src/projectStore.js';
 
 const SETTINGS_DIR = path.join(os.homedir(), '.pixel-agents');
 const AGENTS_FILE = path.join(SETTINGS_DIR, 'agents.json');
@@ -197,76 +199,194 @@ const OFFICE_NAMES = [
 	'Jordan', 'Hannah', 'Troy', 'Nick', 'Sadiq', 'Hidetoshi',
 ];
 
-// ── Organogram payload ──────────────────────────────────────
+// ── Organogram payload (flat node list for d3-org-chart) ────
+
+export type OrganogramNodeType = 'person' | 'team' | 'project';
 
 export interface OrganogramNode {
 	id: string;
+	parentId: string | null;
 	name: string;
 	roleShort: string;
 	roleFull: string;
-	teamId?: string;
-	reportsToId?: string;
 	isOnline: boolean;
+	nodeType: OrganogramNodeType;
 	currentTicketId?: string;
 	currentTicketName?: string;
 }
 
-export interface OrganogramTeam {
-	id: string;
-	name: string;
-	pmId?: string;
-	qaId?: string;
-	workerIds: string[];
-}
-
 export interface OrganogramPayload {
-	root: OrganogramNode | null;          // Jan
-	teams: OrganogramTeam[];
-	agents: OrganogramNode[];
+	nodes: OrganogramNode[];
 }
 
 export function buildOrganogram(persistentAgents: PersistentAgent[]): OrganogramPayload {
-	const toNode = (a: PersistentAgent): OrganogramNode => ({
-		id: a.id,
-		name: a.name,
-		roleShort: a.roleShort,
-		roleFull: a.roleFull,
-		teamId: a.teamId,
-		reportsToId: a.reportsToId,
-		isOnline: !!a.currentSessionId,
-		currentTicketId: a.currentTicketId,
-		currentTicketName: a.currentTicketName,
+	const nodes: OrganogramNode[] = [];
+
+	// ── Jasper (root) ──
+	const jasperId = '__jasper__';
+	nodes.push({
+		id: jasperId,
+		parentId: null,
+		name: 'Jasper',
+		roleShort: 'Owner',
+		roleFull: 'Owner',
+		isOnline: true,
+		nodeType: 'person',
 	});
 
-	const jan = persistentAgents.find(p => p.name === 'Jan');
-	const root = jan ? toNode(jan) : null;
+	// ── Darryl ──
+	const darryl = persistentAgents.find(p => p.roleShort === DARRYL_ROLE_SHORT);
+	const darrylId = darryl?.id ?? '__darryl__';
+	nodes.push({
+		id: darrylId,
+		parentId: jasperId,
+		name: 'Darryl',
+		roleShort: 'Foreman',
+		roleFull: 'The Foreman. Assesses tickets and dispatches agents.',
+		isOnline: darryl ? !!darryl.currentSessionId : false,
+		nodeType: 'person',
+		currentTicketId: darryl?.currentTicketId,
+		currentTicketName: darryl?.currentTicketName,
+	});
 
-	const teams: OrganogramTeam[] = Object.values(TEAMS).map(team => {
+	// ── Darryl's teams: one per known project ──
+	const knownProjects = loadKnownProjects();
+	// Collect dev agents (not Jan, not design team members, not Darryl)
+	const designAgentIds = new Set<string>();
+	const jan = persistentAgents.find(p => p.roleShort === JAN_ROLE_SHORT);
+	if (jan) designAgentIds.add(jan.id);
+	for (const team of Object.values(TEAMS)) {
+		for (const a of persistentAgents) {
+			if (a.teamId === team.id) designAgentIds.add(a.id);
+		}
+	}
+	const devAgents = persistentAgents.filter(
+		p => p.id !== darrylId && !designAgentIds.has(p.id),
+	);
+
+	// Group dev agents by workspacePath
+	const agentsByWorkspace = new Map<string, PersistentAgent[]>();
+	for (const a of devAgents) {
+		const ws = a.workspacePath || '~/unknown';
+		if (!agentsByWorkspace.has(ws)) agentsByWorkspace.set(ws, []);
+		agentsByWorkspace.get(ws)!.push(a);
+	}
+
+	// Also add project nodes for known projects that have no agents yet
+	for (const kp of knownProjects) {
+		const wsKey = kp.workspacePath;
+		if (!agentsByWorkspace.has(wsKey)) agentsByWorkspace.set(wsKey, []);
+	}
+
+	// Build a project name lookup from known projects
+	const projectNameByWorkspace = new Map<string, string>();
+	for (const kp of knownProjects) {
+		projectNameByWorkspace.set(kp.workspacePath, kp.name);
+	}
+
+	for (const [workspace, agents] of agentsByWorkspace) {
+		const projectName = projectNameByWorkspace.get(workspace)
+			?? workspace.split('/').pop()
+			?? 'Unknown';
+		const projectNodeId = `__project__${workspace}`;
+		nodes.push({
+			id: projectNodeId,
+			parentId: darrylId,
+			name: projectName,
+			roleShort: 'Project',
+			roleFull: workspace,
+			isOnline: agents.some(a => !!a.currentSessionId),
+			nodeType: 'project',
+		});
+		for (const a of agents) {
+			nodes.push({
+				id: a.id,
+				parentId: projectNodeId,
+				name: a.name,
+				roleShort: a.roleShort,
+				roleFull: a.roleFull,
+				isOnline: !!a.currentSessionId,
+				nodeType: 'person',
+				currentTicketId: a.currentTicketId,
+				currentTicketName: a.currentTicketName,
+			});
+		}
+	}
+
+	// ── Jan (Art Director) ──
+	const janId = jan?.id ?? '__jan__';
+	nodes.push({
+		id: janId,
+		parentId: jasperId,
+		name: 'Jan',
+		roleShort: JAN_ROLE_SHORT,
+		roleFull: 'The Art Director. Heads both design teams.',
+		isOnline: jan ? !!jan.currentSessionId : false,
+		nodeType: 'person',
+		currentTicketId: jan?.currentTicketId,
+		currentTicketName: jan?.currentTicketName,
+	});
+
+	// ── Jan's design teams ──
+	for (const team of Object.values(TEAMS)) {
+		const teamNodeId = `__team__${team.id}`;
 		const members = persistentAgents.filter(p => p.teamId === team.id);
+		nodes.push({
+			id: teamNodeId,
+			parentId: janId,
+			name: team.name,
+			roleShort: 'Team',
+			roleFull: team.name,
+			isOnline: members.some(m => !!m.currentSessionId),
+			nodeType: 'team',
+		});
+
 		const pm = members.find(p => p.roleShort === team.pmRole);
 		const qa = members.find(p => p.roleShort === team.qaRole);
 		const workers = members.filter(p => p.roleShort === team.workerRole);
-		return {
-			id: team.id,
-			name: team.name,
-			pmId: pm?.id,
-			qaId: qa?.id,
-			workerIds: workers.map(w => w.id),
-		};
-	});
 
-	// Include all agents that participate in the organogram (Jan + team members).
-	// Other agents (Darryl, devs, etc.) are excluded — the organogram is design-focused.
-	const includeIds = new Set<string>();
-	if (jan) includeIds.add(jan.id);
-	for (const team of teams) {
-		if (team.pmId) includeIds.add(team.pmId);
-		if (team.qaId) includeIds.add(team.qaId);
-		for (const wid of team.workerIds) includeIds.add(wid);
+		if (pm) {
+			nodes.push({
+				id: pm.id,
+				parentId: teamNodeId,
+				name: pm.name,
+				roleShort: 'PM',
+				roleFull: pm.roleFull,
+				isOnline: !!pm.currentSessionId,
+				nodeType: 'person',
+				currentTicketId: pm.currentTicketId,
+				currentTicketName: pm.currentTicketName,
+			});
+		}
+		if (qa) {
+			nodes.push({
+				id: qa.id,
+				parentId: teamNodeId,
+				name: qa.name,
+				roleShort: 'QA',
+				roleFull: qa.roleFull,
+				isOnline: !!qa.currentSessionId,
+				nodeType: 'person',
+				currentTicketId: qa.currentTicketId,
+				currentTicketName: qa.currentTicketName,
+			});
+		}
+		for (const w of workers) {
+			nodes.push({
+				id: w.id,
+				parentId: teamNodeId,
+				name: w.name,
+				roleShort: w.roleShort,
+				roleFull: w.roleFull,
+				isOnline: !!w.currentSessionId,
+				nodeType: 'person',
+				currentTicketId: w.currentTicketId,
+				currentTicketName: w.currentTicketName,
+			});
+		}
 	}
-	const agents = persistentAgents.filter(p => includeIds.has(p.id)).map(toNode);
 
-	return { root, teams, agents };
+	return { nodes };
 }
 
 /**
