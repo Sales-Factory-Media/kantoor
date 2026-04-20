@@ -171,6 +171,9 @@ export function useExtensionMessages(
   const [knownProjects, setKnownProjects] = useState<KnownProject[]>([])
   const knownProjectsRef = useRef<KnownProject[]>([])
 
+  // Offline agents ref for room sizing (effect closure needs current value)
+  const offlineAgentsRef = useRef<OfflineAgent[]>([])
+
   useEffect(() => {
     // Buffer agents from existingAgents until layout is loaded
     let pendingAgents: Array<{ id: number; palette?: number; hueShift?: number; seatId?: string; name?: string; sessionId?: string; folderName?: string; roleShort?: string; roleFull?: string; workspacePath?: string; persistentAgentId?: string }> = []
@@ -202,7 +205,12 @@ export function useExtensionMessages(
       const os = getOfficeState()
 
       if (msg.type === 'offlineAgents') {
-        setOfflineAgents(msg.agents as OfflineAgent[])
+        const incoming = msg.agents as OfflineAgent[]
+        offlineAgentsRef.current = incoming
+        setOfflineAgents(incoming)
+        if (layoutReadyRef.current) {
+          os.regenerateRoomLayout(knownProjectsRef.current, incoming)
+        }
       } else if (msg.type === 'organogramSnapshot') {
         setOrganogram(msg.organogram as OrganogramPayload)
       } else if (msg.type === 'knownProjects') {
@@ -210,7 +218,7 @@ export function useExtensionMessages(
         knownProjectsRef.current = projects
         setKnownProjects(projects)
         if (layoutReadyRef.current) {
-          os.regenerateRoomLayout(projects)
+          os.regenerateRoomLayout(projects, offlineAgentsRef.current)
         }
       } else if (msg.type === 'layoutLoaded') {
         // Generate room layout from known projects and buffered agents
@@ -226,7 +234,7 @@ export function useExtensionMessages(
           }
         }
         pendingAgents = []
-        os.regenerateRoomLayout(knownProjectsRef.current)
+        os.regenerateRoomLayout(knownProjectsRef.current, offlineAgentsRef.current)
         saveAgentMeta(os)
         layoutReadyRef.current = true
         setLayoutReady(true)
@@ -250,7 +258,7 @@ export function useExtensionMessages(
             if (m.persistentAgentId) ch.persistentAgentId = m.persistentAgentId
           }
         }
-        os.regenerateRoomLayout(knownProjectsRef.current)
+        os.regenerateRoomLayout(knownProjectsRef.current, offlineAgentsRef.current)
         saveAgentMeta(os)
       } else if (msg.type === 'agentClosed') {
         const id = msg.id as number
@@ -284,7 +292,7 @@ export function useExtensionMessages(
         os.removeAllSubagents(id)
         setSubagentCharacters((prev) => prev.filter((s) => s.parentAgentId !== id))
         os.removeAgent(id)
-        os.regenerateRoomLayout(knownProjectsRef.current)
+        os.regenerateRoomLayout(knownProjectsRef.current, offlineAgentsRef.current)
       } else if (msg.type === 'existingAgents') {
         const incoming = msg.agents as number[]
         const meta = (msg.agentMeta || {}) as Record<string, { name?: string; palette?: number; hueShift?: number; seatId?: string; roleShort?: string; roleFull?: string; workspacePath?: string; persistentAgentId?: string }>

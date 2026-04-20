@@ -362,6 +362,9 @@ export function OfficeCanvas({ officeState, onClick, zoom, onZoomChange, panRef 
   useEffect(() => {
     const keys = keysDownRef.current
     const handleKeyDown = (e: KeyboardEvent) => {
+      // Don't intercept arrow keys when a text input/textarea/select is focused
+      const tag = (e.target as HTMLElement)?.tagName
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
       if (e.key === 'ArrowUp' || e.key === 'ArrowDown' || e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
         e.preventDefault()
         keys.add(e.key)

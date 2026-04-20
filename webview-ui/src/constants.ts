@@ -94,9 +94,11 @@ export const ROOM_HEIGHT = 7
 export const ROOM_LABEL_ROWS = 2
 export const ROOM_GAP_COLS = 2
 export const ROOM_GAP_ROWS = 2
-export const ROOM_MIN_SEATS = 4
-export const ROOM_EXTRA_SEATS = 2
-export const ROOM_MIN_INTERIOR_WIDTH = 6
+export const ROOM_MIN_SEATS = 1
+export const ROOM_EXTRA_SEATS = 0
+export const ROOM_MIN_INTERIOR_WIDTH = 5
+/** Max desks per row before adding a second row (making the room taller) */
+export const ROOM_MAX_DESKS_PER_ROW = 3
 export const ROOM_FLOOR_COLOR: FloorColor = { h: 35, s: 30, b: 15, c: 0 }
 export const CONFERENCE_ROOM_NAME = 'Conference'
 export const CONFERENCE_ROOM_WIDTH = 8

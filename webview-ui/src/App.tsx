@@ -9,7 +9,6 @@ import { ZoomControls } from './components/ZoomControls.js'
 import { BottomToolbar } from './components/BottomToolbar.js'
 import { DebugView } from './components/DebugView.js'
 import { AgentSidebar } from './components/AgentSidebar.js'
-import { ConversationPanel } from './components/ConversationPanel.js'
 import { ForemanPanel } from './components/ForemanPanel.js'
 import { ArtDirectorPanel } from './components/ArtDirectorPanel.js'
 
@@ -28,7 +27,7 @@ function defaultZoom(): number {
 }
 
 function App() {
-  const { agents, selectedAgent, selectAgent, agentTools, agentStatuses, subagentTools, subagentCharacters, layoutReady, workspaceFolders, agentConversation, offlineAgents, knownProjects, saveAgentMeta, forgetAgent, clickupTickets, clickupConfigured, clickupListId, clickupNextFetchAt, workers, organogram, janDesignConfig } = useExtensionMessages(getOfficeState)
+  const { agents, selectedAgent, selectAgent, agentTools, agentStatuses, subagentTools, subagentCharacters, layoutReady, workspaceFolders, offlineAgents, knownProjects, saveAgentMeta, forgetAgent, clickupTickets, clickupConfigured, clickupListId, clickupNextFetchAt, workers, organogram, janDesignConfig } = useExtensionMessages(getOfficeState)
 
   const [isDebugMode, setIsDebugMode] = useState(false)
   const [zoom, setZoom] = useState(defaultZoom)
@@ -99,12 +98,6 @@ function App() {
           pointerEvents: 'none',
           zIndex: 40,
         }}
-      />
-
-      <ConversationPanel
-        officeState={officeState}
-        selectedAgent={selectedAgent}
-        agentConversation={agentConversation}
       />
 
       <ForemanPanel

@@ -233,15 +233,27 @@ export class OfficeState {
   /** Regenerate the room layout from known projects and current agents */
   regenerateRoomLayout(
     knownProjects: Array<{ name: string; workspacePath: string }>,
+    offlineAgents?: Array<{ projectName?: string }>,
   ): void {
-    // Count agents per project
-    const agentCounts = new Map<string, number>()
+    // Count live agents per project
+    const liveAgentCounts = new Map<string, number>()
     for (const ch of this.characters.values()) {
       if (ch.isSubagent) continue
       if (ch.matrixEffect === 'despawn') continue // don't count departing agents
       const name = ch.projectName || ch.folderName || ''
       if (name) {
-        agentCounts.set(name, (agentCounts.get(name) || 0) + 1)
+        liveAgentCounts.set(name, (liveAgentCounts.get(name) || 0) + 1)
+      }
+    }
+
+    // Count total employed workers per project (offline persistent agents)
+    const employedCounts = new Map<string, number>()
+    if (offlineAgents) {
+      for (const a of offlineAgents) {
+        const name = a.projectName || ''
+        if (name) {
+          employedCounts.set(name, (employedCounts.get(name) || 0) + 1)
+        }
       }
     }
 
@@ -250,17 +262,23 @@ export class OfficeState {
     for (const kp of knownProjects) {
       projectNames.add(kp.name)
     }
-    for (const name of agentCounts.keys()) {
+    for (const name of liveAgentCounts.keys()) {
+      projectNames.add(name)
+    }
+    for (const name of employedCounts.keys()) {
       projectNames.add(name)
     }
 
-    // Sort alphabetically for stable ordering
+    // agentCount = max of employed workers and live agents (employed includes live in most cases)
     const sortedProjects = Array.from(projectNames).sort().map((name) => ({
       name,
-      agentCount: agentCounts.get(name) || 0,
+      agentCount: Math.max(employedCounts.get(name) || 0, liveAgentCounts.get(name) || 0),
     }))
 
-    const { layout, rooms } = generateRoomLayout(sortedProjects)
+    // Count live agents for garage sizing (only cars for online agents)
+    let totalLiveAgents = 0
+    for (const count of liveAgentCounts.values()) totalLiveAgents += count
+    const { layout, rooms } = generateRoomLayout(sortedProjects, totalLiveAgents)
 
     // Store room metadata
     this.rooms = rooms

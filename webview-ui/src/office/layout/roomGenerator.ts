@@ -8,16 +8,13 @@ import {
   ROOM_MIN_SEATS,
   ROOM_EXTRA_SEATS,
   ROOM_MIN_INTERIOR_WIDTH,
+  ROOM_MAX_DESKS_PER_ROW,
   ROOM_FLOOR_COLOR,
   DEFAULT_WALL_COLOR,
   CONFERENCE_ROOM_NAME,
   CONFERENCE_ROOM_WIDTH,
   CONFERENCE_ROOM_SPOTS,
   CONFERENCE_FLOOR_COLOR,
-  WAREHOUSE_ROOM_NAME,
-  WAREHOUSE_MIN_WIDTH,
-  WAREHOUSE_FLOOR_COLOR,
-  WAREHOUSE_MIN_CRATES,
   GARAGE_ROOM_NAME,
   GARAGE_WIDTH,
   GARAGE_FLOOR_COLOR,
@@ -40,8 +37,6 @@ export interface RoomInfo {
   activitySpots: ActivitySpot[]
   /** Whether this is the shared conference room */
   isConferenceRoom?: boolean
-  /** Whether this is the warehouse */
-  isWarehouse?: boolean
   /** Whether this is the garage */
   isGarage?: boolean
   /** Whether this is the foreman's office */
@@ -57,6 +52,7 @@ export interface GeneratedLayout {
 
 export function generateRoomLayout(
   projects: Array<{ name: string; agentCount: number }>,
+  liveAgentCount?: number,
 ): GeneratedLayout {
   if (projects.length === 0) {
     // Empty layout — no rooms
@@ -73,33 +69,34 @@ export function generateRoomLayout(
     }
   }
 
-  // Calculate room dimensions
+  // Calculate room dimensions based on employed workers
+  // 1 chair per worker, 1 desk per 2 workers (rounded up)
+  // Rooms grow taller (multiple desk rows) when desks exceed ROOM_MAX_DESKS_PER_ROW
   const roomSpecs = projects.map((p) => {
     const seatCount = Math.max(p.agentCount + ROOM_EXTRA_SEATS, ROOM_MIN_SEATS)
-    const deskPairs = Math.ceil(seatCount / 2)
-    const interiorWidth = Math.max(ROOM_MIN_INTERIOR_WIDTH, 2 + deskPairs * 3)
+    const deskCount = Math.ceil(seatCount / 2)
+    const deskRows = Math.ceil(deskCount / ROOM_MAX_DESKS_PER_ROW)
+    const desksPerRow = Math.ceil(deskCount / deskRows)
+    const interiorWidth = Math.max(ROOM_MIN_INTERIOR_WIDTH, 2 + desksPerRow * 3)
     const roomWidth = interiorWidth + 2 // add walls
-    return { name: p.name, seatCount, deskPairs, interiorWidth, roomWidth }
+    // Height: each desk row needs 3 tiles (1 desk-top + 1 desk-bottom + 1 chair row)
+    // Plus 1 top padding row for props/bookshelf, 2 for walls
+    const interiorHeight = 1 + deskRows * 3
+    const roomHeight = Math.max(ROOM_HEIGHT, interiorHeight + 2)
+    return { name: p.name, seatCount, deskCount, deskRows, desksPerRow, interiorWidth, roomWidth, roomHeight }
   })
 
-  // Calculate warehouse dimensions based on total agents
-  const totalAgents = projects.reduce((sum, p) => sum + p.agentCount, 0)
-  const crateCount = Math.max(totalAgents, WAREHOUSE_MIN_CRATES)
-  // Crates in 2 rows, with 1-tile padding on each side + walls
-  const crateCols = Math.ceil(crateCount / 2)
-  const warehouseInteriorWidth = Math.max(WAREHOUSE_MIN_WIDTH - 2, 2 + crateCols)
-  const warehouseWidth = warehouseInteriorWidth + 2
-
   // ── Garage dimensions ──────────────────────────────────────────
-  // One car per online agent, stacked vertically
-  const carCount = totalAgents
+  // One car per live (online) agent, stacked vertically
+  const carCount = liveAgentCount ?? projects.reduce((sum, p) => sum + p.agentCount, 0)
   // Interior height: each car slot = GARAGE_CAR_SLOT_HEIGHT tiles, + 1 top padding
   const garageInteriorHeight = 1 + carCount * GARAGE_CAR_SLOT_HEIGHT
   const garageHeight = Math.max(ROOM_HEIGHT, garageInteriorHeight + 2) // +2 for top/bottom walls
   const garageColOffset = GARAGE_WIDTH + ROOM_GAP_COLS // shift other rooms right
 
   // Layout dimensions: project rooms on row 1, special rooms on row 2
-  const row1Height = ROOM_LABEL_ROWS + ROOM_HEIGHT
+  const maxProjectRoomHeight = roomSpecs.length > 0 ? Math.max(...roomSpecs.map(r => r.roomHeight)) : ROOM_HEIGHT
+  const row1Height = ROOM_LABEL_ROWS + maxProjectRoomHeight
   const row2Height = ROOM_LABEL_ROWS + ROOM_HEIGHT
   const baseRows = row1Height + ROOM_GAP_ROWS + row2Height
   // Garage may extend beyond the two-row layout
@@ -108,7 +105,7 @@ export function generateRoomLayout(
   const totalRows = Math.max(baseRows, garageTotalHeight)
 
   const projectColsTotal = roomSpecs.reduce((sum, r) => sum + r.roomWidth, 0) + ROOM_GAP_COLS * (roomSpecs.length - 1)
-  const specialColsTotal = CONFERENCE_ROOM_WIDTH + ROOM_GAP_COLS + warehouseWidth + ROOM_GAP_COLS + FOREMAN_ROOM_WIDTH + ROOM_GAP_COLS + ART_DIRECTOR_ROOM_WIDTH
+  const specialColsTotal = CONFERENCE_ROOM_WIDTH + ROOM_GAP_COLS + FOREMAN_ROOM_WIDTH + ROOM_GAP_COLS + ART_DIRECTOR_ROOM_WIDTH
   const rightSideCols = Math.max(projectColsTotal, specialColsTotal)
   const totalCols = garageColOffset + rightSideCols
 
@@ -202,14 +199,14 @@ export function generateRoomLayout(
     const seatUids: string[] = []
 
     // Fill room tiles
-    for (let r = 0; r < ROOM_HEIGHT; r++) {
+    for (let r = 0; r < spec.roomHeight; r++) {
       for (let c = 0; c < spec.roomWidth; c++) {
         const tileRow = roomRow + r
         const tileCol = roomCol + c
         const idx = tileRow * totalCols + tileCol
 
         const isTopWall = r === 0
-        const isBottomWall = r === ROOM_HEIGHT - 1
+        const isBottomWall = r === spec.roomHeight - 1
         const isLeftWall = c === 0
         const isRightWall = c === spec.roomWidth - 1
 
@@ -238,43 +235,54 @@ export function generateRoomLayout(
       }
     }
 
-    // Place desks and chairs
-    // Desks go in rows 2-3 (interior rows 1-2), chairs in row 4 (interior row 3)
-    // Layout: wall | pad | desk desk gap desk desk gap ... | pad | wall
+    // Place desks and chairs across multiple rows
+    // Each desk row: desk at offset +0/+1 (2 tiles tall), chairs 1 tile below
+    // Row layout within interior: [props row] [desk row 1: desk+chair] [desk row 2: desk+chair] ...
     const startCol = roomCol + 2 // skip wall + 1 padding
-    for (let dp = 0; dp < spec.deskPairs; dp++) {
-      const deskCol = startCol + dp * 3
-      const deskRow = roomRow + 2 // rows 2-3 relative to room
+    let chairGlobalIdx = 0
+    for (let dr = 0; dr < spec.deskRows; dr++) {
+      // Each desk row occupies 3 interior tiles vertically: 2 for desk + 1 for chairs
+      const deskBaseRow = roomRow + 2 + dr * 3 // +1 wall, +1 props row
+      const chairRow = deskBaseRow + 2
 
-      // Place 2x2 desk
-      furniture.push({
-        uid: `${spec.name}:desk-${dp}`,
-        type: FurnitureType.DESK,
-        col: deskCol,
-        row: deskRow,
-      })
+      // How many desks in this row
+      const desksInThisRow = dr < spec.deskRows - 1
+        ? spec.desksPerRow
+        : spec.deskCount - dr * spec.desksPerRow
 
-      // Place 2 chairs below the desk (row 4 relative to room)
-      const chairRow = roomRow + 4
-      for (let ci = 0; ci < 2; ci++) {
-        const chairCol = deskCol + ci
-        const chairIdx = dp * 2 + ci
-        if (chairIdx >= spec.seatCount) break
-        const chairUid = `${spec.name}:chair-${chairIdx}`
+      for (let dp = 0; dp < desksInThisRow; dp++) {
+        const deskCol = startCol + dp * 3
+        const deskIdx = dr * spec.desksPerRow + dp
+
+        // Place 2x2 desk
         furniture.push({
-          uid: chairUid,
-          type: FurnitureType.CHAIR,
-          col: chairCol,
-          row: chairRow,
+          uid: `${spec.name}:desk-${deskIdx}`,
+          type: FurnitureType.DESK,
+          col: deskCol,
+          row: deskBaseRow,
         })
-        seatUids.push(chairUid)
+
+        // Place chairs below the desk (1 or 2 depending on remaining seats)
+        const chairsForThisDesk = Math.min(2, spec.seatCount - chairGlobalIdx)
+        for (let ci = 0; ci < chairsForThisDesk; ci++) {
+          const chairCol = deskCol + ci
+          const chairUid = `${spec.name}:chair-${chairGlobalIdx}`
+          furniture.push({
+            uid: chairUid,
+            type: FurnitureType.CHAIR,
+            col: chairCol,
+            row: chairRow,
+          })
+          seatUids.push(chairUid)
+          chairGlobalIdx++
+        }
       }
     }
 
     // Place activity props
     const activitySpots: ActivitySpot[] = []
 
-    // BOOKSHELF (1x2) at left wall interior — replaces left plant
+    // BOOKSHELF (1x2) at left wall interior
     furniture.push({
       uid: `${spec.name}:bookshelf`,
       type: FurnitureType.BOOKSHELF,
@@ -299,7 +307,7 @@ export function generateRoomLayout(
       occupiedBy: null,
     })
 
-    // PC (1x1) at right wall interior — replaces right plant
+    // PC (1x1) at right wall interior
     furniture.push({
       uid: `${spec.name}:pc`,
       type: FurnitureType.PC,
@@ -355,7 +363,7 @@ export function generateRoomLayout(
       col: roomCol,
       row: roomRow,
       width: spec.roomWidth,
-      height: ROOM_HEIGHT,
+      height: spec.roomHeight,
       seatUids,
       activitySpots,
     })
@@ -464,76 +472,8 @@ export function generateRoomLayout(
     isConferenceRoom: true,
   })
 
-  // ── Warehouse ─────────────────────────────────────────────────
-  // One crate per agent — The Office-style storage for agent memory
-  const whCol = confCol + confWidth + ROOM_GAP_COLS
-  const whRow = row1Height + ROOM_GAP_ROWS + ROOM_LABEL_ROWS
-
-  // Fill warehouse tiles
-  for (let r = 0; r < ROOM_HEIGHT; r++) {
-    for (let c = 0; c < warehouseWidth; c++) {
-      const tileRow = whRow + r
-      const tileCol = whCol + c
-      const idx = tileRow * totalCols + tileCol
-
-      const isTopWall = r === 0
-      const isBottomWall = r === ROOM_HEIGHT - 1
-      const isLeftWall = c === 0
-      const isRightWall = c === warehouseWidth - 1
-
-      if (isBottomWall) {
-        // Wide double door in the center
-        const doorCenter = Math.floor(warehouseWidth / 2)
-        if (c === doorCenter || c === doorCenter - 1) {
-          tiles[idx] = TileType.FLOOR_1
-          tileColors[idx] = WAREHOUSE_FLOOR_COLOR
-        } else {
-          tiles[idx] = TileType.WALL
-          tileColors[idx] = DEFAULT_WALL_COLOR
-        }
-        continue
-      }
-
-      if (isTopWall || isLeftWall || isRightWall) {
-        tiles[idx] = TileType.WALL
-        tileColors[idx] = DEFAULT_WALL_COLOR
-        continue
-      }
-
-      tiles[idx] = TileType.FLOOR_1
-      tileColors[idx] = WAREHOUSE_FLOOR_COLOR
-    }
-  }
-
-  // Place crates in 2 rows (rows 2 and 4 interior, relative to room)
-  let cratesPlaced = 0
-  for (let row = 0; row < 2 && cratesPlaced < crateCount; row++) {
-    const crateRow = whRow + 2 + row * 2 // rows 2 and 4 relative to room
-    for (let col = 0; col < crateCols && cratesPlaced < crateCount; col++) {
-      const crateCol = whCol + 1 + col // skip left wall
-      furniture.push({
-        uid: `warehouse:crate-${cratesPlaced}`,
-        type: FurnitureType.CRATE,
-        col: crateCol,
-        row: crateRow,
-      })
-      cratesPlaced++
-    }
-  }
-
-  rooms.push({
-    projectName: WAREHOUSE_ROOM_NAME,
-    col: whCol,
-    row: whRow,
-    width: warehouseWidth,
-    height: ROOM_HEIGHT,
-    seatUids: [],
-    activitySpots: [],
-    isWarehouse: true,
-  })
-
   // ── Foreman's Office ───────────────────────────────────────
-  const fmCol = whCol + warehouseWidth + ROOM_GAP_COLS
+  const fmCol = confCol + confWidth + ROOM_GAP_COLS
   const fmRow = row1Height + ROOM_GAP_ROWS + ROOM_LABEL_ROWS
   const fmWidth = FOREMAN_ROOM_WIDTH
 
