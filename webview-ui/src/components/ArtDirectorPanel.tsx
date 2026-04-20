@@ -418,7 +418,6 @@ function TicketList({
 }
 
 function DesignConfigSection({ config }: { config: JanDesignConfig | null }) {
-  const [open, setOpen] = useState(false)
   const [figmaUrl, setFigmaUrl] = useState('')
   const [clickupDocUrl, setClickupDocUrl] = useState('')
   const [saved, setSaved] = useState(false)
@@ -452,77 +451,54 @@ function DesignConfigSection({ config }: { config: JanDesignConfig | null }) {
   }
 
   return (
-    <div style={{ borderTop: '2px solid var(--pixel-border)' }}>
-      <button
-        onClick={() => setOpen(!open)}
-        style={{
-          padding: '6px 8px',
-          fontSize: '18px',
-          color: 'var(--pixel-text)',
-          background: 'var(--pixel-bg)',
-          border: 'none',
-          cursor: 'pointer',
-          display: 'flex',
-          alignItems: 'center',
-          gap: 6,
-          userSelect: 'none',
-          width: '100%',
-          textAlign: 'left',
-        }}
-      >
-        <span style={{ fontSize: '14px', color: 'var(--pixel-text-dim)' }}>
-          {open ? '\u25BC' : '\u25B6'}
-        </span>
-        <span style={{ fontWeight: 'bold' }}>Design Config</span>
-      </button>
-      {open && (
-        <div style={{ padding: '4px 8px 8px', display: 'flex', flexDirection: 'column', gap: 8 }}>
-          <div>
-            <div style={{ fontSize: '16px', color: 'var(--pixel-text-dim)', marginBottom: 2 }}>
-              Figma Design File URL
-            </div>
-            <input
-              type="text"
-              style={inputStyle}
-              value={figmaUrl}
-              onChange={(e) => setFigmaUrl(e.target.value)}
-              placeholder="https://www.figma.com/design/..."
-            />
-          </div>
-          <div>
-            <div style={{ fontSize: '16px', color: 'var(--pixel-text-dim)', marginBottom: 2 }}>
-              ClickUp Document URL
-            </div>
-            <input
-              type="text"
-              style={inputStyle}
-              value={clickupDocUrl}
-              onChange={(e) => setClickupDocUrl(e.target.value)}
-              placeholder="https://app.clickup.com/..."
-            />
-          </div>
-          <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-            <button
-              onClick={handleSave}
-              disabled={!hasChanges}
-              style={{
-                padding: '4px 12px',
-                fontSize: '16px',
-                color: hasChanges ? 'var(--pixel-agent-text)' : 'var(--pixel-text-dim)',
-                background: hasChanges ? 'var(--pixel-agent-bg)' : 'var(--pixel-bg)',
-                border: `2px solid ${hasChanges ? 'var(--pixel-agent-border)' : 'var(--pixel-border)'}`,
-                borderRadius: 0,
-                cursor: hasChanges ? 'pointer' : 'default',
-              }}
-            >
-              Save
-            </button>
-            {saved && (
-              <span style={{ fontSize: '14px', color: 'var(--pixel-accent)' }}>Saved</span>
-            )}
-          </div>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: '8px 0' }}>
+      <div style={{ fontSize: '20px', color: 'var(--pixel-text)', fontWeight: 'bold' }}>
+        Design Config
+      </div>
+      <div>
+        <div style={{ fontSize: '18px', color: 'var(--pixel-text-dim)', marginBottom: 2 }}>
+          Figma Design File URL
         </div>
-      )}
+        <input
+          type="text"
+          style={inputStyle}
+          value={figmaUrl}
+          onChange={(e) => setFigmaUrl(e.target.value)}
+          placeholder="https://www.figma.com/design/..."
+        />
+      </div>
+      <div>
+        <div style={{ fontSize: '18px', color: 'var(--pixel-text-dim)', marginBottom: 2 }}>
+          ClickUp Document URL
+        </div>
+        <input
+          type="text"
+          style={inputStyle}
+          value={clickupDocUrl}
+          onChange={(e) => setClickupDocUrl(e.target.value)}
+          placeholder="https://app.clickup.com/..."
+        />
+      </div>
+      <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+        <button
+          onClick={handleSave}
+          disabled={!hasChanges}
+          style={{
+            padding: '4px 12px',
+            fontSize: '16px',
+            color: hasChanges ? 'var(--pixel-agent-text)' : 'var(--pixel-text-dim)',
+            background: hasChanges ? 'var(--pixel-agent-bg)' : 'var(--pixel-bg)',
+            border: `2px solid ${hasChanges ? 'var(--pixel-agent-border)' : 'var(--pixel-border)'}`,
+            borderRadius: 0,
+            cursor: hasChanges ? 'pointer' : 'default',
+          }}
+        >
+          Save
+        </button>
+        {saved && (
+          <span style={{ fontSize: '14px', color: 'var(--pixel-accent)' }}>Saved</span>
+        )}
+      </div>
     </div>
   )
 }
@@ -543,6 +519,7 @@ export function ArtDirectorPanel({
   const [pickerTicket, setPickerTicket] = useState<{ id: string; name: string; url: string } | null>(null)
   const [collapsedStatuses, setCollapsedStatuses] = useState<Set<string>>(new Set())
   const [otherTasksOpen, setOtherTasksOpen] = useState(false)
+  const [showSettings, setShowSettings] = useState(false)
 
   if (!visible) return null
 
@@ -651,6 +628,20 @@ export function ArtDirectorPanel({
               {'\u21BB'}
             </button>
             <button
+              onClick={() => setShowSettings((p) => !p)}
+              title="Design config"
+              style={{
+                background: 'none',
+                border: 'none',
+                color: showSettings ? 'var(--pixel-accent)' : 'var(--pixel-text-dim)',
+                fontSize: '18px',
+                cursor: 'pointer',
+                padding: '0 4px',
+              }}
+            >
+              {'\u2699'}
+            </button>
+            <button
               onClick={onClose}
               style={{
                 background: 'none',
@@ -668,7 +659,11 @@ export function ArtDirectorPanel({
 
         {/* Content */}
         <div style={{ overflowY: 'auto', flex: 1, padding: '4px 0' }}>
-          {!clickupConfigured ? (
+          {showSettings ? (
+            <div style={{ padding: '0 8px' }}>
+              <DesignConfigSection config={janDesignConfig} />
+            </div>
+          ) : !clickupConfigured ? (
             <div style={{ padding: '12px 8px', fontSize: '18px', color: 'var(--pixel-text-dim)' }}>
               ClickUp not configured. Set it up in Darryl's Office first.
             </div>
@@ -686,8 +681,6 @@ export function ArtDirectorPanel({
               onPickTicket={setPickerTicket}
             />
           )}
-
-          <DesignConfigSection config={janDesignConfig} />
         </div>
       </div>
       </div>
