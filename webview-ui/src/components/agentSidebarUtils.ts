@@ -91,7 +91,7 @@ export function groupByRoom(
   // Seed with rooms from officeState + known projects (with workspace paths)
   for (const room of officeState.rooms) {
     const g = ensure(room.projectName)
-    if (room.isConferenceRoom || room.isGarage || room.isForeman || room.isArtDirector) g.isSpecialRoom = true
+    if (room.isConferenceRoom || room.isGarage || room.isForeman || room.isArtDirector || room.isFiller) g.isSpecialRoom = true
   }
   for (const kp of knownProjects) {
     const g = ensure(kp.name)

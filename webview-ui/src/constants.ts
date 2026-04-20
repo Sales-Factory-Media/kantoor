@@ -118,6 +118,19 @@ export const FOREMAN_FLOOR_COLOR: FloorColor = { h: 25, s: 35, b: 10, c: 0 }
 export const ART_DIRECTOR_ROOM_NAME = 'Jan\'s Office'
 export const ART_DIRECTOR_ROOM_WIDTH = 8
 export const ART_DIRECTOR_FLOOR_COLOR: FloorColor = { h: 320, s: 25, b: 10, c: 0 }
+// ── Corridor ───────────────────────────────────────────────
+export const CORRIDOR_HEIGHT = 2
+export const CORRIDOR_FLOOR_COLOR: FloorColor = { h: 30, s: 15, b: 0, c: 0 }
+
+// ── Filler Rooms ───────────────────────────────────────────
+export const KITCHEN_ROOM_NAME = 'Kitchen'
+export const KITCHEN_ROOM_WIDTH = 6
+export const KITCHEN_FLOOR_COLOR: FloorColor = { h: 45, s: 20, b: 10, c: 0 }
+
+export const SERVER_ROOM_NAME = 'Server Room'
+export const SERVER_ROOM_WIDTH = 5
+export const SERVER_FLOOR_COLOR: FloorColor = { h: 220, s: 30, b: -5, c: 0 }
+
 export const ROOM_LABEL_FONT_SIZE_PX = 10
 export const ROOM_LABEL_COLOR = '#ffffff'
 export const ROOM_LABEL_SHADOW_COLOR = 'rgba(0, 0, 0, 0.5)'

@@ -302,6 +302,9 @@ export function renderProjectLabels(
   ctx.textBaseline = 'bottom'
 
   for (const room of rooms) {
+    // Skip labels for filler rooms (Kitchen, Server Room, etc.)
+    if (room.isFiller) continue
+
     const centerX = offsetX + (room.col + room.width / 2) * TILE_SIZE * zoom
     // Position above the wall's 3D face (walls extend TILE_SIZE above their tile)
     const labelY = offsetY + (room.row - 1) * TILE_SIZE * zoom - 2 * zoom

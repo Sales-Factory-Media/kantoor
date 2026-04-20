@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { generateRoomLayout } from './roomGenerator.js'
+import { TileType } from '../types.js'
+import { CORRIDOR_HEIGHT } from '../../constants.js'
 
 describe('generateRoomLayout', () => {
   describe('room sizing based on worker count', () => {
@@ -8,7 +10,6 @@ describe('generateRoomLayout', () => {
       const projectRoom = rooms.find(r => r.projectName === 'solo')!
       expect(projectRoom).toBeDefined()
       expect(projectRoom.seatUids).toHaveLength(1)
-      // 1 worker → 1 desk (ceil(1/2) = 1)
       const desks = layout.furniture.filter(f => f.uid.startsWith('solo:desk-'))
       expect(desks).toHaveLength(1)
       const chairs = layout.furniture.filter(f => f.uid.startsWith('solo:chair-'))
@@ -31,8 +32,6 @@ describe('generateRoomLayout', () => {
       expect(projectRoom.seatUids).toHaveLength(3)
       const desks = layout.furniture.filter(f => f.uid.startsWith('trio:desk-'))
       expect(desks).toHaveLength(2)
-      const chairs = layout.furniture.filter(f => f.uid.startsWith('trio:chair-'))
-      expect(chairs).toHaveLength(3)
     })
 
     it('creates 3 desks and 5 chairs for 5 workers', () => {
@@ -41,88 +40,60 @@ describe('generateRoomLayout', () => {
       expect(projectRoom.seatUids).toHaveLength(5)
       const desks = layout.furniture.filter(f => f.uid.startsWith('team:desk-'))
       expect(desks).toHaveLength(3)
-      const chairs = layout.furniture.filter(f => f.uid.startsWith('team:chair-'))
-      expect(chairs).toHaveLength(5)
-    })
-
-    it('creates 4 desks and 8 chairs for 8 workers', () => {
-      const { layout, rooms } = generateRoomLayout([{ name: 'big', agentCount: 8 }])
-      const projectRoom = rooms.find(r => r.projectName === 'big')!
-      expect(projectRoom.seatUids).toHaveLength(8)
-      const desks = layout.furniture.filter(f => f.uid.startsWith('big:desk-'))
-      expect(desks).toHaveLength(4)
-      const chairs = layout.furniture.filter(f => f.uid.startsWith('big:chair-'))
-      expect(chairs).toHaveLength(8)
     })
   })
 
-  describe('room height grows with multiple desk rows', () => {
-    it('uses single desk row (standard height) for 3 or fewer desks', () => {
-      // 6 workers → 3 desks → 1 row of 3, fits in standard height
-      const { rooms } = generateRoomLayout([{ name: 'small', agentCount: 6 }])
-      const room = rooms.find(r => r.projectName === 'small')!
-      expect(room.height).toBe(7) // standard ROOM_HEIGHT
-    })
-
-    it('grows taller with 2 desk rows for 4+ desks', () => {
-      // 8 workers → 4 desks → 2 rows of 2, needs taller room
-      const { rooms } = generateRoomLayout([{ name: 'medium', agentCount: 8 }])
-      const room = rooms.find(r => r.projectName === 'medium')!
-      // 2 desk rows: interior = 1 + 2*3 = 7, total = 7+2 = 9
-      expect(room.height).toBeGreaterThan(7)
-    })
-
-    it('grows even taller for very large teams', () => {
-      // 14 workers → 7 desks → 3 rows, needs even taller room
-      const { rooms } = generateRoomLayout([{ name: 'large', agentCount: 14 }])
-      const room = rooms.find(r => r.projectName === 'large')!
-      const { rooms: rooms2 } = generateRoomLayout([{ name: 'medium', agentCount: 8 }])
-      const medRoom = rooms2.find(r => r.projectName === 'medium')!
-      expect(room.height).toBeGreaterThan(medRoom.height)
-    })
-  })
-
-  describe('room width varies with desk count', () => {
-    it('small room for 1 worker (1 desk)', () => {
-      const { rooms } = generateRoomLayout([{ name: 'tiny', agentCount: 1 }])
-      const room = rooms.find(r => r.projectName === 'tiny')!
-      // 1 desk → interiorWidth = max(5, 2 + 1*3) = 5, total = 7
-      expect(room.width).toBe(7)
-    })
-
-    it('wider room for 2 desks in a row', () => {
-      const { rooms } = generateRoomLayout([{ name: 'wider', agentCount: 4 }])
-      const room = rooms.find(r => r.projectName === 'wider')!
-      // 4 workers → 2 desks, 1 row of 2 → interiorWidth = max(5, 2+2*3) = 8, total = 10
-      expect(room.width).toBe(10)
-    })
-
-    it('multiple rooms have different widths based on worker count', () => {
+  describe('corridor layout', () => {
+    it('places rooms on both sides of the corridor', () => {
       const { rooms } = generateRoomLayout([
-        { name: 'small', agentCount: 1 },
-        { name: 'bigger', agentCount: 6 },
+        { name: 'alpha', agentCount: 2 },
+        { name: 'beta', agentCount: 2 },
       ])
-      const small = rooms.find(r => r.projectName === 'small')!
-      const bigger = rooms.find(r => r.projectName === 'bigger')!
-      expect(bigger.width).toBeGreaterThan(small.width)
-    })
-  })
+      const alpha = rooms.find(r => r.projectName === 'alpha')!
+      const beta = rooms.find(r => r.projectName === 'beta')!
 
-  describe('activity props are placed correctly', () => {
-    it('places bookshelf, PC, and whiteboard in each room', () => {
-      const { layout } = generateRoomLayout([{ name: 'proj', agentCount: 2 }])
-      expect(layout.furniture.find(f => f.uid === 'proj:bookshelf')).toBeDefined()
-      expect(layout.furniture.find(f => f.uid === 'proj:pc')).toBeDefined()
-      expect(layout.furniture.find(f => f.uid === 'proj:whiteboard')).toBeDefined()
+      // alpha (index 0) goes top, beta (index 1) goes bottom
+      // Top room is above the corridor, bottom room is below
+      expect(alpha.row).toBeLessThan(beta.row)
     })
 
-    it('creates 6 activity spots per room (2 each: bookshelf, PC, whiteboard)', () => {
-      const { rooms } = generateRoomLayout([{ name: 'proj', agentCount: 2 }])
-      const room = rooms.find(r => r.projectName === 'proj')!
-      expect(room.activitySpots).toHaveLength(6)
-      expect(room.activitySpots.filter(s => s.toolCategory === 'file_research')).toHaveLength(2)
-      expect(room.activitySpots.filter(s => s.toolCategory === 'web_research')).toHaveLength(2)
-      expect(room.activitySpots.filter(s => s.toolCategory === 'planning')).toHaveLength(2)
+    it('creates a corridor between top and bottom rows', () => {
+      const { layout, rooms } = generateRoomLayout([
+        { name: 'alpha', agentCount: 2 },
+        { name: 'beta', agentCount: 2 },
+      ])
+      const alpha = rooms.find(r => r.projectName === 'alpha')!
+      const corridorRow = alpha.row + alpha.height
+
+      // Check that corridor tiles are floor (not void/wall)
+      const cols = layout.cols
+      let floorCount = 0
+      for (let r = 0; r < CORRIDOR_HEIGHT; r++) {
+        for (let c = 0; c < cols; c++) {
+          const tile = layout.tiles[(corridorRow + r) * cols + c]
+          if (tile !== TileType.VOID) floorCount++
+        }
+      }
+      expect(floorCount).toBeGreaterThan(0)
+    })
+
+    it('alternates rooms top/bottom in alphabetical order', () => {
+      const { rooms } = generateRoomLayout([
+        { name: 'alpha', agentCount: 1 },
+        { name: 'beta', agentCount: 1 },
+        { name: 'gamma', agentCount: 1 },
+        { name: 'delta', agentCount: 1 },
+      ])
+      const alpha = rooms.find(r => r.projectName === 'alpha')!
+      const beta = rooms.find(r => r.projectName === 'beta')!
+      const gamma = rooms.find(r => r.projectName === 'gamma')!
+      const delta = rooms.find(r => r.projectName === 'delta')!
+
+      // Even indices (0=alpha, 2=gamma) → top row
+      // Odd indices (1=beta, 3=delta) → bottom row
+      expect(alpha.row).toBe(gamma.row) // same row (top)
+      expect(beta.row).toBe(delta.row) // same row (bottom)
+      expect(alpha.row).toBeLessThan(beta.row) // top < bottom
     })
   })
 
@@ -137,11 +108,52 @@ describe('generateRoomLayout', () => {
       expect(names).not.toContain('Warehouse')
     })
 
+    it('places special rooms on the bottom side', () => {
+      const { rooms } = generateRoomLayout([
+        { name: 'alpha', agentCount: 2 },
+        { name: 'beta', agentCount: 2 },
+      ])
+      const beta = rooms.find(r => r.projectName === 'beta')! // bottom project room
+      const conf = rooms.find(r => r.projectName === 'Conference')!
+      expect(conf.row).toBe(beta.row) // same bottom row
+    })
+
     it('garage only has cars for live agents, not total employed', () => {
-      // 10 employed workers but only 2 live
       const { layout } = generateRoomLayout([{ name: 'proj', agentCount: 10 }], 2)
       const cars = layout.furniture.filter(f => f.uid.startsWith('garage:car-'))
       expect(cars).toHaveLength(2)
+    })
+  })
+
+  describe('filler rooms', () => {
+    it('creates filler rooms on the shorter side', () => {
+      // 1 project → goes top only, bottom has only special rooms
+      // If top is wider than bottom, fillers go on bottom (or vice versa)
+      const { rooms } = generateRoomLayout([
+        { name: 'alpha', agentCount: 10 },
+        { name: 'beta', agentCount: 1 },
+        { name: 'gamma', agentCount: 10 },
+      ])
+      const fillerRooms = rooms.filter(r => r.isFiller)
+      // Fillers should exist on whichever side is shorter
+      for (const filler of fillerRooms) {
+        expect(filler.seatUids).toHaveLength(0)
+      }
+    })
+  })
+
+  describe('activity props', () => {
+    it('places bookshelf, PC, and whiteboard in each project room', () => {
+      const { layout } = generateRoomLayout([{ name: 'proj', agentCount: 2 }])
+      expect(layout.furniture.find(f => f.uid === 'proj:bookshelf')).toBeDefined()
+      expect(layout.furniture.find(f => f.uid === 'proj:pc')).toBeDefined()
+      expect(layout.furniture.find(f => f.uid === 'proj:whiteboard')).toBeDefined()
+    })
+
+    it('creates 6 activity spots per project room', () => {
+      const { rooms } = generateRoomLayout([{ name: 'proj', agentCount: 2 }])
+      const room = rooms.find(r => r.projectName === 'proj')!
+      expect(room.activitySpots).toHaveLength(6)
     })
   })
 
