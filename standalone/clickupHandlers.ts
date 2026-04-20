@@ -2,7 +2,7 @@ import * as path from 'path';
 import * as os from 'os';
 import * as crypto from 'crypto';
 import { loadKnownProjects } from '../src/projectStore.js';
-import { CLICKUP_POLL_INTERVAL_MS, DARRYL_ROLE_SHORT, DARRYL_CLICKUP_USERNAME, DARRYL_ESCALATION_USERNAME, DARRYL_WORKSPACE, JAN_ROLE_SHORT, JAN_CLICKUP_USERNAME, JAN_WORKSPACE, PM_ROLE_SHORT, PM_WORKSPACE, DESIGNER_ROLE_SHORT, VISUAL_DESIGNER_ROLE_SHORT, SERVER_PORT } from './constants.js';
+import { CLICKUP_POLL_INTERVAL_MS, DARRYL_ROLE_SHORT, DARRYL_CLICKUP_USERNAME, DARRYL_ESCALATION_USERNAME, DARRYL_WORKSPACE, JAN_ROLE_SHORT, JAN_CLICKUP_USERNAME, JAN_WORKSPACE, PM_ROLE_SHORT, PM_WORKSPACE, DESIGNER_ROLE_SHORT, VISUAL_DESIGNER_ROLE_SHORT, UX_PM_ROLE_SHORT, UX_QA_ROLE_SHORT, VISUAL_PM_ROLE_SHORT, VISUAL_QA_ROLE_SHORT, TEAM_UX_ID, TEAM_VISUAL_ID, SERVER_PORT } from './constants.js';
 import { launchAgentSession } from './itermFocus.js';
 import {
 	savePersistentAgents,
@@ -13,13 +13,16 @@ import {
 	buildPMSystemPrompt,
 	buildDesignerSystemPrompt,
 	buildVisualDesignerSystemPrompt,
+	buildVisualQaSystemPrompt,
+	buildVisualQaInitialTask,
 	buildJanReviewPrompt,
 	expandHome,
 	ensureMempalaceMcpConfig,
 	mergeMcpConfigs,
 	pickRandomName,
 } from './agentStore.js';
-import type { RosterEntry } from './agentStore.js';
+import type { RosterEntry, DesignConfig } from './agentStore.js';
+import { getJanDesignConfig } from './agentHandlers.js';
 import { ensureMcpConfig as ensurePeersMcpConfig } from './conferenceManager.js';
 import { fetchListTasks, addTaskComment } from './clickupClient.js';
 import type { ClickUpConfig } from './clickupClient.js';
@@ -59,6 +62,7 @@ export async function handleClickupRefresh(ctx: ServerContext): Promise<void> {
 		ctx.broadcastSink.postMessage({ type: 'clickupTickets', statuses, nextFetchAt: ctx.clickupNextFetchAt });
 		autoDarrylPickup(ctx);
 		autoJanPickup(ctx);
+		autoVisualQaPickup(ctx);
 	} catch (err) {
 		console.error('[Standalone] ClickUp fetch error:', err);
 		ctx.broadcastSink.postMessage({ type: 'clickupError', error: String(err) });
@@ -71,18 +75,26 @@ export function autoDarrylPickup(ctx: ServerContext): void {
 	// Workers don't auto-pickup — they receive tickets from the hub
 	if (ctx.isWorkerMode) return;
 
-	// Collect all TODO tickets assigned to Darryl
-	const todoTickets: Array<{ id: string; name: string; url: string }> = [];
+	// Collect TODO and AI REVIEW tickets assigned to Darryl
+	const todoTickets: Array<{ id: string; name: string; url: string; status: string }> = [];
 	for (const group of ctx.clickupTickets) {
-		if (group.name.toLowerCase() !== 'to do') continue;
+		const statusLower = group.name.toLowerCase();
+		if (statusLower !== 'to do' && statusLower !== 'ai review') continue;
 		for (const task of group.tasks) {
 			if (task.assignees.some(a => a.username === DARRYL_CLICKUP_USERNAME)) {
-				todoTickets.push({ id: task.id, name: task.name, url: task.url });
+				todoTickets.push({ id: task.id, name: task.name, url: task.url, status: statusLower });
 			}
 		}
 	}
 
 	if (todoTickets.length === 0) return;
+
+	// Prioritize ai review tickets over to do — process Copilot feedback before starting new work
+	todoTickets.sort((a, b) => {
+		if (a.status === 'ai review' && b.status !== 'ai review') return -1;
+		if (a.status !== 'ai review' && b.status === 'ai review') return 1;
+		return 0;
+	});
 
 	// Check available capacity (hub + idle remote workers)
 	const capacity = getAvailableCapacity(ctx);
@@ -120,12 +132,12 @@ export function autoDarrylPickup(ctx: ServerContext): void {
 				});
 			}
 			handleDarrylHandleTicket(
-				{ ticketId: ticket.id, ticketName: ticket.name, ticketUrl: ticket.url },
+				{ ticketId: ticket.id, ticketName: ticket.name, ticketUrl: ticket.url, ticketStatus: ticket.status },
 				ctx,
 			);
 		} else {
 			const { worker } = slot;
-			console.log(`[Hub] Assigning ticket ${ticket.id} to worker "${worker.name}" (${worker.hostname})`);
+			console.log(`[Hub] Assigning ticket ${ticket.id} to worker "${worker.name}" (${worker.hostname}) [${ticket.status}]`);
 			addAssignment(ctx, ticket.id, ticket.name, worker.name, worker.hostname);
 
 			worker.ws.send(JSON.stringify({
@@ -133,6 +145,7 @@ export function autoDarrylPickup(ctx: ServerContext): void {
 				ticketId: ticket.id,
 				ticketName: ticket.name,
 				ticketUrl: ticket.url,
+				ticketStatus: ticket.status,
 				agentMemories: memories,
 			}));
 
@@ -194,13 +207,51 @@ export function launchAgentOnTicket(
 	ticketName: string,
 	ticketUrl: string,
 	ctx: ServerContext,
-	options?: { useTeam?: boolean; additionalPrompt?: string },
+	options?: { useTeam?: boolean; additionalPrompt?: string; aiReviewMode?: boolean },
 ): { success: boolean; error?: string } {
 	const { persistentAgents } = ctx;
 	const pa = persistentAgents.find(p => p.id === agentId);
 	if (!pa) return { success: false, error: `Agent not found: ${agentId}` };
 
-	let callInTask = `Work on ClickUp ticket ${ticketId}: "${ticketName}". Use the ClickUp MCP tools to read the ticket details, update status, and add comments as you make progress. Ticket URL: ${ticketUrl}\n\nBefore starting any work, check if a branch already exists with the ticket ID (e.g. feature/CU-${ticketId}-*). If it does, check it out. If not, create a new feature branch from develop following the convention: feature/CU-${ticketId}-<short-description>.\n\nWhen you are done with the work, move the ticket to "qa test" using mcp__clickup__clickup_update_task (task_id: "${ticketId}", status: "qa test").`;
+	let callInTask: string;
+	if (options?.aiReviewMode) {
+		// AI Review mode: Copilot has reviewed the PR. Process its feedback (or confirm none) and route the ticket.
+		callInTask = `You have been reassigned to ClickUp ticket ${ticketId}: "${ticketName}" because it is currently in the **AI Review** state. GitHub Copilot has reviewed the pull request and may have left inline review comments.
+Ticket URL: ${ticketUrl}
+
+## Your job
+
+1. Move the ticket to "in progress" using \`mcp__clickup__clickup_update_task\` (task_id: "${ticketId}", status: "in progress").
+2. Read the full ticket with \`mcp__clickup__clickup_get_task\` and ALL comments with \`mcp__clickup__clickup_get_task_comments\`.
+3. Find the PR linked to this ticket (check the ticket's linked tasks, the description, or look for a branch \`feature/CU-${ticketId}-*\`). Use \`mcp__github__pull_request_read\` and the GitHub review/comment tools to find Copilot's review comments. Specifically check:
+   - Inline review comments left by Copilot on the PR diff
+   - Top-level PR review comments by Copilot
+   - Any conversation threads where Copilot raised concerns
+4. Decide whether there is **actionable feedback** that genuinely needs to be addressed:
+   - **Actionable**: a real bug, a security issue, a clear regression, a violated convention you should respect.
+   - **Not actionable**: stylistic preferences you disagree with, low-confidence suggestions, things already addressed.
+5. Then take ONE of these two paths:
+
+### If there IS actionable feedback to fix:
+- Check out the existing feature branch (\`feature/CU-${ticketId}-*\`).
+- Implement the requested changes.
+- Commit and push (follow the Git Conventions in your system prompt — the CU-${ticketId} reference is mandatory).
+- Add a ClickUp comment summarizing what you addressed and explicitly listing anything you intentionally did NOT change and why.
+- Move the ticket back to **"ai review"** so Copilot can review the new commit: \`mcp__clickup__clickup_update_task\` (task_id: "${ticketId}", status: "ai review").
+
+### If there is NO actionable feedback (or all feedback has been addressed and resolved):
+- Add a ClickUp comment confirming you reviewed Copilot's feedback and explaining why no further changes are needed (or that all prior concerns are resolved).
+- Move the ticket to **"qa test"**: \`mcp__clickup__clickup_update_task\` (task_id: "${ticketId}", status: "qa test"). A human will take over from here.
+
+## Important
+
+- Do NOT loop forever. If you have already gone through 3 AI Review rounds on this ticket (count the prior "ai review" → "to do" or "ai review" → "in progress" cycles in the comments), and Copilot keeps flagging minor stylistic things, just move to "qa test" and let the human decide.
+- Always commit and push BEFORE moving the ticket back to "ai review", otherwise Copilot will re-review the same code.
+- Update MemPalace with what you addressed and any patterns you noticed.`;
+	} else {
+		// Standard "do new work" mode
+		callInTask = `Work on ClickUp ticket ${ticketId}: "${ticketName}". Use the ClickUp MCP tools to read the ticket details, update status, and add comments as you make progress. Ticket URL: ${ticketUrl}\n\nBefore starting any work, check if a branch already exists with the ticket ID (e.g. feature/CU-${ticketId}-*). If it does, check it out. If not, create a new feature branch from develop following the convention: feature/CU-${ticketId}-<short-description>.\n\nWhen you are done with the work and your PR is open, move the ticket to "ai review" using mcp__clickup__clickup_update_task (task_id: "${ticketId}", status: "ai review"). GitHub Copilot will then review your PR. Do NOT move the ticket directly to "qa test" — Darryl will reassign someone (possibly you) to process Copilot's feedback later.`;
+	}
 
 	const knownProjects = loadKnownProjects();
 	const project = knownProjects.find(p => p.workspacePath === pa.workspacePath);
@@ -238,8 +289,9 @@ export function handleClickupStartWork(msg: Record<string, unknown>, ctx: Server
 	const ticketUrl = msg.ticketUrl as string;
 	const useTeam = msg.useTeam as boolean | undefined;
 	const additionalPrompt = msg.additionalPrompt as string | undefined;
+	const aiReviewMode = msg.aiReviewMode as boolean | undefined;
 
-	const result = launchAgentOnTicket(agentId, ticketId, ticketName, ticketUrl, ctx, { useTeam, additionalPrompt });
+	const result = launchAgentOnTicket(agentId, ticketId, ticketName, ticketUrl, ctx, { useTeam, additionalPrompt, aiReviewMode });
 	if (!result.success) {
 		console.log(`[Standalone] Failed to launch agent for ClickUp task ${ticketId}: ${result.error}`);
 		ctx.broadcastSink.postMessage({ type: 'clickupError', error: result.error || 'Unknown error' });
@@ -287,6 +339,8 @@ export function handleDarrylHandleTicket(msg: Record<string, unknown>, ctx: Serv
 	const ticketId = msg.ticketId as string;
 	const ticketName = msg.ticketName as string;
 	const ticketUrl = msg.ticketUrl as string;
+	const ticketStatus = ((msg.ticketStatus as string | undefined) ?? 'to do').toLowerCase();
+	const isAiReviewMode = ticketStatus === 'ai review';
 	const { persistentAgents } = ctx;
 
 	// Find or create Darryl
@@ -331,7 +385,35 @@ export function handleDarrylHandleTicket(msg: Record<string, unknown>, ctx: Serv
 	// Build prompts
 	const systemPrompt = buildDarrylSystemPrompt(darryl, roster, SERVER_PORT);
 
-	const initialTask = `Assess ClickUp ticket ${ticketId}: "${ticketName}"
+	const initialTask = isAiReviewMode
+		? `ClickUp ticket ${ticketId}: "${ticketName}" is in **AI Review** state. GitHub Copilot has reviewed (or is reviewing) the pull request. Your job is to dispatch an agent to process Copilot's feedback and route the ticket forward.
+Ticket URL: ${ticketUrl}
+
+## Steps
+
+1. Read the full ticket with \`mcp__clickup__clickup_get_task\` (task_id: "${ticketId}") and ALL comments with \`mcp__clickup__clickup_get_task_comments\`. Identify:
+   - Which workspace/project this ticket belongs to (look at the linked branch \`feature/CU-${ticketId}-*\` or any prior assignment comments — comments like "Assigned to worker: ..." identify the original implementer).
+   - Whether a previous agent has already cycled through AI Review (count prior "ai review" → "in progress" cycles in the comments).
+2. Pick which agent should process the feedback:
+   - **Preferred**: the same agent who originally implemented the ticket — they have the most context. Find them in your roster by name.
+   - **Fallback**: any free (OFFLINE) agent in the SAME workspace as the ticket's project.
+   - Avoid switching agents mid-ticket unless the original is gone.
+3. Dispatch them with the AI Review mode flag set:
+\`\`\`
+curl -X POST http://localhost:${SERVER_PORT}/api/launch-agent \\
+  -H 'Content-Type: application/json' \\
+  -d '{"agentId":"<id>","ticketId":"${ticketId}","ticketName":"${ticketName}","ticketUrl":"${ticketUrl}","aiReviewMode":true}'
+\`\`\`
+   The \`aiReviewMode: true\` flag gives the agent the right initial task automatically — they will move the ticket to "in progress", read Copilot's feedback, decide whether to fix anything, and either move back to "ai review" (after pushing fixes) or forward to "qa test" (when no actionable feedback remains).
+4. Comment on the ClickUp ticket noting which agent you reassigned and why. Use \`mcp__clickup__clickup_create_task_comment\`.
+5. Update MemPalace with your dispatch decision (\`mcp__mempalace__mempalace_add_drawer\`). Record generously.
+
+## Important
+
+- Do NOT do the AI Review processing yourself — your job is to dispatch. The reassigned agent owns the work.
+- Do NOT change the ticket status yourself. The reassigned agent will move it to "in progress" as their first step.
+- If you have already cycled the same ticket through AI Review 3 or more times (count from comments), instruct the reassigned agent in an additionalPrompt to be conservative: only fix genuine issues, otherwise forward to qa test.`
+		: `Assess ClickUp ticket ${ticketId}: "${ticketName}"
 Ticket URL: ${ticketUrl}
 
 ## Steps
@@ -349,11 +431,11 @@ Ticket URL: ${ticketUrl}
 
 ### If complete AND you can do it yourself:
 - Do the work
-- When finished, move the ticket to "qa test" using mcp__clickup__clickup_update_task (status: "qa test")
+- When finished and your PR is open, move the ticket to "ai review" using mcp__clickup__clickup_update_task (status: "ai review"). GitHub Copilot will review the PR; you (as Darryl) will see the ticket again later in "ai review" state and reassign someone to process Copilot's feedback. Do NOT move directly to "qa test".
 
 ### If complete AND you delegate to another agent:
 - Pick the best agent from your roster and launch them via the HTTP API
-- IMPORTANT: In the additionalPrompt, instruct them that when they finish, they must move the ticket to "qa test" using mcp__clickup__clickup_update_task (status: "qa test")
+- IMPORTANT: In the additionalPrompt, instruct them that when they finish and their PR is open, they must move the ticket to "ai review" (NOT "qa test") so GitHub Copilot can review.
 
 6. Update MemPalace with your decision (use mcp__mempalace__mempalace_add_drawer)`;
 
@@ -474,20 +556,19 @@ Use the workspace path of the PROJECT being designed (e.g. ~/Projects/brightmind
 This ticket is in the **production-ready visual implementation phase**. The UX exploration is done — a direction has been chosen.
 Your job is to kick off Phase 2 — Visual Design for polished, production-ready output.
 
-**Step A — Launch a Visual Designer:**
-Launch a Visual Designer agent on this ticket for polished visual implementation:
+**Step A — Hand off to the Visual Design Team:**
+Launch a Visual Designer from the Visual Design Team on this ticket. The endpoint automatically picks a free team member; if all 5 are busy or another designer is currently on Figma, it returns an error and you should wait + retry.
 \`\`\`
 curl -X POST http://localhost:${SERVER_PORT}/api/launch-visual-designer -H 'Content-Type: application/json' -d '{"workspacePath":"<project-workspace-path>","ticketId":"${ticketId}","ticketName":"${ticketName}","ticketUrl":"${ticketUrl}"}'
 \`\`\`
 Use the workspace path of the PROJECT being designed (e.g. ~/Projects/brightmind), NOT the kantoor-workspace.
-Wait for the Visual Designer to finish (ticket moves to "qa test").
 
-**Step B — Review the visual output:**
-Once the designer is done, review their Figma output for:
-- Brand consistency and design system alignment
-- Visual polish and production-readiness
-- Usability and accessibility
-Comment with specific art direction feedback if revisions are needed.`}
+**Step B — Let the AI Review pipeline run:**
+You do NOT review the visual output yourself anymore. When the Visual Designer finishes, they move the ticket to "ai review", and the team's Visual Quality Reviewer automatically picks it up. The Visual QA decides:
+- **Pass** → ticket moves to "qa test" for human review (your job is done for this ticket)
+- **Fail** → ticket moves back to "to do" with structured feedback, and a free Visual Designer auto-picks it up for revision
+
+You can monitor progress via ClickUp comments, but no manual review action is required from you on visual tickets unless something looks off after the human QA pass.`}
 
 5. Update MemPalace with your decisions (use mcp__mempalace__mempalace_add_drawer)`;
 
@@ -643,12 +724,12 @@ export function handleLaunchDesigner(msg: Record<string, unknown>, ctx: ServerCo
 
 	const { persistentAgents } = ctx;
 
-	// Check if any designer (UX or Visual) is already running (only one at a time to avoid Figma conflicts)
+	// Figma lock: only one designer (UX OR Visual) can run at a time across all teams
 	const activeDesigner = persistentAgents.find(
 		p => (p.roleShort === DESIGNER_ROLE_SHORT || p.roleShort === VISUAL_DESIGNER_ROLE_SHORT) && p.currentSessionId,
 	);
 	if (activeDesigner) {
-		return { success: false, error: `Designer "${activeDesigner.name}" (${activeDesigner.roleShort}) is already running. Wait for it to finish before launching another.` };
+		return { success: false, error: `Designer "${activeDesigner.name}" (${activeDesigner.roleShort}) is already running on Figma. Wait for it to finish before launching another.` };
 	}
 
 	// Resolve project description
@@ -657,23 +738,19 @@ export function handleLaunchDesigner(msg: Record<string, unknown>, ctx: ServerCo
 	const project = knownProjects.find(k => k.name === projName);
 	const projectDescription = project?.description;
 
-	// Find an idle designer for this workspace, or create one
-	let designer = persistentAgents.find(
+	// Pick a free worker from the UX team (any team member, not workspace-specific)
+	const designer = persistentAgents.find(
 		p => p.roleShort === DESIGNER_ROLE_SHORT
-			&& p.workspacePath === workspacePath
+			&& p.teamId === TEAM_UX_ID
 			&& !p.currentSessionId,
 	);
 
 	if (!designer) {
-		designer = {
-			id: generateAgentId(),
-			name: pickRandomName(persistentAgents),
-			roleShort: DESIGNER_ROLE_SHORT,
-			roleFull: 'UX/UI Designer. Reads design briefings from ClickUp, creates designs in Figma on playground boards, and delivers diverse creative explorations.',
-			workspacePath,
-		};
-		persistentAgents.push(designer);
+		return { success: false, error: 'No free UX Designers available — all team members are busy.' };
 	}
+
+	// Reassign workspace to the target project for this session
+	designer.workspacePath = workspacePath;
 
 	// Build designer-specific system prompt
 	const systemPrompt = buildDesignerSystemPrompt(designer, projectDescription);
@@ -758,12 +835,12 @@ export function handleLaunchVisualDesigner(msg: Record<string, unknown>, ctx: Se
 
 	const { persistentAgents } = ctx;
 
-	// Check if any designer (UX or Visual) is already running — only one at a time to avoid Figma conflicts
+	// Figma lock: only one designer (UX OR Visual) can run at a time across all teams
 	const activeDesigner = persistentAgents.find(
 		p => (p.roleShort === DESIGNER_ROLE_SHORT || p.roleShort === VISUAL_DESIGNER_ROLE_SHORT) && p.currentSessionId,
 	);
 	if (activeDesigner) {
-		return { success: false, error: `Designer "${activeDesigner.name}" (${activeDesigner.roleShort}) is already running. Wait for it to finish before launching another.` };
+		return { success: false, error: `Designer "${activeDesigner.name}" (${activeDesigner.roleShort}) is already running on Figma. Wait for it to finish before launching another.` };
 	}
 
 	// Resolve project description
@@ -772,26 +849,23 @@ export function handleLaunchVisualDesigner(msg: Record<string, unknown>, ctx: Se
 	const project = knownProjects.find(k => k.name === projName);
 	const projectDescription = project?.description;
 
-	// Find an idle visual designer for this workspace, or create one
-	let designer = persistentAgents.find(
+	// Pick a free worker from the Visual team
+	const designer = persistentAgents.find(
 		p => p.roleShort === VISUAL_DESIGNER_ROLE_SHORT
-			&& p.workspacePath === workspacePath
+			&& p.teamId === TEAM_VISUAL_ID
 			&& !p.currentSessionId,
 	);
 
 	if (!designer) {
-		designer = {
-			id: generateAgentId(),
-			name: pickRandomName(persistentAgents),
-			roleShort: VISUAL_DESIGNER_ROLE_SHORT,
-			roleFull: 'Visual Designer. Takes approved UX directions and creates polished, production-ready visual implementations following the design handbook.',
-			workspacePath,
-		};
-		persistentAgents.push(designer);
+		return { success: false, error: 'No free Visual Designers available — all team members are busy.' };
 	}
 
+	// Reassign workspace to the target project for this session
+	designer.workspacePath = workspacePath;
+
 	// Build visual designer-specific system prompt
-	const systemPrompt = buildVisualDesignerSystemPrompt(designer, projectDescription);
+	const designConfig = getJanDesignConfig();
+	const systemPrompt = buildVisualDesignerSystemPrompt(designer, projectDescription, designConfig);
 
 	const revisionPreamble = revisionMode
 		? `IMPORTANT: This is a REVISION. Jan (Art Director) has reviewed your previous work and requested changes.
@@ -807,20 +881,19 @@ Ticket URL: ${ticketUrl}
 ## Steps
 
 1. FIRST: Move the ticket to "in progress" using mcp__clickup__clickup_update_task (task_id: "${ticketId}", status: "in progress")
-2. Read the design handbook from ClickUp (doc page ID: 2kyr1bnu-2675) — understand the design system rules
+2. Read the design handbook from the ClickUp document at ${designConfig.clickupDocUrl} — understand the design system rules
 3. Read the full ticket with mcp__clickup__clickup_get_task (task_id: "${ticketId}")
 4. Read the ticket's comments with mcp__clickup__clickup_get_task_comments (task_id: "${ticketId}") — find the approved UX direction and Figma references
 5. Examine the approved UX designs in Figma — take screenshots to understand the structure
 6. Search MemPalace for relevant design decisions and component knowledge
 7. Create your polished visual implementation on a clean Figma playground board:
    - Name your page: \`${ticketId} — Visual Design\`
-   - Follow the design handbook strictly (typography, spacing, colors, components)
-   - Use design system components from the library where available
-   - Ensure pixel-perfect alignment and consistent visual rhythm
+   - Build to the **Quality Checklist in your system prompt** — that exact list is what the Visual Quality Reviewer will judge you against (design system compliance, tokens, alignment, states, accessibility, responsiveness, faithfulness to UX, overflow, autolayout, component library hygiene). Address every item from the start.
+   - Use design system components from the library; create new variants in the design system or a separate component library file rather than as one-offs
 8. Take screenshots of your work using figma_take_screenshot
-9. Post your results as a comment on the ClickUp ticket with screenshots and the Figma page link
-10. Move the ticket to "qa test" using mcp__clickup__clickup_update_task (task_id: "${ticketId}", status: "qa test")
-11. Update MemPalace with what you designed and key decisions (use mcp__mempalace__mempalace_add_drawer)`;
+9. Post your results as a comment on the ClickUp ticket with screenshots and the Figma page link. If any checklist item is N/A for a justified reason, state it explicitly so the reviewer can confirm.
+10. Move the ticket to "ai review" using mcp__clickup__clickup_update_task (task_id: "${ticketId}", status: "ai review") — the Visual Quality Reviewer will then automatically pick it up
+11. Update MemPalace with what you designed and key decisions (use mcp__mempalace__mempalace_add_drawer) — record generously, the team benefits from over-sharing`;
 
 	// Launch the visual designer
 	const newSessionId = crypto.randomUUID();
@@ -928,6 +1001,101 @@ export function handleJanReviewDesigner(
 
 	if (!launchAgentSession(newSessionId, cwd, systemPrompt, initialTask, { mcpConfigPath, extraFlags: ['--dangerously-skip-permissions'] })) {
 		console.log(`[Standalone] Failed to launch Jan for review of ticket ${ticketId}`);
+	}
+}
+
+// ── Visual QA AI Review ─────────────────────────────────────
+
+/**
+ * Pick up a ticket that a Visual Designer just moved to "ai review".
+ * Launches the team's Visual Quality Reviewer to evaluate the work.
+ * The QA agent decides Pass (→ "qa test") or Fail (→ "to do" for revision).
+ */
+export function handleVisualQaReview(
+	completedTicket: { ticketId: string; ticketName: string; ticketUrl: string; designerName: string; workspacePath: string },
+	ctx: ServerContext,
+): void {
+	const { ticketId, ticketName, ticketUrl, designerName } = completedTicket;
+	const { persistentAgents } = ctx;
+
+	// Find the Visual QA agent (seeded at startup)
+	const qa = persistentAgents.find(
+		p => p.roleShort === VISUAL_QA_ROLE_SHORT && p.teamId === TEAM_VISUAL_ID,
+	);
+	if (!qa) {
+		console.log(`[Standalone] No Visual QA agent seeded — cannot review ticket ${ticketId}`);
+		return;
+	}
+	if (qa.currentSessionId) {
+		console.log(`[Standalone] Visual QA "${qa.name}" is already busy, deferring review of ticket ${ticketId}`);
+		return;
+	}
+
+	const qaDesignConfig = getJanDesignConfig();
+	const systemPrompt = buildVisualQaSystemPrompt(qa, qaDesignConfig);
+	const initialTask = buildVisualQaInitialTask({ ticketId, ticketName, ticketUrl, designerName });
+
+	const newSessionId = crypto.randomUUID();
+	qa.currentSessionId = newSessionId;
+	qa.currentTicketId = ticketId;
+	qa.currentTicketName = ticketName;
+	qa.currentTicketUrl = ticketUrl;
+	savePersistentAgents(persistentAgents);
+	ensureAgentMemory(qa.id);
+
+	let mempalaceHost: string | undefined;
+	if (ctx.mempalaceServerUrl) {
+		try {
+			mempalaceHost = new URL(ctx.mempalaceServerUrl).hostname;
+		} catch {
+			mempalaceHost = undefined;
+		}
+	}
+
+	// Visual QA needs peers (to ping the designer) + mempalace
+	const peersMcpConfigPath = ensurePeersMcpConfig();
+	const mempalaceMcpConfigPath = ensureMempalaceMcpConfig(mempalaceHost);
+	const mcpConfigPath = mergeMcpConfigs(peersMcpConfigPath, mempalaceMcpConfigPath);
+
+	const cwd = expandHome(qa.workspacePath || '~');
+	if (launchAgentSession(newSessionId, cwd, systemPrompt, initialTask, { mcpConfigPath, extraFlags: ['--dangerously-skip-permissions'] })) {
+		console.log(`[Standalone] Launched Visual QA "${qa.name}" for AI review of ticket ${ticketId}`);
+	} else {
+		qa.currentSessionId = undefined;
+		savePersistentAgents(persistentAgents);
+		console.log(`[Standalone] Failed to launch Visual QA for ticket ${ticketId}`);
+	}
+}
+
+/**
+ * Scan ClickUp for any tickets sitting in "ai review" with no QA agent assigned
+ * (e.g. after a server restart while a QA review was pending). Picks them up.
+ */
+export function autoVisualQaPickup(ctx: ServerContext): void {
+	if (ctx.isWorkerMode) return;
+
+	const qa = ctx.persistentAgents.find(
+		p => p.roleShort === VISUAL_QA_ROLE_SHORT && p.teamId === TEAM_VISUAL_ID,
+	);
+	if (!qa || qa.currentSessionId) return;
+
+	for (const group of ctx.clickupTickets) {
+		if (group.name.toLowerCase() !== 'ai review') continue;
+		// Only pick up tickets assigned to Jan — Darryl's ai review tickets
+		// go through autoDarrylPickup → handleDarrylHandleTicket instead
+		const ticket = group.tasks.find(t =>
+			t.assignees.some(a => a.username === JAN_CLICKUP_USERNAME),
+		);
+		if (!ticket) continue;
+		console.log(`[Standalone] Auto-pickup: Visual QA taking stranded ai-review ticket ${ticket.id}`);
+		handleVisualQaReview({
+			ticketId: ticket.id,
+			ticketName: ticket.name,
+			ticketUrl: ticket.url,
+			designerName: 'unknown',
+			workspacePath: qa.workspacePath,
+		}, ctx);
+		return;
 	}
 }
 

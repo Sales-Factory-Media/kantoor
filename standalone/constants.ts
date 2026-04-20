@@ -23,9 +23,22 @@ export const JAN_WORKSPACE = '~/Projects/kantoor-workspace';
 export const PM_ROLE_SHORT = 'Project Manager';
 export const PM_WORKSPACE = '~/Projects/kantoor-workspace';
 
-// ── Designer ──────────────────────────────────────────────
-export const DESIGNER_ROLE_SHORT = 'Designer';
+// ── Design Teams ──────────────────────────────────────────
+// NOTE: DESIGNER_ROLE_SHORT renamed from 'Designer' to 'UX Designer'.
+// Existing persisted agents are migrated on load (see agentStore.ts).
+export const DESIGNER_ROLE_SHORT = 'UX Designer';
 export const VISUAL_DESIGNER_ROLE_SHORT = 'Visual Designer';
+export const UX_PM_ROLE_SHORT = 'UX Project Manager';
+export const UX_QA_ROLE_SHORT = 'UX Quality Reviewer';
+export const VISUAL_PM_ROLE_SHORT = 'Visual Project Manager';
+export const VISUAL_QA_ROLE_SHORT = 'Visual Quality Reviewer';
+export const TEAM_UX_ID = 'ux-design';
+export const TEAM_VISUAL_ID = 'visual-design';
+export const TEAM_WORKER_COUNT = 5;
+
+// ── Jan Design Config Defaults ────────────────────────────
+export const DEFAULT_DESIGN_FIGMA_URL = 'https://www.figma.com/design/aFC3igAq9P5iHtm2Gie8ta/Agent-workspace---Isolated-App-2.0?node-id=174-12168&p=f&t=u5tEjuD66B5WPC1Z-0';
+export const DEFAULT_DESIGN_CLICKUP_DOC_URL = 'https://app.clickup.com/90152414906/v/dc/2kyr1bnu-2595/2kyr1bnu-2795';
 
 // ── Review / Feedback Loop ────────────────────────────────
 export const REVIEW_TRIGGER_DELAY_MS = 5000;

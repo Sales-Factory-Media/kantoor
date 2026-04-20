@@ -1,9 +1,10 @@
 import { useState, useMemo } from 'react'
 import type { ToolActivity } from '../office/types.js'
 import type { OfficeState } from '../office/engine/officeState.js'
-import type { OfflineAgent, KnownProject } from '../hooks/useExtensionMessages.js'
+import type { OfflineAgent, KnownProject, OrganogramPayload } from '../hooks/useExtensionMessages.js'
 import { vscode } from '../vscodeApi.js'
 import { FOREMAN_ROOM_NAME, ART_DIRECTOR_ROOM_NAME } from '../constants.js'
+import { Organogram } from './Organogram.js'
 
 interface AgentSidebarProps {
   officeState: OfficeState
@@ -19,6 +20,7 @@ interface AgentSidebarProps {
   onOpenForeman?: () => void
   onOpenArtDirector?: () => void
   peersBrokerAvailable?: boolean
+  organogram?: OrganogramPayload | null
 }
 
 /** Format an ISO timestamp as a relative "time ago" string */
@@ -988,8 +990,10 @@ export function AgentSidebar({
   onOpenForeman,
   onOpenArtDirector,
   peersBrokerAvailable,
+  organogram,
 }: AgentSidebarProps) {
   const [collapsed, setCollapsed] = useState(false)
+  const [showOrganogram, setShowOrganogram] = useState(false)
   const [editingAgentId, setEditingAgentId] = useState<number | null>(null)
   const [editingOfflineAgent, setEditingOfflineAgent] = useState<OfflineAgent | undefined>(undefined)
   const [creatingForWorkspace, setCreatingForWorkspace] = useState<string | null>(null)
@@ -1422,6 +1426,28 @@ export function AgentSidebar({
           </button>
         )}
 
+        {/* Organogram button (under Conference) */}
+        {!collapsed && (
+          <button
+            onClick={() => setShowOrganogram(true)}
+            title="Show team organogram (design teams + reporting lines)"
+            style={{
+              padding: '3px 8px',
+              margin: '4px 6px',
+              fontSize: '18px',
+              color: 'var(--pixel-text)',
+              background: 'var(--pixel-bg)',
+              border: '2px solid var(--pixel-border)',
+              borderRadius: 0,
+              boxShadow: '2px 2px 0px #0a0a14',
+              cursor: 'pointer',
+              userSelect: 'none',
+            }}
+          >
+            Organogram
+          </button>
+        )}
+
         {/* Agent list grouped by room */}
         {!collapsed && (
           <AgentRoomList
@@ -1473,6 +1499,11 @@ export function AgentSidebar({
           />
         )}
       </div>
+      <Organogram
+        visible={showOrganogram}
+        onClose={() => setShowOrganogram(false)}
+        organogram={organogram ?? null}
+      />
     </>
   )
 }

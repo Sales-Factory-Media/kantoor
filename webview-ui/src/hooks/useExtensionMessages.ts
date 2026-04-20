@@ -70,6 +70,24 @@ export interface WorkerStatusEntry {
   isHub: boolean
 }
 
+export type OrganogramNodeType = 'person' | 'team' | 'project'
+
+export interface OrganogramNode {
+  id: string
+  parentId: string | null
+  name: string
+  roleShort: string
+  roleFull: string
+  isOnline: boolean
+  nodeType: OrganogramNodeType
+  currentTicketId?: string
+  currentTicketName?: string
+}
+
+export interface OrganogramPayload {
+  nodes: OrganogramNode[]
+}
+
 export interface ClickUpTask {
   id: string
   name: string
@@ -84,6 +102,11 @@ export interface ClickUpStatusGroup {
   name: string
   color: string
   tasks: ClickUpTask[]
+}
+
+export interface JanDesignConfig {
+  figmaUrl: string
+  clickupDocUrl: string
 }
 
 export interface ExtensionMessageState {
@@ -109,6 +132,8 @@ export interface ExtensionMessageState {
   activeConference: { conferenceId: string; agent1Id: string; agent2Id: string; topic: string } | null
   peersBrokerAvailable: boolean
   workers: WorkerStatusEntry[]
+  organogram: OrganogramPayload | null
+  janDesignConfig: JanDesignConfig | null
 }
 
 export function useExtensionMessages(
@@ -132,6 +157,8 @@ export function useExtensionMessages(
   const [activeConference, setActiveConference] = useState<{ conferenceId: string; agent1Id: string; agent2Id: string; topic: string } | null>(null)
   const [peersBrokerAvailable, setPeersBrokerAvailable] = useState(false)
   const [workers, setWorkers] = useState<WorkerStatusEntry[]>([])
+  const [organogram, setOrganogram] = useState<OrganogramPayload | null>(null)
+  const [janDesignConfig, setJanDesignConfig] = useState<JanDesignConfig | null>(null)
 
   // Ref to expose saveAgentMeta and forgetAgent outside the effect closure
   const saveAgentMetaRef = useRef<() => void>(() => {})
@@ -176,6 +203,8 @@ export function useExtensionMessages(
 
       if (msg.type === 'offlineAgents') {
         setOfflineAgents(msg.agents as OfflineAgent[])
+      } else if (msg.type === 'organogramSnapshot') {
+        setOrganogram(msg.organogram as OrganogramPayload)
       } else if (msg.type === 'knownProjects') {
         const projects = msg.projects as KnownProject[]
         knownProjectsRef.current = projects
@@ -462,6 +491,8 @@ export function useExtensionMessages(
       } else if (msg.type === 'settingsLoaded') {
         const soundOn = msg.soundEnabled as boolean
         setSoundEnabled(soundOn)
+      } else if (msg.type === 'janDesignConfigLoaded') {
+        setJanDesignConfig(msg.config as JanDesignConfig)
       } else if (msg.type === 'furnitureAssetsLoaded') {
         try {
           const catalog = msg.catalog as FurnitureAsset[]
@@ -544,5 +575,5 @@ export function useExtensionMessages(
   const saveAgentMeta = useCallback(() => saveAgentMetaRef.current(), [])
   const forgetAgent = useCallback((sessionId: string) => forgetAgentRef.current(sessionId), [])
 
-  return { agents, selectedAgent, selectAgent: setSelectedAgent, agentTools, agentStatuses, subagentTools, subagentCharacters, layoutReady, loadedAssets, workspaceFolders, agentConversation, offlineAgents, knownProjects, saveAgentMeta, forgetAgent, clickupTickets, clickupConfigured, clickupListId, clickupNextFetchAt, activeConference, peersBrokerAvailable, workers }
+  return { agents, selectedAgent, selectAgent: setSelectedAgent, agentTools, agentStatuses, subagentTools, subagentCharacters, layoutReady, loadedAssets, workspaceFolders, agentConversation, offlineAgents, knownProjects, saveAgentMeta, forgetAgent, clickupTickets, clickupConfigured, clickupListId, clickupNextFetchAt, activeConference, peersBrokerAvailable, workers, organogram, janDesignConfig }
 }

@@ -163,6 +163,7 @@ function handleTicketFromHub(
 	const ticketId = msg.ticketId as string;
 	const ticketName = msg.ticketName as string;
 	const ticketUrl = msg.ticketUrl as string;
+	const ticketStatus = msg.ticketStatus as string | undefined;
 
 	// Write agent memories from hub to local filesystem
 	const agentMemories = msg.agentMemories as Record<string, string> | undefined;
@@ -199,7 +200,7 @@ function handleTicketFromHub(
 
 	// Run the Darryl flow locally — same as hub does
 	handleDarrylHandleTicket(
-		{ ticketId, ticketName, ticketUrl },
+		{ ticketId, ticketName, ticketUrl, ticketStatus },
 		ctx,
 	);
 

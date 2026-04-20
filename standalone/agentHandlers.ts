@@ -11,7 +11,8 @@ import {
 	expandHome,
 	ensureMempalaceMcpConfig,
 } from './agentStore.js';
-import type { PersistentAgent } from './agentStore.js';
+import type { PersistentAgent, DesignConfig } from './agentStore.js';
+import { DEFAULT_DESIGN_CONFIG } from './agentStore.js';
 import { readJson, writeJson, getOfflineAgents } from './serverHelpers.js';
 import { SEATS_FILE, SETTINGS_FILE } from './serverContext.js';
 import type { ServerContext } from './serverContext.js';
@@ -209,6 +210,29 @@ export function handleRemoveRoom(msg: Record<string, unknown>, ctx: ServerContex
 export function handleSetSoundEnabled(msg: Record<string, unknown>): void {
 	const settings = readJson(SETTINGS_FILE) ?? {};
 	writeJson(SETTINGS_FILE, { ...settings, soundEnabled: msg.enabled });
+}
+
+export function getJanDesignConfig(): DesignConfig {
+	const settings = readJson(SETTINGS_FILE) as Record<string, unknown> | null;
+	const saved = settings?.janDesignConfig as Partial<DesignConfig> | undefined;
+	return {
+		figmaUrl: saved?.figmaUrl || DEFAULT_DESIGN_CONFIG.figmaUrl,
+		clickupDocUrl: saved?.clickupDocUrl || DEFAULT_DESIGN_CONFIG.clickupDocUrl,
+	};
+}
+
+export function handleSetJanDesignConfig(msg: Record<string, unknown>, ctx: ServerContext): void {
+	const figmaUrl = typeof msg.figmaUrl === 'string' ? msg.figmaUrl.trim() : '';
+	const clickupDocUrl = typeof msg.clickupDocUrl === 'string' ? msg.clickupDocUrl.trim() : '';
+
+	const config: DesignConfig = {
+		figmaUrl: figmaUrl || DEFAULT_DESIGN_CONFIG.figmaUrl,
+		clickupDocUrl: clickupDocUrl || DEFAULT_DESIGN_CONFIG.clickupDocUrl,
+	};
+
+	const settings = readJson(SETTINGS_FILE) ?? {};
+	writeJson(SETTINGS_FILE, { ...settings, janDesignConfig: config });
+	ctx.broadcastSink.postMessage({ type: 'janDesignConfigLoaded', config });
 }
 
 export function handleUpdateProjectDescription(msg: Record<string, unknown>, ctx: ServerContext): void {

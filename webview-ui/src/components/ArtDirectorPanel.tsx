@@ -1,7 +1,7 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import type { ToolActivity } from '../office/types.js'
 import type { OfficeState } from '../office/engine/officeState.js'
-import type { ClickUpStatusGroup, ClickUpTask, OfflineAgent, KnownProject, WorkerStatusEntry } from '../hooks/useExtensionMessages.js'
+import type { ClickUpStatusGroup, ClickUpTask, OfflineAgent, KnownProject, WorkerStatusEntry, JanDesignConfig } from '../hooks/useExtensionMessages.js'
 import { AgentRoomList } from './AgentSidebar.js'
 import { vscode } from '../vscodeApi.js'
 import { JAN_CLICKUP_USERNAME } from '../constants.js'
@@ -19,6 +19,7 @@ interface ArtDirectorPanelProps {
   agentStatuses: Record<number, string>
   knownProjects: KnownProject[]
   workers: WorkerStatusEntry[]
+  janDesignConfig: JanDesignConfig | null
 }
 
 function DesignerPicker({
@@ -416,6 +417,92 @@ function TicketList({
   )
 }
 
+function DesignConfigSection({ config }: { config: JanDesignConfig | null }) {
+  const [figmaUrl, setFigmaUrl] = useState('')
+  const [clickupDocUrl, setClickupDocUrl] = useState('')
+  const [saved, setSaved] = useState(false)
+
+  useEffect(() => {
+    if (config) {
+      setFigmaUrl(config.figmaUrl)
+      setClickupDocUrl(config.clickupDocUrl)
+      setSaved(false)
+    }
+  }, [config])
+
+  const handleSave = () => {
+    vscode.postMessage({ type: 'setJanDesignConfig', figmaUrl, clickupDocUrl })
+    setSaved(true)
+    setTimeout(() => setSaved(false), 2000)
+  }
+
+  const hasChanges = config && (figmaUrl !== config.figmaUrl || clickupDocUrl !== config.clickupDocUrl)
+
+  const inputStyle: React.CSSProperties = {
+    width: '100%',
+    padding: '6px 8px',
+    fontSize: '14px',
+    color: 'var(--pixel-text)',
+    background: 'var(--pixel-bg)',
+    border: '2px solid var(--pixel-border)',
+    borderRadius: 0,
+    outline: 'none',
+    boxSizing: 'border-box',
+  }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: '8px 0' }}>
+      <div style={{ fontSize: '20px', color: 'var(--pixel-text)', fontWeight: 'bold' }}>
+        Design Config
+      </div>
+      <div>
+        <div style={{ fontSize: '18px', color: 'var(--pixel-text-dim)', marginBottom: 2 }}>
+          Figma Design File URL
+        </div>
+        <input
+          type="text"
+          style={inputStyle}
+          value={figmaUrl}
+          onChange={(e) => setFigmaUrl(e.target.value)}
+          placeholder="https://www.figma.com/design/..."
+        />
+      </div>
+      <div>
+        <div style={{ fontSize: '18px', color: 'var(--pixel-text-dim)', marginBottom: 2 }}>
+          ClickUp Document URL
+        </div>
+        <input
+          type="text"
+          style={inputStyle}
+          value={clickupDocUrl}
+          onChange={(e) => setClickupDocUrl(e.target.value)}
+          placeholder="https://app.clickup.com/..."
+        />
+      </div>
+      <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+        <button
+          onClick={handleSave}
+          disabled={!hasChanges}
+          style={{
+            padding: '4px 12px',
+            fontSize: '16px',
+            color: hasChanges ? 'var(--pixel-agent-text)' : 'var(--pixel-text-dim)',
+            background: hasChanges ? 'var(--pixel-agent-bg)' : 'var(--pixel-bg)',
+            border: `2px solid ${hasChanges ? 'var(--pixel-agent-border)' : 'var(--pixel-border)'}`,
+            borderRadius: 0,
+            cursor: hasChanges ? 'pointer' : 'default',
+          }}
+        >
+          Save
+        </button>
+        {saved && (
+          <span style={{ fontSize: '14px', color: 'var(--pixel-accent)' }}>Saved</span>
+        )}
+      </div>
+    </div>
+  )
+}
+
 export function ArtDirectorPanel({
   visible,
   onClose,
@@ -427,10 +514,12 @@ export function ArtDirectorPanel({
   agentTools,
   agentStatuses,
   knownProjects,
+  janDesignConfig,
 }: ArtDirectorPanelProps) {
   const [pickerTicket, setPickerTicket] = useState<{ id: string; name: string; url: string } | null>(null)
   const [collapsedStatuses, setCollapsedStatuses] = useState<Set<string>>(new Set())
   const [otherTasksOpen, setOtherTasksOpen] = useState(false)
+  const [showSettings, setShowSettings] = useState(false)
 
   if (!visible) return null
 
@@ -539,6 +628,20 @@ export function ArtDirectorPanel({
               {'\u21BB'}
             </button>
             <button
+              onClick={() => setShowSettings((p) => !p)}
+              title="Design config"
+              style={{
+                background: 'none',
+                border: 'none',
+                color: showSettings ? 'var(--pixel-accent)' : 'var(--pixel-text-dim)',
+                fontSize: '18px',
+                cursor: 'pointer',
+                padding: '0 4px',
+              }}
+            >
+              {'\u2699'}
+            </button>
+            <button
               onClick={onClose}
               style={{
                 background: 'none',
@@ -556,7 +659,11 @@ export function ArtDirectorPanel({
 
         {/* Content */}
         <div style={{ overflowY: 'auto', flex: 1, padding: '4px 0' }}>
-          {!clickupConfigured ? (
+          {showSettings ? (
+            <div style={{ padding: '0 8px' }}>
+              <DesignConfigSection config={janDesignConfig} />
+            </div>
+          ) : !clickupConfigured ? (
             <div style={{ padding: '12px 8px', fontSize: '18px', color: 'var(--pixel-text-dim)' }}>
               ClickUp not configured. Set it up in Darryl's Office first.
             </div>
