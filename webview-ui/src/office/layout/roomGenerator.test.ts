@@ -143,10 +143,9 @@ describe('generateRoomLayout', () => {
   })
 
   describe('activity props', () => {
-    it('places bookshelf, PC, and whiteboard in each project room', () => {
+    it('places bookshelf and whiteboard in each project room', () => {
       const { layout } = generateRoomLayout([{ name: 'proj', agentCount: 2 }])
       expect(layout.furniture.find(f => f.uid === 'proj:bookshelf')).toBeDefined()
-      expect(layout.furniture.find(f => f.uid === 'proj:pc-0')).toBeDefined()
       expect(layout.furniture.find(f => f.uid === 'proj:whiteboard')).toBeDefined()
     })
 

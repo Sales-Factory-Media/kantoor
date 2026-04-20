@@ -130,6 +130,7 @@ function placeProjectRoomFurniture(
   roomCol: number,
   roomRow: number,
   doorSide: 'top' | 'bottom',
+  layoutSeed: number,
 ): { seatUids: string[]; activitySpots: ActivitySpot[] } {
   const bounds: RoomBounds = {
     name: spec.name,
@@ -144,9 +145,19 @@ function placeProjectRoomFurniture(
     deskRows: spec.deskRows,
   }
 
-  const result = decorateProjectRoom(bounds)
+  const result = decorateProjectRoom(bounds, layoutSeed)
   furniture.push(...result.furniture)
   return { seatUids: result.seatUids, activitySpots: result.activitySpots }
+}
+
+// ── Layout seed cache ────────────────────────────────────────
+// The decoration seed is randomized once and reused until the room config changes.
+let cachedLayoutSeed = Math.floor(Math.random() * 2147483647)
+let cachedConfigKey = ''
+
+/** Build a string key that changes when room config changes (projects, sizes) */
+function buildConfigKey(projects: Array<{ name: string; agentCount: number }>): string {
+  return projects.map(p => `${p.name}:${p.agentCount}`).join(',')
 }
 
 // ── Main generator ───────────────────────────────────────────
@@ -155,6 +166,14 @@ export function generateRoomLayout(
   projects: Array<{ name: string; agentCount: number }>,
   liveAgentCount?: number,
 ): GeneratedLayout {
+  // Only regenerate seed when room config actually changes
+  const configKey = buildConfigKey(projects)
+  if (configKey !== cachedConfigKey) {
+    cachedLayoutSeed = Math.floor(Math.random() * 2147483647)
+    cachedConfigKey = configKey
+  }
+  const layoutSeed = cachedLayoutSeed
+
   if (projects.length === 0) {
     return {
       layout: {
@@ -276,7 +295,7 @@ export function generateRoomLayout(
     fillRoomTiles(tiles, tileColors, totalCols, roomCol, topRowStart, spec.roomWidth, extendedHeight, ROOM_FLOOR_COLOR, 'bottom')
 
     const extendedSpec = { ...spec, roomHeight: extendedHeight }
-    const { seatUids, activitySpots } = placeProjectRoomFurniture(furniture, extendedSpec, roomCol, topRowStart, 'bottom')
+    const { seatUids, activitySpots } = placeProjectRoomFurniture(furniture, extendedSpec, roomCol, topRowStart, 'bottom', layoutSeed)
 
     rooms.push({
       projectName: spec.name,
@@ -299,7 +318,7 @@ export function generateRoomLayout(
     fillRoomTiles(tiles, tileColors, totalCols, roomCol, bottomRowStart, spec.roomWidth, extendedHeight, ROOM_FLOOR_COLOR, 'top')
 
     const extendedSpec = { ...spec, roomHeight: extendedHeight }
-    const { seatUids, activitySpots } = placeProjectRoomFurniture(furniture, extendedSpec, roomCol, bottomRowStart, 'top')
+    const { seatUids, activitySpots } = placeProjectRoomFurniture(furniture, extendedSpec, roomCol, bottomRowStart, 'top', layoutSeed)
 
     rooms.push({
       projectName: spec.name,
@@ -320,18 +339,31 @@ export function generateRoomLayout(
   const confHeight = ROOM_HEIGHT
   fillRoomTiles(tiles, tileColors, totalCols, confCol, bottomRowStart, CONFERENCE_ROOM_WIDTH, confHeight, CONFERENCE_FLOOR_COLOR, 'top')
 
-  // Conference table
+  // Whiteboard on top wall (wall-mounted at row-1 for correct z-sort)
+  const confWbCol = confCol + Math.floor(CONFERENCE_ROOM_WIDTH / 2) - 1
+  furniture.push({ uid: 'conference:whiteboard', type: FurnitureType.WHITEBOARD, col: confWbCol, row: bottomRowStart - 1 })
+
+  // Conference table (centered, row 3-4)
   const tableCol = confCol + 2
-  const tableRow = bottomRowStart + 2
+  const tableRow = bottomRowStart + 3
   furniture.push({ uid: 'conference:desk-0', type: FurnitureType.DESK, col: tableCol, row: tableRow })
-  furniture.push({ uid: 'conference:desk-1', type: FurnitureType.DESK, col: tableCol + 2, row: tableRow })
+
+  // Chairs around the table: 2 north-facing above, 2 south-facing below
+  furniture.push({ uid: 'conference:chair-n0', type: FurnitureType.WOODEN_CHAIR_FRONT, col: tableCol, row: tableRow - 1 })
+  furniture.push({ uid: 'conference:chair-n1', type: FurnitureType.WOODEN_CHAIR_FRONT, col: tableCol + 1, row: tableRow - 1 })
+  furniture.push({ uid: 'conference:chair-s0', type: FurnitureType.WOODEN_CHAIR_BACK, col: tableCol, row: tableRow + 1 })
+  furniture.push({ uid: 'conference:chair-s1', type: FurnitureType.WOODEN_CHAIR_BACK, col: tableCol + 1, row: tableRow + 1 })
+
+  // Plants in corners
+  furniture.push({ uid: 'conference:plant-0', type: FurnitureType.PLANT, col: confCol + 1, row: bottomRowStart })
+  furniture.push({ uid: 'conference:plant-1', type: FurnitureType.PLANT_2, col: confCol + CONFERENCE_ROOM_WIDTH - 2, row: bottomRowStart })
 
   const confSpots: ActivitySpot[] = []
   const spotPositions = [
-    { col: tableCol, row: bottomRowStart + 1, dir: Direction.DOWN },
-    { col: tableCol + 3, row: bottomRowStart + 1, dir: Direction.DOWN },
-    { col: tableCol, row: bottomRowStart + 4, dir: Direction.UP },
-    { col: tableCol + 3, row: bottomRowStart + 4, dir: Direction.UP },
+    { col: tableCol, row: tableRow - 1, dir: Direction.DOWN },
+    { col: tableCol + 2, row: tableRow - 1, dir: Direction.DOWN },
+    { col: tableCol, row: tableRow + 2, dir: Direction.UP },
+    { col: tableCol + 2, row: tableRow + 2, dir: Direction.UP },
   ]
   for (let i = 0; i < Math.min(CONFERENCE_ROOM_SPOTS, spotPositions.length); i++) {
     confSpots.push({
@@ -343,10 +375,6 @@ export function generateRoomLayout(
       occupiedBy: null,
     })
   }
-
-  // Whiteboard on bottom wall (opposite door which is on top)
-  const confWbCol = confCol + Math.floor(CONFERENCE_ROOM_WIDTH / 2) - 1
-  furniture.push({ uid: 'conference:whiteboard', type: FurnitureType.WHITEBOARD, col: confWbCol, row: bottomRowStart + confHeight - 1 })
 
   rooms.push({
     projectName: CONFERENCE_ROOM_NAME,
@@ -420,6 +448,46 @@ export function generateRoomLayout(
         tileColors[idx] = CORRIDOR_FLOOR_COLOR
       }
     }
+  }
+
+  // ── Corridor plants (rare, never blocking entrances) ────────
+  // Collect all door columns so we know what to avoid
+  const doorCols = new Set<number>()
+  for (const room of rooms) {
+    doorCols.add(room.col + Math.floor(room.width / 2))
+  }
+  // Also block columns adjacent to doors so characters can walk in/out comfortably
+  const blockedCols = new Set<number>()
+  for (const dc of doorCols) {
+    blockedCols.add(dc - 1)
+    blockedCols.add(dc)
+    blockedCols.add(dc + 1)
+  }
+
+  const corridorPlantTypes = [FurnitureType.PLANT, FurnitureType.PLANT_2, FurnitureType.CACTUS]
+  // Place roughly 1 plant per 10 corridor tiles, minimum spacing of 6 apart
+  const corridorLength = corridorEnd - corridorStart
+  const maxCorridorPlants = Math.max(1, Math.floor(corridorLength / 10))
+  let corridorPlantsPlaced = 0
+  let lastPlantCol = -Infinity
+  // Simple deterministic hash per column for pseudo-random placement
+  for (let c = corridorStart + 1; c < corridorEnd - 1; c++) {
+    if (corridorPlantsPlaced >= maxCorridorPlants) break
+    if (blockedCols.has(c)) continue
+    if (c - lastPlantCol < 6) continue
+    // Deterministic pseudo-random: hash the column index
+    const hash = ((c * 2654435761) >>> 0) % 100
+    if (hash > 20) continue // ~20% chance per eligible tile
+
+    const plantType = corridorPlantTypes[hash % corridorPlantTypes.length]
+    furniture.push({
+      uid: `corridor:plant-${corridorPlantsPlaced}`,
+      type: plantType,
+      col: c,
+      row: corridorRow - 1, // bg row in wall area, blocking row in top corridor row
+    })
+    lastPlantCol = c
+    corridorPlantsPlaced++
   }
 
   // ── Filler rooms (fill shorter side gaps) ───────────────────

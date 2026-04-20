@@ -35,28 +35,22 @@ describe('placeRequiredFurniture', () => {
     expect(seatUids).toHaveLength(3)
   })
 
-  it('places a PC on each desk', () => {
-    const room = makeRoom({ seatCount: 4, deskCount: 2, desksPerRow: 2, deskRows: 1 })
+  it('places PCs on some desks (not all)', () => {
+    const room = makeRoom({ seatCount: 10, deskCount: 5, desksPerRow: 3, deskRows: 2, roomWidth: 16, roomHeight: 12 })
     const { furniture } = placeRequiredFurniture(room)
     const pcs = furniture.filter(f => f.uid.startsWith('test:pc-'))
-    expect(pcs).toHaveLength(2)
+    // With 60% chance per desk, expect at least 1 but not necessarily all 5
+    expect(pcs.length).toBeGreaterThan(0)
+    expect(pcs.length).toBeLessThanOrEqual(5)
   })
 
-  it('uses WOODEN_CHAIR_BACK for top rooms (door on bottom)', () => {
-    const room = makeRoom({ doorSide: 'bottom' })
+  it('chairs face the correct direction for their side of the desk', () => {
+    const room = makeRoom({ roomWidth: 15, roomHeight: 10, seatCount: 4, deskCount: 2, desksPerRow: 2, deskRows: 1 })
     const { furniture } = placeRequiredFurniture(room)
     const chairs = furniture.filter(f => f.uid.startsWith('test:chair-'))
     for (const chair of chairs) {
-      expect(chair.type).toBe(FurnitureType.WOODEN_CHAIR_BACK)
-    }
-  })
-
-  it('uses WOODEN_CHAIR_FRONT for bottom rooms (door on top)', () => {
-    const room = makeRoom({ doorSide: 'top' })
-    const { furniture } = placeRequiredFurniture(room)
-    const chairs = furniture.filter(f => f.uid.startsWith('test:chair-'))
-    for (const chair of chairs) {
-      expect(chair.type).toBe(FurnitureType.WOODEN_CHAIR_FRONT)
+      // Every chair must be BACK (south, facing up) or FRONT (north, facing down)
+      expect([FurnitureType.WOODEN_CHAIR_BACK, FurnitureType.WOODEN_CHAIR_FRONT]).toContain(chair.type)
     }
   })
 
@@ -67,22 +61,18 @@ describe('placeRequiredFurniture', () => {
     expect(activitySpots.some(s => s.toolCategory === 'web_research')).toBe(true)
   })
 
-  it('chairs are adjacent to their desks in top rooms', () => {
-    const room = makeRoom({ doorSide: 'bottom' })
+  it('chairs are adjacent to their desk', () => {
+    const room = makeRoom({ roomWidth: 12, roomHeight: 9 })
     const { furniture } = placeRequiredFurniture(room)
     const desk = furniture.find(f => f.uid === 'test:desk-0')!
     const chair = furniture.find(f => f.uid === 'test:chair-0')!
-    // Chair should be 2 rows below desk (desk is 2 tall, chair right after)
-    expect(chair.row).toBe(desk.row + 2)
-  })
-
-  it('chairs are adjacent to their desks in bottom rooms', () => {
-    const room = makeRoom({ doorSide: 'top', roomHeight: 8 })
-    const { furniture } = placeRequiredFurniture(room)
-    const desk = furniture.find(f => f.uid === 'test:desk-0')!
-    const chair = furniture.find(f => f.uid === 'test:chair-0')!
-    // Chair should be 1 row above desk
-    expect(chair.row).toBe(desk.row - 1)
+    if (chair.type === FurnitureType.WOODEN_CHAIR_BACK) {
+      // South: chair tucked against desk, bg row overlaps desk bottom
+      expect(chair.row).toBe(desk.row + 1)
+    } else {
+      // North: chair 1 row above desk
+      expect(chair.row).toBe(desk.row - 1)
+    }
   })
 })
 

@@ -1,252 +1,24 @@
 /**
- * Wave Function Collapse room decorator.
+ * WFC room decorator — public API and placement phases.
  *
- * Places required furniture (desks + chairs with correct orientations) first,
- * then fills remaining space with decorative items using a constraint-based
- * WFC-inspired algorithm.
- *
- * Concepts:
- * - Cell: a tile position in the room interior
- * - Module: a furniture item with placement rules (footprint, valid positions, weight)
- * - Superposition: set of modules that could still be placed at a cell
- * - Collapse: choosing a module for the cell with lowest entropy
- * - Propagation: removing invalid modules from neighbors after a collapse
+ * Places required furniture (desks + chairs) in fixed grid rows,
+ * then fills remaining space with decorative items using constraint-based placement.
  */
 
 import { FurnitureType, Direction } from '../types.js'
 import type { PlacedFurniture, ActivitySpot } from '../types.js'
+import type { RoomBounds, PlacedCell, DecorationResult, RequiredFurnitureResult, ChairSide } from './wfcTypes.js'
+import { createRng, nameToSeed, weightedPick } from './wfcTypes.js'
+import { WALL_MODULES, PLANT_MODULES, LOUNGE_GROUPS, FLOOR_MODULES, SURFACE_MODULES } from './wfcModules.js'
+import {
+  getInterior, overlapsPlaced, getWallSlots, getCornerSlots, getEdgeSlots,
+  isNearEntrance, canPlaceModule, isPathClear, countOccupiedTiles,
+} from './wfcPlacement.js'
 
-// ── Types ────────────────────────────────────────────────────
+// Re-export types used by external consumers
+export type { RoomBounds } from './wfcTypes.js'
 
-export interface RoomBounds {
-  /** Room name (used for furniture uid prefixes) */
-  name: string
-  /** Top-left col of room (including wall) */
-  roomCol: number
-  /** Top-left row of room (including wall) */
-  roomRow: number
-  /** Total width including walls */
-  roomWidth: number
-  /** Total height including walls */
-  roomHeight: number
-  /** Which side has the door */
-  doorSide: 'top' | 'bottom'
-  /** Number of seats needed */
-  seatCount: number
-  /** Number of desks needed */
-  deskCount: number
-  /** Desks per row */
-  desksPerRow: number
-  /** Number of desk rows */
-  deskRows: number
-}
-
-/** A decoration module that can be placed */
-interface DecorationModule {
-  /** Unique type id */
-  id: string
-  /** Furniture type to place */
-  type: string
-  /** Footprint width in tiles */
-  width: number
-  /** Footprint height in tiles */
-  height: number
-  /** Where this module can be placed */
-  placement: 'wall' | 'floor-edge' | 'floor-corner' | 'floor-any' | 'surface'
-  /** Relative weight (higher = more likely to be chosen) */
-  weight: number
-  /** Max instances per room */
-  maxPerRoom: number
-  /** Background tiles (top N rows are walkable) */
-  backgroundTiles: number
-  /** Whether it's wall-mounted */
-  canPlaceOnWalls: boolean
-  /** Whether it goes on desk surfaces */
-  canPlaceOnSurfaces: boolean
-}
-
-interface PlacedCell {
-  col: number
-  row: number
-  width: number
-  height: number
-  backgroundTiles: number
-}
-
-// ── Seeded RNG ───────────────────────────────────────────────
-
-/** Simple mulberry32 PRNG for deterministic decoration given a seed */
-function createRng(seed: number): () => number {
-  let s = seed | 0
-  return () => {
-    s = (s + 0x6D2B79F5) | 0
-    let t = Math.imul(s ^ (s >>> 15), 1 | s)
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
-  }
-}
-
-/** Generate a seed from room name for deterministic decoration */
-function nameToSeed(name: string): number {
-  let hash = 0
-  for (let i = 0; i < name.length; i++) {
-    hash = ((hash << 5) - hash + name.charCodeAt(i)) | 0
-  }
-  return hash
-}
-
-// ── Decoration Modules ───────────────────────────────────────
-
-const WALL_MODULES: DecorationModule[] = [
-  { id: 'bookshelf', type: FurnitureType.BOOKSHELF, width: 2, height: 1, placement: 'wall', weight: 3, maxPerRoom: 1, backgroundTiles: 0, canPlaceOnWalls: true, canPlaceOnSurfaces: false },
-  { id: 'double-bookshelf', type: FurnitureType.DOUBLE_BOOKSHELF, width: 2, height: 2, placement: 'wall', weight: 2, maxPerRoom: 1, backgroundTiles: 0, canPlaceOnWalls: true, canPlaceOnSurfaces: false },
-  { id: 'whiteboard', type: FurnitureType.WHITEBOARD, width: 2, height: 2, placement: 'wall', weight: 3, maxPerRoom: 1, backgroundTiles: 0, canPlaceOnWalls: true, canPlaceOnSurfaces: false },
-  { id: 'large-painting', type: FurnitureType.LARGE_PAINTING, width: 2, height: 2, placement: 'wall', weight: 2, maxPerRoom: 1, backgroundTiles: 0, canPlaceOnWalls: true, canPlaceOnSurfaces: false },
-  { id: 'small-painting', type: FurnitureType.SMALL_PAINTING, width: 1, height: 2, placement: 'wall', weight: 2, maxPerRoom: 2, backgroundTiles: 0, canPlaceOnWalls: true, canPlaceOnSurfaces: false },
-  { id: 'small-painting-2', type: FurnitureType.SMALL_PAINTING_2, width: 1, height: 2, placement: 'wall', weight: 2, maxPerRoom: 2, backgroundTiles: 0, canPlaceOnWalls: true, canPlaceOnSurfaces: false },
-  { id: 'clock', type: FurnitureType.CLOCK, width: 1, height: 2, placement: 'wall', weight: 1, maxPerRoom: 1, backgroundTiles: 0, canPlaceOnWalls: true, canPlaceOnSurfaces: false },
-  { id: 'hanging-plant', type: FurnitureType.HANGING_PLANT, width: 1, height: 2, placement: 'wall', weight: 2, maxPerRoom: 2, backgroundTiles: 0, canPlaceOnWalls: true, canPlaceOnSurfaces: false },
-]
-
-const FLOOR_MODULES: DecorationModule[] = [
-  { id: 'plant', type: FurnitureType.PLANT, width: 1, height: 2, placement: 'floor-corner', weight: 3, maxPerRoom: 2, backgroundTiles: 1, canPlaceOnWalls: false, canPlaceOnSurfaces: false },
-  { id: 'plant-2', type: FurnitureType.PLANT_2, width: 1, height: 2, placement: 'floor-corner', weight: 3, maxPerRoom: 2, backgroundTiles: 1, canPlaceOnWalls: false, canPlaceOnSurfaces: false },
-  { id: 'cactus', type: FurnitureType.CACTUS, width: 1, height: 2, placement: 'floor-corner', weight: 2, maxPerRoom: 1, backgroundTiles: 1, canPlaceOnWalls: false, canPlaceOnSurfaces: false },
-  { id: 'large-plant', type: FurnitureType.LARGE_PLANT, width: 2, height: 3, placement: 'floor-corner', weight: 1, maxPerRoom: 1, backgroundTiles: 2, canPlaceOnWalls: false, canPlaceOnSurfaces: false },
-  { id: 'bin', type: FurnitureType.BIN, width: 1, height: 1, placement: 'floor-edge', weight: 2, maxPerRoom: 2, backgroundTiles: 0, canPlaceOnWalls: false, canPlaceOnSurfaces: false },
-  { id: 'pot', type: FurnitureType.POT, width: 1, height: 1, placement: 'floor-edge', weight: 1, maxPerRoom: 1, backgroundTiles: 0, canPlaceOnWalls: false, canPlaceOnSurfaces: false },
-]
-
-const SURFACE_MODULES: DecorationModule[] = [
-  { id: 'coffee', type: FurnitureType.COFFEE, width: 1, height: 1, placement: 'surface', weight: 2, maxPerRoom: 2, backgroundTiles: 0, canPlaceOnWalls: false, canPlaceOnSurfaces: true },
-]
-
-// ── Core WFC Logic ───────────────────────────────────────────
-
-/** Get interior bounds (excluding walls) */
-function getInterior(bounds: RoomBounds): { minCol: number; maxCol: number; minRow: number; maxRow: number } {
-  return {
-    minCol: bounds.roomCol + 1,
-    maxCol: bounds.roomCol + bounds.roomWidth - 2,
-    minRow: bounds.roomRow + 1,
-    maxRow: bounds.roomRow + bounds.roomHeight - 2,
-  }
-}
-
-/** Check if a footprint overlaps any already-placed cells */
-function overlapsPlaced(col: number, row: number, width: number, height: number, bgTiles: number, placed: PlacedCell[]): boolean {
-  for (const p of placed) {
-    // Check overlap accounting for background tiles (which are walkable/non-blocking)
-    const effectiveRow = row + bgTiles
-    const effectiveHeight = height - bgTiles
-    const pEffectiveRow = p.row + p.backgroundTiles
-    const pEffectiveHeight = p.height - p.backgroundTiles
-
-    if (col < p.col + p.width && col + width > p.col &&
-        effectiveRow < pEffectiveRow + pEffectiveHeight && effectiveRow + effectiveHeight > pEffectiveRow) {
-      return true
-    }
-  }
-  return false
-}
-
-/** Find valid wall positions (along the top wall, placed at roomRow - 1) */
-function getWallSlots(bounds: RoomBounds): Array<{ col: number; row: number }> {
-  const slots: Array<{ col: number; row: number }> = []
-  const wallRow = bounds.roomRow - 1  // Wall-mounted items go 1 row above top wall
-  const interior = getInterior(bounds)
-
-  for (let c = interior.minCol; c <= interior.maxCol; c++) {
-    slots.push({ col: c, row: wallRow })
-  }
-  return slots
-}
-
-/** Find valid corner positions (interior corners of the room) */
-function getCornerSlots(bounds: RoomBounds): Array<{ col: number; row: number }> {
-  const interior = getInterior(bounds)
-  return [
-    { col: interior.minCol, row: interior.minRow },
-    { col: interior.maxCol, row: interior.minRow },
-    { col: interior.minCol, row: interior.maxRow },
-    { col: interior.maxCol, row: interior.maxRow },
-  ]
-}
-
-/** Find valid edge positions (along walls but not corners) */
-function getEdgeSlots(bounds: RoomBounds): Array<{ col: number; row: number }> {
-  const interior = getInterior(bounds)
-  const slots: Array<{ col: number; row: number }> = []
-
-  // Top and bottom edges (excluding corners)
-  for (let c = interior.minCol + 1; c < interior.maxCol; c++) {
-    slots.push({ col: c, row: interior.minRow })
-    slots.push({ col: c, row: interior.maxRow })
-  }
-  // Left and right edges (excluding corners)
-  for (let r = interior.minRow + 1; r < interior.maxRow; r++) {
-    slots.push({ col: interior.minCol, row: r })
-    slots.push({ col: interior.maxCol, row: r })
-  }
-  return slots
-}
-
-/** Check if a position is within the entrance zone */
-function isNearEntrance(col: number, row: number, width: number, height: number, bounds: RoomBounds): boolean {
-  const doorCol = bounds.roomCol + Math.floor(bounds.roomWidth / 2)
-  if (bounds.doorSide === 'bottom') {
-    const doorRow = bounds.roomRow + bounds.roomHeight - 2
-    // Check if footprint overlaps the 2 tiles in front of the door
-    if (col <= doorCol && col + width > doorCol && row + height > doorRow - 1) return true
-  } else {
-    const doorRow = bounds.roomRow + 1
-    if (col <= doorCol && col + width > doorCol && row < doorRow + 2) return true
-  }
-  return false
-}
-
-/** Check if a module can be placed at a given position */
-function canPlaceModule(
-  mod: DecorationModule,
-  col: number,
-  row: number,
-  bounds: RoomBounds,
-  placed: PlacedCell[],
-): boolean {
-  const interior = getInterior(bounds)
-
-  // Never place anything blocking the entrance
-  if (isNearEntrance(col, row, mod.width, mod.height, bounds)) return false
-
-  if (mod.canPlaceOnWalls) {
-    // Wall items: check they fit horizontally within interior
-    if (col < interior.minCol || col + mod.width - 1 > interior.maxCol) return false
-    // Wall items can have negative row (above the grid) — that's fine
-    return !overlapsPlaced(col, row, mod.width, mod.height, mod.backgroundTiles, placed)
-  }
-
-  // Floor items: must fit within interior
-  const effectiveHeight = mod.height - mod.backgroundTiles
-  const effectiveRow = row + mod.backgroundTiles
-  if (col < interior.minCol || col + mod.width - 1 > interior.maxCol) return false
-  if (effectiveRow < interior.minRow || effectiveRow + effectiveHeight - 1 > interior.maxRow) return false
-
-  return !overlapsPlaced(col, row, mod.width, mod.height, mod.backgroundTiles, placed)
-}
-
-/** Weighted random selection from an array of modules */
-function weightedPick(modules: DecorationModule[], rng: () => number): DecorationModule | null {
-  const totalWeight = modules.reduce((sum, m) => sum + m.weight, 0)
-  if (totalWeight === 0) return null
-  let r = rng() * totalWeight
-  for (const m of modules) {
-    r -= m.weight
-    if (r <= 0) return m
-  }
-  return modules[modules.length - 1]
-}
-
-// ── Required Furniture Placement (WFC-style) ─────────────────
+// ── Desk/Chair Constants ─────────────────────────────────────
 
 const DESK_WIDTH = 3
 const DESK_HEIGHT = 2
@@ -254,173 +26,117 @@ const DESK_BG_TILES = 1
 const CHAIR_HEIGHT = 2
 const CHAIR_BG_TILES = 1
 
-/**
- * Find all valid positions where a desk could be placed.
- * Each desk reserves a "cluster zone" — the desk itself plus the chair row —
- * so clusters never stack against each other.
- */
-function getDeskCandidates(bounds: RoomBounds, placed: PlacedCell[]): Array<{ col: number; row: number }> {
-  const interior = getInterior(bounds)
-  const candidates: Array<{ col: number; row: number }> = []
-
-  for (let r = interior.minRow; r <= interior.maxRow - DESK_HEIGHT + DESK_BG_TILES; r++) {
-    // Ensure there's room for chairs (1 row adjacent to the desk on the door side)
-    let chairRow: number
-    if (bounds.doorSide === 'bottom') {
-      chairRow = r + DESK_HEIGHT
-    } else {
-      chairRow = r - 1
-    }
-    const chairEffRow = chairRow + CHAIR_BG_TILES
-    if (chairEffRow < interior.minRow || chairEffRow > interior.maxRow) continue
-
-    for (let c = interior.minCol; c <= interior.maxCol - DESK_WIDTH + 1; c++) {
-      // Check the full cluster zone (desk + chair row) doesn't overlap anything
-      const clusterTop = Math.min(r, chairRow)
-      const clusterBottom = Math.max(r + DESK_HEIGHT, chairRow + CHAIR_HEIGHT)
-      const clusterHeight = clusterBottom - clusterTop
-      if (!overlapsPlaced(c, clusterTop, DESK_WIDTH, clusterHeight, 0, placed)) {
-        candidates.push({ col: c, row: r })
-      }
-    }
+/** Compute chair row for a given desk row and side */
+function getChairRow(deskRow: number, side: ChairSide): number {
+  if (side === 'south') {
+    // Chair tucked against desk — bg row overlaps desk bottom, body just below
+    return deskRow + DESK_HEIGHT - 1
   }
-  return candidates
+  // North: chair 1 row above desk
+  return deskRow - 1
 }
 
-/** Score a desk candidate — prefer spacing from other desks, avoid entrance */
-function scoreDeskPosition(col: number, row: number, bounds: RoomBounds, placed: PlacedCell[]): number {
-  const interior = getInterior(bounds)
-  let score = 1
+// ── Required Furniture ───────────────────────────────────────
 
-  // Heavily penalize positions near the entrance
-  if (isNearEntrance(col, row, DESK_WIDTH, DESK_HEIGHT, bounds)) return 0.01
-
-  // Prefer positions away from edges (more "natural")
-  const distFromLeft = col - interior.minCol
-  const distFromRight = interior.maxCol - (col + DESK_WIDTH - 1)
-  const edgeDist = Math.min(distFromLeft, distFromRight)
-  score += edgeDist * 0.5
-
-  // Prefer spacing from other placed items (especially other desks)
-  let minDist = Infinity
-  for (const p of placed) {
-    const dx = Math.abs((col + DESK_WIDTH / 2) - (p.col + p.width / 2))
-    const dy = Math.abs((row + DESK_HEIGHT / 2) - (p.row + p.height / 2))
-    const dist = dx + dy
-    if (dist < minDist) minDist = dist
-  }
-  if (minDist < Infinity) {
-    // Prefer moderate spacing (not too close, not too far)
-    score += Math.min(minDist, 6) * 0.3
-  }
-
-  return score
-}
-
-/** Place required desks + chairs using WFC-style placement. */
+/** Place required desks + chairs in evenly spaced rows. */
 export function placeRequiredFurniture(
   bounds: RoomBounds,
   seed?: number,
-): { furniture: PlacedFurniture[]; seatUids: string[]; activitySpots: ActivitySpot[]; placed: PlacedCell[] } {
+): RequiredFurnitureResult {
   const rng = createRng(seed ?? nameToSeed(bounds.name + ':desks'))
   const furniture: PlacedFurniture[] = []
   const seatUids: string[] = []
   const activitySpots: ActivitySpot[] = []
   const placed: PlacedCell[] = []
 
-  // Desk clusters are tracked separately — they reserve the full desk+chair zone
-  // to prevent desks from stacking, but don't block chairs within the same cluster.
-  const deskClusters: PlacedCell[] = []
-
   let chairGlobalIdx = 0
   let seatsRemaining = bounds.seatCount
 
-  for (let deskIdx = 0; deskIdx < bounds.deskCount; deskIdx++) {
-    const candidates = getDeskCandidates(bounds, deskClusters)
-    if (candidates.length === 0) break
+  for (let dr = 0; dr < bounds.deskRows; dr++) {
+    const deskBaseRow = bounds.roomRow + 2 + dr * 3
 
-    // Score candidates and pick using weighted random
-    const scored = candidates.map(c => ({
-      ...c,
-      score: scoreDeskPosition(c.col, c.row, bounds, deskClusters),
-    }))
-    const totalScore = scored.reduce((sum, s) => sum + s.score, 0)
+    const desksInThisRow = dr < bounds.deskRows - 1
+      ? bounds.desksPerRow
+      : bounds.deskCount - dr * bounds.desksPerRow
 
-    let pick = rng() * totalScore
-    let chosen = scored[0]
-    for (const s of scored) {
-      pick -= s.score
-      if (pick <= 0) { chosen = s; break }
-    }
+    const totalDesksWidth = desksInThisRow * 4 - 1
+    const interiorWidth = bounds.roomWidth - 2
+    const colOffset = Math.max(0, Math.floor((interiorWidth - totalDesksWidth) / 2))
 
-    const deskCol = chosen.col
-    const deskBaseRow = chosen.row
-    const chairRow = bounds.doorSide === 'bottom'
-      ? deskBaseRow + DESK_HEIGHT
-      : deskBaseRow - 1
-    const clusterTop = Math.min(deskBaseRow, chairRow)
-    const clusterBottom = Math.max(deskBaseRow + DESK_HEIGHT, chairRow + CHAIR_HEIGHT)
+    for (let dp = 0; dp < desksInThisRow; dp++) {
+      const deskCol = bounds.roomCol + 1 + colOffset + dp * 4
+      const deskIdx = dr * bounds.desksPerRow + dp
 
-    // Place desk
-    furniture.push({
-      uid: `${bounds.name}:desk-${deskIdx}`,
-      type: FurnitureType.DESK,
-      col: deskCol,
-      row: deskBaseRow,
-    })
-    // Record actual desk footprint for decoration collision
-    placed.push({ col: deskCol, row: deskBaseRow, width: DESK_WIDTH, height: DESK_HEIGHT, backgroundTiles: DESK_BG_TILES })
-    // Record full cluster zone so next desk stays away
-    deskClusters.push({ col: deskCol, row: clusterTop, width: DESK_WIDTH, height: clusterBottom - clusterTop, backgroundTiles: 0 })
-
-    // Place PC on desk (surface item — no collision)
-    furniture.push({
-      uid: `${bounds.name}:pc-${deskIdx}`,
-      type: FurnitureType.PC,
-      col: deskCol + 1,
-      row: deskBaseRow,
-    })
-
-    // Place chairs facing the desk
-    const chairType = bounds.doorSide === 'bottom'
-      ? FurnitureType.WOODEN_CHAIR_BACK   // faces up toward desk
-      : FurnitureType.WOODEN_CHAIR_FRONT  // faces down toward desk
-
-    const chairsForThisDesk = Math.min(2, seatsRemaining)
-    for (let ci = 0; ci < chairsForThisDesk; ci++) {
-      const chairCol = deskCol + ci
-
-      const chairUid = `${bounds.name}:chair-${chairGlobalIdx}`
       furniture.push({
-        uid: chairUid,
-        type: chairType,
-        col: chairCol,
-        row: chairRow,
+        uid: `${bounds.name}:desk-${deskIdx}`,
+        type: FurnitureType.DESK,
+        col: deskCol,
+        row: deskBaseRow,
       })
-      placed.push({ col: chairCol, row: chairRow, width: 1, height: CHAIR_HEIGHT, backgroundTiles: CHAIR_BG_TILES })
-      seatUids.push(chairUid)
-      chairGlobalIdx++
-      seatsRemaining--
+      placed.push({ col: deskCol, row: deskBaseRow, width: DESK_WIDTH, height: DESK_HEIGHT, backgroundTiles: DESK_BG_TILES })
+
+      const hasPC = rng() < 0.6
+      if (hasPC) {
+        furniture.push({
+          uid: `${bounds.name}:pc-${deskIdx}`,
+          type: FurnitureType.PC,
+          col: deskCol + 1,
+          row: deskBaseRow,
+        })
+      }
+
+      // PC desks always get south chairs; others randomize
+      const interior = getInterior(bounds)
+      const southChairRow = getChairRow(deskBaseRow, 'south')
+      const northChairRow = getChairRow(deskBaseRow, 'north')
+      const southFits = southChairRow + CHAIR_BG_TILES <= interior.maxRow
+      const northFits = northChairRow + CHAIR_BG_TILES >= interior.minRow
+      let chairSide: ChairSide
+      if (hasPC && southFits) {
+        chairSide = 'south'
+      } else if (southFits && northFits) {
+        chairSide = rng() < 0.5 ? 'south' : 'north'
+      } else if (southFits) {
+        chairSide = 'south'
+      } else {
+        chairSide = 'north'
+      }
+
+      const chairRow = getChairRow(deskBaseRow, chairSide)
+      const chairType = chairSide === 'south'
+        ? FurnitureType.WOODEN_CHAIR_BACK
+        : FurnitureType.WOODEN_CHAIR_FRONT
+
+      const chairsForThisDesk = Math.min(2, seatsRemaining)
+      for (let ci = 0; ci < chairsForThisDesk; ci++) {
+        const chairCol = chairsForThisDesk === 1 ? deskCol + 1 : deskCol + ci
+        const chairUid = `${bounds.name}:chair-${chairGlobalIdx}`
+        furniture.push({ uid: chairUid, type: chairType, col: chairCol, row: chairRow })
+        placed.push({ col: chairCol, row: chairRow, width: 1, height: CHAIR_HEIGHT, backgroundTiles: CHAIR_BG_TILES })
+        // South chairs: character sits on the 2nd footprint tile (below desk, not inside it)
+        // layoutToSeats creates seat "uid" at tile 0 and "uid:1" at tile 1
+        const seatUid = chairSide === 'south' ? `${chairUid}:1` : chairUid
+        seatUids.push(seatUid)
+        chairGlobalIdx++
+        seatsRemaining--
+      }
     }
   }
 
-  // Activity spots for PCs (stand next to rightmost desk area)
   const interior = getInterior(bounds)
-  const pcSpotCol = interior.maxCol
-  const pcSpotRow = interior.minRow + 1
   activitySpots.push({
     uid: `${bounds.name}:pc-spot-0`,
     toolCategory: 'web_research',
-    standCol: pcSpotCol,
-    standRow: pcSpotRow,
+    standCol: interior.maxCol,
+    standRow: interior.minRow + 1,
     facingDir: Direction.LEFT,
     occupiedBy: null,
   })
   activitySpots.push({
     uid: `${bounds.name}:pc-spot-1`,
     toolCategory: 'web_research',
-    standCol: pcSpotCol,
-    standRow: pcSpotRow + 1,
+    standCol: interior.maxCol,
+    standRow: interior.minRow + 2,
     facingDir: Direction.LEFT,
     occupiedBy: null,
   })
@@ -428,30 +144,24 @@ export function placeRequiredFurniture(
   return { furniture, seatUids, activitySpots, placed }
 }
 
-// ── WFC Decoration ───────────────────────────────────────────
+// ── Decoration Phases ────────────────────────────────────────
 
-/** Fill remaining room space with decorative items using WFC-inspired placement */
+/** Fill remaining room space with decorative items */
 export function decorateRoom(
   bounds: RoomBounds,
   placed: PlacedCell[],
   seed?: number,
-): { furniture: PlacedFurniture[]; activitySpots: ActivitySpot[] } {
+): DecorationResult {
   const rng = createRng(seed ?? nameToSeed(bounds.name))
   const furniture: PlacedFurniture[] = []
   const activitySpots: ActivitySpot[] = []
   const localPlaced = [...placed]
   const moduleCounts = new Map<string, number>()
 
-  // Phase 1: Wall decorations (lowest entropy — limited wall slots)
   placeWallDecorations(bounds, localPlaced, furniture, activitySpots, moduleCounts, rng)
-
-  // Phase 2: Corner decorations (next lowest entropy — only 4 corners)
-  placeCornerDecorations(bounds, localPlaced, furniture, moduleCounts, rng)
-
-  // Phase 3: Edge decorations (medium entropy — along walls)
+  placeLoungeFurniture(bounds, localPlaced, furniture, moduleCounts, rng)
+  placePlantDecorations(bounds, localPlaced, furniture, moduleCounts, rng)
   placeEdgeDecorations(bounds, localPlaced, furniture, moduleCounts, rng)
-
-  // Phase 4: Surface decorations (coffee on desks)
   placeSurfaceDecorations(bounds, furniture, moduleCounts, rng)
 
   return { furniture, activitySpots }
@@ -468,13 +178,11 @@ function placeWallDecorations(
   const wallSlots = getWallSlots(bounds)
   if (wallSlots.length === 0) return
 
-  // Determine how many wall items to place (2-4 based on room width)
   const interior = getInterior(bounds)
   const interiorWidth = interior.maxCol - interior.minCol + 1
   const maxWallItems = Math.min(4, Math.floor(interiorWidth / 3))
   let wallItemsPlaced = 0
 
-  // Always place a bookshelf and whiteboard first (required activity props)
   const requiredWall = [
     { mod: WALL_MODULES.find(m => m.id === 'bookshelf')!, side: 'left' as const },
     { mod: WALL_MODULES.find(m => m.id === 'whiteboard')!, side: 'right' as const },
@@ -494,63 +202,32 @@ function placeWallDecorations(
       counts.set(mod.id, (counts.get(mod.id) || 0) + 1)
       wallItemsPlaced++
 
-      // Activity spots for bookshelf and whiteboard
       if (mod.id === 'bookshelf') {
-        activitySpots.push({
-          uid: `${bounds.name}:bookshelf-spot-0`,
-          toolCategory: 'file_research',
-          standCol: col,
-          standRow: bounds.roomRow + 1,
-          facingDir: Direction.UP,
-          occupiedBy: null,
-        })
-        activitySpots.push({
-          uid: `${bounds.name}:bookshelf-spot-1`,
-          toolCategory: 'file_research',
-          standCol: col + 1,
-          standRow: bounds.roomRow + 1,
-          facingDir: Direction.UP,
-          occupiedBy: null,
-        })
+        activitySpots.push(
+          { uid: `${bounds.name}:bookshelf-spot-0`, toolCategory: 'file_research', standCol: col, standRow: bounds.roomRow + 1, facingDir: Direction.UP, occupiedBy: null },
+          { uid: `${bounds.name}:bookshelf-spot-1`, toolCategory: 'file_research', standCol: col + 1, standRow: bounds.roomRow + 1, facingDir: Direction.UP, occupiedBy: null },
+        )
       } else if (mod.id === 'whiteboard') {
-        activitySpots.push({
-          uid: `${bounds.name}:whiteboard-spot-0`,
-          toolCategory: 'planning',
-          standCol: col,
-          standRow: bounds.roomRow + 1,
-          facingDir: Direction.UP,
-          occupiedBy: null,
-        })
-        activitySpots.push({
-          uid: `${bounds.name}:whiteboard-spot-1`,
-          toolCategory: 'planning',
-          standCol: col + 1,
-          standRow: bounds.roomRow + 1,
-          facingDir: Direction.UP,
-          occupiedBy: null,
-        })
+        activitySpots.push(
+          { uid: `${bounds.name}:whiteboard-spot-0`, toolCategory: 'planning', standCol: col, standRow: bounds.roomRow + 1, facingDir: Direction.UP, occupiedBy: null },
+          { uid: `${bounds.name}:whiteboard-spot-1`, toolCategory: 'planning', standCol: col + 1, standRow: bounds.roomRow + 1, facingDir: Direction.UP, occupiedBy: null },
+        )
       }
     }
   }
 
-  // Fill remaining wall slots with random decorations
   const optionalWallMods = WALL_MODULES.filter(m => m.id !== 'bookshelf' && m.id !== 'whiteboard')
-
   while (wallItemsPlaced < maxWallItems) {
-    // Filter to modules that haven't exceeded their max
     const available = optionalWallMods.filter(m => (counts.get(m.id) || 0) < m.maxPerRoom)
     if (available.length === 0) break
-
     const mod = weightedPick(available, rng)
     if (!mod) break
 
-    // Try random wall positions
     const shuffledSlots = [...wallSlots].sort(() => rng() - 0.5)
     let didPlace = false
     for (const slot of shuffledSlots) {
       if (canPlaceModule(mod, slot.col, slot.row, bounds, placed)) {
-        const uid = `${bounds.name}:wall-${mod.id}-${wallItemsPlaced}`
-        furniture.push({ uid, type: mod.type, col: slot.col, row: slot.row })
+        furniture.push({ uid: `${bounds.name}:wall-${mod.id}-${wallItemsPlaced}`, type: mod.type, col: slot.col, row: slot.row })
         placed.push({ col: slot.col, row: slot.row, width: mod.width, height: mod.height, backgroundTiles: mod.backgroundTiles })
         counts.set(mod.id, (counts.get(mod.id) || 0) + 1)
         didPlace = true
@@ -562,40 +239,126 @@ function placeWallDecorations(
   }
 }
 
-function placeCornerDecorations(
+function placeLoungeFurniture(
   bounds: RoomBounds,
   placed: PlacedCell[],
   furniture: PlacedFurniture[],
   counts: Map<string, number>,
   rng: () => number,
 ): void {
-  const corners = getCornerSlots(bounds)
-  // Shuffle corners for variety
-  corners.sort(() => rng() - 0.5)
+  const interior = getInterior(bounds)
+  const interiorWidth = interior.maxCol - interior.minCol + 1
+  const interiorHeight = interior.maxRow - interior.minRow + 1
+  const totalInteriorTiles = interiorWidth * interiorHeight
+  const openTiles = totalInteriorTiles - countOccupiedTiles(placed)
 
-  // Place 1-2 corner items (plants, cactus)
-  const cornerModules = FLOOR_MODULES.filter(m => m.placement === 'floor-corner')
-  let placed_count = 0
-  const maxCornerItems = Math.min(2, Math.floor(corners.length * 0.6))
+  if (openTiles < totalInteriorTiles * 0.4) return
 
-  for (const corner of corners) {
-    if (placed_count >= maxCornerItems) break
+  const availableGroups = LOUNGE_GROUPS.filter(g => (counts.get(g.id) || 0) === 0)
+  if (availableGroups.length === 0) return
 
-    const available = cornerModules.filter(m => (counts.get(m.id) || 0) < m.maxPerRoom)
+  const totalWeight = availableGroups.reduce((sum, g) => sum + g.weight, 0)
+  let pick = rng() * totalWeight
+  let chosenGroup = availableGroups[0]
+  for (const g of availableGroups) {
+    pick -= g.weight
+    if (pick <= 0) { chosenGroup = g; break }
+  }
+
+  // Lounge groups need 1 tile clearance from all walls and existing furniture
+  const margin = 1
+  const slots: Array<{ col: number; row: number }> = []
+  const startC = interior.minCol + margin
+  const startR = interior.minRow + margin
+  const endC = interior.maxCol - chosenGroup.totalWidth + 1 - margin
+  const endR = interior.maxRow - chosenGroup.totalHeight + 1 - margin
+  for (let r = startR; r <= endR; r++) {
+    for (let c = startC; c <= endC; c++) {
+      slots.push({ col: c, row: r })
+    }
+  }
+  slots.sort(() => rng() - 0.5)
+
+  for (const slot of slots) {
+    let allFit = true
+    const testPieces: PlacedCell[] = []
+    for (const piece of chosenGroup.pieces) {
+      const pc = slot.col + piece.offsetCol
+      const pr = slot.row + piece.offsetRow
+      if (pc < interior.minCol || pc + piece.width - 1 > interior.maxCol) { allFit = false; break }
+      if (pr < interior.minRow || pr + piece.height - 1 > interior.maxRow) { allFit = false; break }
+      // Check overlap with 1-tile margin around each piece (prevents touching desks/walls)
+      if (overlapsPlaced(pc - 1, pr - 1, piece.width + 2, piece.height + 2, 0, placed)) { allFit = false; break }
+      if (isNearEntrance(pc, pr, piece.width, piece.height, bounds)) { allFit = false; break }
+      testPieces.push({ col: pc, row: pr, width: piece.width, height: piece.height, backgroundTiles: 0 })
+    }
+    if (!allFit) continue
+    if (!isPathClear(bounds, [...placed, ...testPieces])) continue
+
+    for (let i = 0; i < chosenGroup.pieces.length; i++) {
+      const piece = chosenGroup.pieces[i]
+      const pc = slot.col + piece.offsetCol
+      const pr = slot.row + piece.offsetRow
+      furniture.push({ uid: `${bounds.name}:lounge-${chosenGroup.id}-${i}`, type: piece.type, col: pc, row: pr })
+      placed.push({ col: pc, row: pr, width: piece.width, height: piece.height, backgroundTiles: 0 })
+    }
+    counts.set(chosenGroup.id, 1)
+    break
+  }
+}
+
+function placePlantDecorations(
+  bounds: RoomBounds,
+  placed: PlacedCell[],
+  furniture: PlacedFurniture[],
+  counts: Map<string, number>,
+  rng: () => number,
+): void {
+  const interior = getInterior(bounds)
+  const interiorWidth = interior.maxCol - interior.minCol + 1
+  const interiorHeight = interior.maxRow - interior.minRow + 1
+  const totalInteriorTiles = interiorWidth * interiorHeight
+  const openTiles = totalInteriorTiles - countOccupiedTiles(placed)
+  const maxPlants = Math.max(2, Math.floor(openTiles / 8))
+
+  const slots: Array<{ col: number; row: number }> = []
+  slots.push(...getCornerSlots(bounds))
+  slots.push(...getEdgeSlots(bounds))
+  if (openTiles > 15) {
+    for (let r = interior.minRow + 1; r < interior.maxRow; r++) {
+      for (let c = interior.minCol + 1; c < interior.maxCol; c++) {
+        slots.push({ col: c, row: r })
+      }
+    }
+  }
+  slots.sort(() => rng() - 0.5)
+
+  const plantPositions: Array<{ col: number; row: number }> = []
+  let plantCount = 0
+
+  for (const slot of slots) {
+    if (plantCount >= maxPlants) break
+    const available = PLANT_MODULES.filter(m => (counts.get(m.id) || 0) < m.maxPerRoom)
     if (available.length === 0) break
-
     const mod = weightedPick(available, rng)
     if (!mod) break
 
-    // For tall items (height > 1), adjust row so the blocking part is at the corner
-    const placeRow = corner.row - mod.backgroundTiles
-    if (canPlaceModule(mod, corner.col, placeRow, bounds, placed)) {
-      const uid = `${bounds.name}:corner-${mod.id}-${placed_count}`
-      furniture.push({ uid, type: mod.type, col: corner.col, row: placeRow })
-      placed.push({ col: corner.col, row: placeRow, width: mod.width, height: mod.height, backgroundTiles: mod.backgroundTiles })
-      counts.set(mod.id, (counts.get(mod.id) || 0) + 1)
-      placed_count++
-    }
+    const placeRow = slot.row - mod.backgroundTiles
+    if (!canPlaceModule(mod, slot.col, placeRow, bounds, placed)) continue
+
+    const tooClose = plantPositions.some(p =>
+      Math.abs(slot.col - p.col) + Math.abs(slot.row - p.row) < 3
+    )
+    if (tooClose) continue
+
+    const testPlaced = [...placed, { col: slot.col, row: placeRow, width: mod.width, height: mod.height, backgroundTiles: mod.backgroundTiles }]
+    if (!isPathClear(bounds, testPlaced)) continue
+
+    furniture.push({ uid: `${bounds.name}:plant-${mod.id}-${plantCount}`, type: mod.type, col: slot.col, row: placeRow })
+    placed.push({ col: slot.col, row: placeRow, width: mod.width, height: mod.height, backgroundTiles: mod.backgroundTiles })
+    plantPositions.push({ col: slot.col, row: slot.row })
+    counts.set(mod.id, (counts.get(mod.id) || 0) + 1)
+    plantCount++
   }
 }
 
@@ -610,71 +373,55 @@ function placeEdgeDecorations(
   edges.sort(() => rng() - 0.5)
 
   const edgeModules = FLOOR_MODULES.filter(m => m.placement === 'floor-edge')
-  let placed_count = 0
-  // Place 1-3 edge items depending on room size
   const interior = getInterior(bounds)
   const interiorArea = (interior.maxCol - interior.minCol + 1) * (interior.maxRow - interior.minRow + 1)
   const maxEdgeItems = Math.min(3, Math.floor(interiorArea / 15))
-
-  // Track positions of placed edge items for spacing enforcement
   const edgePlacedPositions: Array<{ col: number; row: number }> = []
+  let placedCount = 0
 
   for (const edge of edges) {
-    if (placed_count >= maxEdgeItems) break
-
+    if (placedCount >= maxEdgeItems) break
     const available = edgeModules.filter(m => (counts.get(m.id) || 0) < m.maxPerRoom)
     if (available.length === 0) break
-
     const mod = weightedPick(available, rng)
     if (!mod) break
 
-    // Enforce minimum 2-tile spacing between edge items (prevents pots/bins clustering)
     const tooClose = edgePlacedPositions.some(p =>
       Math.abs(edge.col - p.col) + Math.abs(edge.row - p.row) < 3
     )
     if (tooClose) continue
+    if (!canPlaceModule(mod, edge.col, edge.row, bounds, placed)) continue
 
-    if (canPlaceModule(mod, edge.col, edge.row, bounds, placed)) {
-      const uid = `${bounds.name}:edge-${mod.id}-${placed_count}`
-      furniture.push({ uid, type: mod.type, col: edge.col, row: edge.row })
-      placed.push({ col: edge.col, row: edge.row, width: mod.width, height: mod.height, backgroundTiles: mod.backgroundTiles })
-      edgePlacedPositions.push({ col: edge.col, row: edge.row })
-      counts.set(mod.id, (counts.get(mod.id) || 0) + 1)
-      placed_count++
-    }
+    furniture.push({ uid: `${bounds.name}:edge-${mod.id}-${placedCount}`, type: mod.type, col: edge.col, row: edge.row })
+    placed.push({ col: edge.col, row: edge.row, width: mod.width, height: mod.height, backgroundTiles: mod.backgroundTiles })
+    edgePlacedPositions.push({ col: edge.col, row: edge.row })
+    counts.set(mod.id, (counts.get(mod.id) || 0) + 1)
+    placedCount++
   }
 }
 
-/** Place surface items (coffee) on desks */
 function placeSurfaceDecorations(
   bounds: RoomBounds,
   furniture: PlacedFurniture[],
   counts: Map<string, number>,
   rng: () => number,
 ): void {
-  // Find all placed desks to put surface items on
   const desks = furniture.filter(f => f.type === FurnitureType.DESK)
   if (desks.length === 0) return
 
-  let surfaceCount = 0
   const maxSurface = Math.min(2, desks.length)
-
-  // Shuffle desks so surface items go on random ones
   const shuffledDesks = [...desks].sort(() => rng() - 0.5)
+  let surfaceCount = 0
 
   for (const desk of shuffledDesks) {
     if (surfaceCount >= maxSurface) break
-
     const available = SURFACE_MODULES.filter(m => (counts.get(m.id) || 0) < m.maxPerRoom)
     if (available.length === 0) break
-
     const mod = weightedPick(available, rng)
     if (!mod) break
 
-    // Place on desk surface (col 0 or 2 of the 3-wide desk, avoiding the PC at col+1)
     const surfaceCol = rng() < 0.5 ? desk.col : desk.col + 2
-    const uid = `${bounds.name}:surface-${mod.id}-${surfaceCount}`
-    furniture.push({ uid, type: mod.type, col: surfaceCol, row: desk.row })
+    furniture.push({ uid: `${bounds.name}:surface-${mod.id}-${surfaceCount}`, type: mod.type, col: surfaceCol, row: desk.row })
     counts.set(mod.id, (counts.get(mod.id) || 0) + 1)
     surfaceCount++
   }
@@ -682,19 +429,15 @@ function placeSurfaceDecorations(
 
 // ── Public API ───────────────────────────────────────────────
 
-/**
- * Full room decoration: place required furniture + WFC decorations.
- * Returns all furniture, seat UIDs, and activity spots for the room.
- */
+/** Full room decoration: place required furniture + WFC decorations. */
 export function decorateProjectRoom(
   bounds: RoomBounds,
   seed?: number,
 ): { furniture: PlacedFurniture[]; seatUids: string[]; activitySpots: ActivitySpot[] } {
-  // Phase 1: Place required desks + chairs (WFC-style varied placement)
-  const required = placeRequiredFurniture(bounds, seed)
-
-  // Phase 2: WFC decoration fills remaining space
-  const decoration = decorateRoom(bounds, required.placed, seed)
+  // Mix the provided seed with room identity so each room in the same layout is unique
+  const actualSeed = (seed ?? Math.floor(Math.random() * 2147483647)) ^ nameToSeed(bounds.name)
+  const required = placeRequiredFurniture(bounds, actualSeed)
+  const decoration = decorateRoom(bounds, required.placed, actualSeed)
 
   return {
     furniture: [...required.furniture, ...decoration.furniture],

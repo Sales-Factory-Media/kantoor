@@ -119,7 +119,7 @@ export const ART_DIRECTOR_ROOM_NAME = 'Jan\'s Office'
 export const ART_DIRECTOR_ROOM_WIDTH = 8
 export const ART_DIRECTOR_FLOOR_COLOR: FloorColor = { h: 320, s: 25, b: 10, c: 0 }
 // ── Corridor ───────────────────────────────────────────────
-export const CORRIDOR_HEIGHT = 2
+export const CORRIDOR_HEIGHT = 4
 export const CORRIDOR_FLOOR_COLOR: FloorColor = { h: 30, s: 15, b: 0, c: 0 }
 
 // ── Filler Rooms ───────────────────────────────────────────
