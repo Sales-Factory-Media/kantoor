@@ -132,115 +132,44 @@ function placeProjectRoomFurniture(
   const seatUids: string[] = []
   const activitySpots: ActivitySpot[] = []
 
-  // Props row is just inside the door-side wall (near entrance)
-  const propsRow = doorSide === 'bottom' ? roomRow + 1 : roomRow + 1
+  // Wall-mounted items placed 1 row above the top wall (roomRow - 1).
+  // The z-sort boost in layoutSerializer ensures they render in front of the wall.
+  const wallMountRow = roomRow - 1
 
-  // Desks and chairs fill from the far end (opposite door) inward
-  const startCol = roomCol + 2 // skip wall + 1 padding
-  let chairGlobalIdx = 0
-  for (let dr = 0; dr < spec.deskRows; dr++) {
-    let deskBaseRow: number
-    let chairRow: number
-    if (doorSide === 'bottom') {
-      // Door on bottom → props at top, desks below props, chairs below desks
-      deskBaseRow = roomRow + 2 + dr * 3
-      chairRow = deskBaseRow + 2
-    } else {
-      // Door on top → props at top, desks from bottom upward, chairs above desks
-      // -4 leaves 1 row for chair + 1 row for bottom wall
-      deskBaseRow = roomRow + spec.roomHeight - 4 - dr * 3
-      chairRow = deskBaseRow - 1
-    }
-
-    const desksInThisRow = dr < spec.deskRows - 1
-      ? spec.desksPerRow
-      : spec.deskCount - dr * spec.desksPerRow
-
-    for (let dp = 0; dp < desksInThisRow; dp++) {
-      const deskCol = startCol + dp * 3
-      const deskIdx = dr * spec.desksPerRow + dp
-
-      furniture.push({
-        uid: `${spec.name}:desk-${deskIdx}`,
-        type: FurnitureType.DESK,
-        col: deskCol,
-        row: deskBaseRow,
-      })
-
-      const chairsForThisDesk = Math.min(2, spec.seatCount - chairGlobalIdx)
-      for (let ci = 0; ci < chairsForThisDesk; ci++) {
-        const chairUid = `${spec.name}:chair-${chairGlobalIdx}`
-        furniture.push({
-          uid: chairUid,
-          type: FurnitureType.CHAIR,
-          col: deskCol + ci,
-          row: chairRow,
-        })
-        seatUids.push(chairUid)
-        chairGlobalIdx++
-      }
-    }
-  }
-
-  // Bookshelf at left wall interior (on props row)
+  // Bookshelf on left side of top wall
   furniture.push({
     uid: `${spec.name}:bookshelf`,
     type: FurnitureType.BOOKSHELF,
     col: roomCol + 1,
-    row: propsRow,
+    row: wallMountRow,
   })
   activitySpots.push({
     uid: `${spec.name}:bookshelf-spot-0`,
     toolCategory: 'file_research',
     standCol: roomCol + 1,
-    standRow: propsRow + 2,
+    standRow: roomRow + 1,
     facingDir: Direction.UP,
     occupiedBy: null,
   })
   activitySpots.push({
     uid: `${spec.name}:bookshelf-spot-1`,
     toolCategory: 'file_research',
-    standCol: roomCol + 2,
-    standRow: propsRow,
-    facingDir: Direction.LEFT,
-    occupiedBy: null,
-  })
-
-  // PC at right wall interior (on props row)
-  furniture.push({
-    uid: `${spec.name}:pc`,
-    type: FurnitureType.PC,
-    col: roomCol + spec.roomWidth - 2,
-    row: propsRow,
-  })
-  activitySpots.push({
-    uid: `${spec.name}:pc-spot-0`,
-    toolCategory: 'web_research',
-    standCol: roomCol + spec.roomWidth - 3,
-    standRow: propsRow,
-    facingDir: Direction.RIGHT,
-    occupiedBy: null,
-  })
-  activitySpots.push({
-    uid: `${spec.name}:pc-spot-1`,
-    toolCategory: 'web_research',
-    standCol: roomCol + spec.roomWidth - 2,
-    standRow: propsRow + 1,
+    standCol: roomCol + 3,
+    standRow: roomRow + 1,
     facingDir: Direction.UP,
     occupiedBy: null,
   })
 
-  // Whiteboard on the wall opposite the door (mounted on wall, or 1 inside for bottom)
-  const wallRow = doorSide === 'bottom' ? roomRow : roomRow + spec.roomHeight - 2
-  const wbCol = roomCol + Math.floor(spec.roomWidth / 2) - 1
+  // Whiteboard on right side of top wall
+  const wbCol = roomCol + spec.roomWidth - 3
   furniture.push({
     uid: `${spec.name}:whiteboard`,
     type: FurnitureType.WHITEBOARD,
     col: wbCol,
-    row: wallRow,
+    row: wallMountRow,
   })
-  const wbStandRow = doorSide === 'bottom' ? wallRow + 1 : wallRow - 1
-  const wbFacingDir = doorSide === 'bottom' ? Direction.UP : Direction.DOWN
+  const wbStandRow = roomRow + 1
+  const wbFacingDir = Direction.UP
   activitySpots.push({
     uid: `${spec.name}:whiteboard-spot-0`,
     toolCategory: 'planning',
@@ -257,6 +186,84 @@ function placeProjectRoomFurniture(
     facingDir: wbFacingDir,
     occupiedBy: null,
   })
+
+  // Desks (3x2) and chairs (1x2 with bgTile) fill from the door side inward
+  // DESK_FRONT = 3 wide, 2 tall; spacing between desks = 4 cols (3 desk + 1 gap)
+  // Chair goes 1 row away from desk on the door side
+  const startCol = roomCol + 2 // skip wall + 1 padding
+  let chairGlobalIdx = 0
+  for (let dr = 0; dr < spec.deskRows; dr++) {
+    let deskBaseRow: number
+    let chairRow: number
+    if (doorSide === 'bottom') {
+      // Door on bottom → desks from top (below wall props), chairs below desks
+      deskBaseRow = roomRow + 2 + dr * 4
+      chairRow = deskBaseRow + 2
+    } else {
+      // Door on top → desks from bottom upward, chairs above desks
+      deskBaseRow = roomRow + spec.roomHeight - 3 - dr * 4
+      chairRow = deskBaseRow - 1
+    }
+
+    const desksInThisRow = dr < spec.deskRows - 1
+      ? spec.desksPerRow
+      : spec.deskCount - dr * spec.desksPerRow
+
+    for (let dp = 0; dp < desksInThisRow; dp++) {
+      const deskCol = startCol + dp * 4
+      const deskIdx = dr * spec.desksPerRow + dp
+
+      // Place 3x2 desk
+      furniture.push({
+        uid: `${spec.name}:desk-${deskIdx}`,
+        type: FurnitureType.DESK,
+        col: deskCol,
+        row: deskBaseRow,
+      })
+
+      // Place PC on top of each desk (surface item)
+      furniture.push({
+        uid: `${spec.name}:pc-${deskIdx}`,
+        type: FurnitureType.PC,
+        col: deskCol + 1,
+        row: deskBaseRow,
+      })
+
+      // Place chairs facing the desk
+      const chairsForThisDesk = Math.min(2, spec.seatCount - chairGlobalIdx)
+      for (let ci = 0; ci < chairsForThisDesk; ci++) {
+        const chairUid = `${spec.name}:chair-${chairGlobalIdx}`
+        furniture.push({
+          uid: chairUid,
+          type: FurnitureType.CHAIR,
+          col: deskCol + ci,
+          row: chairRow,
+        })
+        seatUids.push(chairUid)
+        chairGlobalIdx++
+      }
+    }
+  }
+
+  // PC activity spots (stand next to any desk)
+  const firstDeskRow = doorSide === 'bottom' ? roomRow + 2 : roomRow + spec.roomHeight - 3
+  activitySpots.push({
+    uid: `${spec.name}:pc-spot-0`,
+    toolCategory: 'web_research',
+    standCol: roomCol + spec.roomWidth - 2,
+    standRow: firstDeskRow,
+    facingDir: Direction.LEFT,
+    occupiedBy: null,
+  })
+  activitySpots.push({
+    uid: `${spec.name}:pc-spot-1`,
+    toolCategory: 'web_research',
+    standCol: roomCol + spec.roomWidth - 2,
+    standRow: firstDeskRow + 1,
+    facingDir: Direction.LEFT,
+    occupiedBy: null,
+  })
+
 
   return { seatUids, activitySpots }
 }
@@ -287,9 +294,11 @@ export function generateRoomLayout(
     const deskCount = Math.ceil(seatCount / 2)
     const deskRows = Math.ceil(deskCount / ROOM_MAX_DESKS_PER_ROW)
     const desksPerRow = Math.ceil(deskCount / deskRows)
-    const interiorWidth = Math.max(ROOM_MIN_INTERIOR_WIDTH, 2 + desksPerRow * 3)
+    // DESK_FRONT = 3 wide; each desk slot = 4 cols (3 desk + 1 gap)
+    const interiorWidth = Math.max(ROOM_MIN_INTERIOR_WIDTH, 2 + desksPerRow * 4)
     const roomWidth = interiorWidth + 2
-    const interiorHeight = 1 + deskRows * 3
+    // Each desk row = 4 tiles: 2 desk + 1 chair gap + 1 spacing
+    const interiorHeight = 1 + deskRows * 4
     const roomHeight = Math.max(ROOM_HEIGHT, interiorHeight + 2)
     return { name: p.name, seatCount, deskCount, deskRows, desksPerRow, interiorWidth, roomWidth, roomHeight }
   })
@@ -478,6 +487,8 @@ export function generateRoomLayout(
   furniture.push({ uid: 'foreman:desk-0', type: FurnitureType.DESK, col: fmCol + 3, row: bottomRowStart + 1 })
   furniture.push({ uid: 'foreman:chair-0', type: FurnitureType.CHAIR, col: fmCol + 3, row: bottomRowStart + 3 })
   furniture.push({ uid: 'foreman:bookshelf', type: FurnitureType.BOOKSHELF, col: fmCol + 1, row: bottomRowStart + 1 })
+  furniture.push({ uid: 'foreman:plant', type: FurnitureType.PLANT, col: fmCol + 6, row: bottomRowStart + 1 })
+  furniture.push({ uid: 'foreman:bin', type: FurnitureType.BIN, col: fmCol + 1, row: bottomRowStart + 4 })
 
   rooms.push({
     projectName: FOREMAN_ROOM_NAME,
@@ -500,6 +511,8 @@ export function generateRoomLayout(
   furniture.push({ uid: 'artdirector:chair-0', type: FurnitureType.CHAIR, col: adCol + 3, row: bottomRowStart + 3 })
   furniture.push({ uid: 'artdirector:chair-1', type: FurnitureType.CHAIR, col: adCol + 4, row: bottomRowStart + 3 })
   furniture.push({ uid: 'artdirector:bookshelf', type: FurnitureType.BOOKSHELF, col: adCol + 1, row: bottomRowStart + 1 })
+  furniture.push({ uid: 'artdirector:cactus', type: FurnitureType.CACTUS, col: adCol + 6, row: bottomRowStart + 1 })
+  furniture.push({ uid: 'artdirector:coffee', type: FurnitureType.COFFEE, col: adCol + 1, row: bottomRowStart + 4 })
 
   rooms.push({
     projectName: ART_DIRECTOR_ROOM_NAME,
@@ -536,8 +549,8 @@ export function generateRoomLayout(
   const maxEnd = Math.max(topEnd, bottomEnd)
 
   const fillerDefs = [
-    { name: KITCHEN_ROOM_NAME, width: KITCHEN_ROOM_WIDTH, color: KITCHEN_FLOOR_COLOR, items: [FurnitureType.COOLER, FurnitureType.PLANT] },
-    { name: SERVER_ROOM_NAME, width: SERVER_ROOM_WIDTH, color: SERVER_FLOOR_COLOR, items: [FurnitureType.PC, FurnitureType.CRATE] },
+    { name: KITCHEN_ROOM_NAME, width: KITCHEN_ROOM_WIDTH, color: KITCHEN_FLOOR_COLOR, items: [FurnitureType.COFFEE, FurnitureType.PLANT_2] },
+    { name: SERVER_ROOM_NAME, width: SERVER_ROOM_WIDTH, color: SERVER_FLOOR_COLOR, items: [FurnitureType.PC, FurnitureType.CACTUS] },
   ]
 
   // Place filler rooms on the shorter side, sharing walls

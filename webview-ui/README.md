@@ -1,5 +1,11 @@
 # React + TypeScript + Vite
 
+## Asset Attribution
+
+The pixel art assets in `public/assets/` (furniture, floor tiles, wall tiles, character sprites) are sourced from [pablodelucca/pixel-agents](https://github.com/pablodelucca/pixel-agents) and are open source under the MIT license.
+
+---
+
 This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
 
 Currently, two official plugins are available:
