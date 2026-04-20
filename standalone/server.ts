@@ -31,6 +31,8 @@ import {
 	handleRemoveRoom,
 	handleSetSoundEnabled,
 	handleUpdateProjectDescription,
+	getJanDesignConfig,
+	handleSetJanDesignConfig,
 } from './agentHandlers.js';
 import {
 	startClickupPolling,
@@ -203,6 +205,9 @@ function handleWebviewReady(ws: WebSocket, ctx: ServerContext): void {
 	const soundEnabled = settings?.soundEnabled !== false;
 	ws.send(JSON.stringify({ type: 'settingsLoaded', soundEnabled }));
 
+	// Send Jan's design config
+	ws.send(JSON.stringify({ type: 'janDesignConfigLoaded', config: getJanDesignConfig() }));
+
 	// Send offline agents
 	ws.send(JSON.stringify({ type: 'offlineAgents', agents: getOfflineAgents(agentManager, persistentAgents) }));
 
@@ -248,6 +253,7 @@ const messageHandlers: Record<string, (ws: WebSocket, msg: Record<string, unknow
 	forgetAgent: (_ws, msg, ctx) => handleForgetAgent(msg, ctx),
 	removeRoom: (_ws, msg, ctx) => handleRemoveRoom(msg, ctx),
 	setSoundEnabled: (_ws, msg) => handleSetSoundEnabled(msg),
+	setJanDesignConfig: (_ws, msg, ctx) => handleSetJanDesignConfig(msg, ctx),
 	clickupRefresh: (_ws, _msg, ctx) => { handleClickupRefresh(ctx).catch(() => {}); },
 	clickupStartWork: (_ws, msg, ctx) => handleClickupStartWork(msg, ctx),
 	clickupConfigure: (_ws, msg, ctx) => handleClickupConfigure(msg, ctx),

@@ -36,6 +36,10 @@ export const TEAM_UX_ID = 'ux-design';
 export const TEAM_VISUAL_ID = 'visual-design';
 export const TEAM_WORKER_COUNT = 5;
 
+// ── Jan Design Config Defaults ────────────────────────────
+export const DEFAULT_DESIGN_FIGMA_URL = 'https://www.figma.com/design/aFC3igAq9P5iHtm2Gie8ta/Agent-workspace---Isolated-App-2.0?node-id=174-12168&p=f&t=u5tEjuD66B5WPC1Z-0';
+export const DEFAULT_DESIGN_CLICKUP_DOC_URL = 'https://app.clickup.com/90152414906/v/dc/2kyr1bnu-2595/2kyr1bnu-2795';
+
 // ── Review / Feedback Loop ────────────────────────────────
 export const REVIEW_TRIGGER_DELAY_MS = 5000;
 export const MAX_REVISION_COUNT = 3;

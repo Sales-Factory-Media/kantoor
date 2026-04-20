@@ -21,7 +21,8 @@ import {
 	mergeMcpConfigs,
 	pickRandomName,
 } from './agentStore.js';
-import type { RosterEntry } from './agentStore.js';
+import type { RosterEntry, DesignConfig } from './agentStore.js';
+import { getJanDesignConfig } from './agentHandlers.js';
 import { ensureMcpConfig as ensurePeersMcpConfig } from './conferenceManager.js';
 import { fetchListTasks, addTaskComment } from './clickupClient.js';
 import type { ClickUpConfig } from './clickupClient.js';
@@ -863,7 +864,8 @@ export function handleLaunchVisualDesigner(msg: Record<string, unknown>, ctx: Se
 	designer.workspacePath = workspacePath;
 
 	// Build visual designer-specific system prompt
-	const systemPrompt = buildVisualDesignerSystemPrompt(designer, projectDescription);
+	const designConfig = getJanDesignConfig();
+	const systemPrompt = buildVisualDesignerSystemPrompt(designer, projectDescription, designConfig);
 
 	const revisionPreamble = revisionMode
 		? `IMPORTANT: This is a REVISION. Jan (Art Director) has reviewed your previous work and requested changes.
@@ -879,7 +881,7 @@ Ticket URL: ${ticketUrl}
 ## Steps
 
 1. FIRST: Move the ticket to "in progress" using mcp__clickup__clickup_update_task (task_id: "${ticketId}", status: "in progress")
-2. Read the design handbook from ClickUp (doc page ID: 2kyr1bnu-2675) — understand the design system rules
+2. Read the design handbook from the ClickUp document at ${designConfig.clickupDocUrl} — understand the design system rules
 3. Read the full ticket with mcp__clickup__clickup_get_task (task_id: "${ticketId}")
 4. Read the ticket's comments with mcp__clickup__clickup_get_task_comments (task_id: "${ticketId}") — find the approved UX direction and Figma references
 5. Examine the approved UX designs in Figma — take screenshots to understand the structure
@@ -1029,7 +1031,8 @@ export function handleVisualQaReview(
 		return;
 	}
 
-	const systemPrompt = buildVisualQaSystemPrompt(qa);
+	const qaDesignConfig = getJanDesignConfig();
+	const systemPrompt = buildVisualQaSystemPrompt(qa, qaDesignConfig);
 	const initialTask = buildVisualQaInitialTask({ ticketId, ticketName, ticketUrl, designerName });
 
 	const newSessionId = crypto.randomUUID();

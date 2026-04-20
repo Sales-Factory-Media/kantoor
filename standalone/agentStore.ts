@@ -16,6 +16,8 @@ import {
 	TEAM_WORKER_COUNT,
 	JAN_ROLE_SHORT,
 	JAN_WORKSPACE,
+	DEFAULT_DESIGN_FIGMA_URL,
+	DEFAULT_DESIGN_CLICKUP_DOC_URL,
 } from './constants.js';
 import { writeJson } from './serverHelpers.js';
 import { loadKnownProjects } from '../src/projectStore.js';
@@ -23,6 +25,16 @@ import { loadKnownProjects } from '../src/projectStore.js';
 const SETTINGS_DIR = path.join(os.homedir(), '.pixel-agents');
 const AGENTS_FILE = path.join(SETTINGS_DIR, 'agents.json');
 const AGENTS_DIR = path.join(SETTINGS_DIR, 'agents');
+
+export interface DesignConfig {
+	figmaUrl: string;
+	clickupDocUrl: string;
+}
+
+export const DEFAULT_DESIGN_CONFIG: DesignConfig = {
+	figmaUrl: DEFAULT_DESIGN_FIGMA_URL,
+	clickupDocUrl: DEFAULT_DESIGN_CLICKUP_DOC_URL,
+};
 
 export interface PersistentAgent {
 	id: string;
@@ -1038,7 +1050,8 @@ export const VISUAL_DESIGN_CHECKLIST: string[] = [
 	'**Component library up to date** — if you create new components or new variants of existing components, they must either live in the central design system OR in a separate, named component library file. Never leave one-off components stranded on a playground page.',
 ];
 
-export function buildVisualDesignerSystemPrompt(agent: PersistentAgent, projectDescription?: string): string {
+export function buildVisualDesignerSystemPrompt(agent: PersistentAgent, projectDescription?: string, designConfig?: DesignConfig): string {
+	const cfg = designConfig ?? DEFAULT_DESIGN_CONFIG;
 	const memoryPath = getAgentMemoryPath(agent.id);
 	const lines = [
 		`You are ${agent.name}, a Visual Designer agent.`,
@@ -1050,10 +1063,12 @@ export function buildVisualDesignerSystemPrompt(agent: PersistentAgent, projectD
 		'tokens, and visual language.',
 		'',
 		'You ALWAYS use this file as your reference:',
-		'https://app.clickup.com/90152414906/v/dc/2kyr1bnu-2535/2kyr1bnu-2715',
+		cfg.clickupDocUrl,
 		'This ClickUp doc points to the design system file in Figma. You MUST open and study that referenced Figma',
 		'file before starting any visual work, so you fully understand what is expected (components, tokens,',
 		'typography, spacing, color, states, iconography).',
+		'',
+		`The Figma design file you work in: ${cfg.figmaUrl}`,
 		'',
 		'You work in Jan\'s design pipeline. You receive approved UX directions and produce polished,',
 		'production-ready visual implementations in Figma. Unlike UX designers who explore multiple directions,',
@@ -1062,9 +1077,9 @@ export function buildVisualDesignerSystemPrompt(agent: PersistentAgent, projectD
 		'## Your Role',
 		'',
 		'As a Visual Designer, you:',
-		'- **Open the design system reference** at https://app.clickup.com/90152414906/v/dc/2kyr1bnu-2555/2kyr1bnu-2735 and follow it through to the referenced Figma design system file',
+		`- **Open the design system reference** at ${cfg.clickupDocUrl} and follow it through to the referenced Figma design system file`,
 		'- **Study the Figma design system file** using Figma MCP tools until you fully understand the components, tokens, typography, spacing, color, and interaction patterns',
-		'- **Read the design handbook** (ClickUp doc page ID: 2kyr1bnu-2675) for any additional rules and guidelines',
+		`- **Read the design handbook** from the ClickUp document at ${cfg.clickupDocUrl} for any additional rules and guidelines`,
 		'- **Read your assigned ClickUp ticket and its comments** to find which UX direction was approved and where it lives in Figma',
 		'- **Examine the approved UX designs in Figma** using MCP tools to understand the structure and intent',
 		'- **Create a polished visual implementation** that is design-system-compliant and production-ready, retaining all features of the UX but re-skinned entirely to the design system',
@@ -1082,8 +1097,8 @@ export function buildVisualDesignerSystemPrompt(agent: PersistentAgent, projectD
 		'',
 		'## Design Workflow',
 		'',
-		'1. Open the design system reference at https://app.clickup.com/90152414906/v/dc/2kyr1bnu-2555/2kyr1bnu-2735 and follow the link through to the Figma design system file. Use Figma MCP tools (`figma_list_open_files`, `figma_get_file_data`, `figma_get_design_system_summary`, `figma_get_library_components`, `figma_get_variables`, `figma_get_text_styles`, `figma_get_styles`, `figma_browse_tokens`) to fully absorb the design system before doing anything else.',
-		'2. Read the design handbook from ClickUp (doc page ID: 2kyr1bnu-2675) to understand any additional style rules',
+		`1. Open the design system reference at ${cfg.clickupDocUrl} and follow the link through to the Figma design system file. Use Figma MCP tools (\`figma_list_open_files\`, \`figma_get_file_data\`, \`figma_get_design_system_summary\`, \`figma_get_library_components\`, \`figma_get_variables\`, \`figma_get_text_styles\`, \`figma_get_styles\`, \`figma_browse_tokens\`) to fully absorb the design system before doing anything else.`,
+		`2. Read the design handbook from the ClickUp document at ${cfg.clickupDocUrl} to understand any additional style rules`,
 		'3. Read the ticket and ALL comments to find the approved UX direction and Figma references',
 		'4. Examine the approved UX designs in Figma using `figma_get_file_data` and `figma_take_screenshot`',
 		'5. Search MemPalace for existing design patterns, decisions, and component knowledge',
@@ -1155,8 +1170,9 @@ export function buildVisualDesignerSystemPrompt(agent: PersistentAgent, projectD
 		'',
 		'## Reading the Design Handbook',
 		'',
-		'Use `mcp__clickup__clickup_list_document_pages` with document_id "2kyr1bnu-2675" to list all pages and get their IDs.',
-		'Then read specific pages with `mcp__clickup__clickup_get_document_pages` using the document_id and relevant page_ids to understand:',
+		`The design handbook is part of the ClickUp document at ${cfg.clickupDocUrl}.`,
+		'Use `mcp__clickup__clickup_list_document_pages` to list all pages and get their IDs.',
+		'Then read specific pages with `mcp__clickup__clickup_get_document_pages` to understand:',
 		'- Color palette and usage rules',
 		'- Typography scale and font specifications',
 		'- Spacing and grid system',
@@ -1199,7 +1215,8 @@ export function buildVisualDesignerSystemPrompt(agent: PersistentAgent, projectD
 
 // ── Visual Quality Reviewer (AI Review) ───────────────────
 
-export function buildVisualQaSystemPrompt(agent: PersistentAgent): string {
+export function buildVisualQaSystemPrompt(agent: PersistentAgent, designConfig?: DesignConfig): string {
+	const cfg = designConfig ?? DEFAULT_DESIGN_CONFIG;
 	const memoryPath = getAgentMemoryPath(agent.id);
 	const lines = [
 		`You are ${agent.name}, the Visual Quality Reviewer for the Visual Design Team.`,
@@ -1224,9 +1241,9 @@ export function buildVisualQaSystemPrompt(agent: PersistentAgent): string {
 		'',
 		'## Reference material',
 		'',
-		'- Design system reference: https://app.clickup.com/90152414906/v/dc/2kyr1bnu-2555/2kyr1bnu-2735',
+		`- Design system reference: ${cfg.clickupDocUrl}`,
 		'  (this ClickUp doc points to the design system file in Figma — open and study it)',
-		'- Design handbook: ClickUp doc page 2kyr1bnu-2675',
+		`- Figma design file: ${cfg.figmaUrl}`,
 		'- Use the Figma MCP tools (`mcp__figma-console__*`) to inspect the designer\'s output directly.',
 		'',
 		'## Review Checklist (formal — same one designers see)',
