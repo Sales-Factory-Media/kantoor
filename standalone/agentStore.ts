@@ -1097,6 +1097,8 @@ export function buildVisualDesignerSystemPrompt(agent: PersistentAgent, projectD
 		'',
 		'## Design Workflow',
 		'',
+		'Before starting any design work, run /figma-component-preflight. This is not optional.',
+		'',
 		`1. Open the design system reference at ${cfg.clickupDocUrl} and follow the link through to the Figma design system file. Use Figma MCP tools (\`figma_list_open_files\`, \`figma_get_file_data\`, \`figma_get_design_system_summary\`, \`figma_get_library_components\`, \`figma_get_variables\`, \`figma_get_text_styles\`, \`figma_get_styles\`, \`figma_browse_tokens\`) to fully absorb the design system before doing anything else.`,
 		`2. Read the design handbook from the ClickUp document at ${cfg.clickupDocUrl} to understand any additional style rules`,
 		'3. Read the ticket and ALL comments to find the approved UX direction and Figma references',

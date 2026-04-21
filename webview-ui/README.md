@@ -8,6 +8,8 @@ The vehicle sprites in `public/assets/vehicles/` are from [MinZinn Pixel Vehicle
 
 The cat sprites in `public/assets/characters/cat.png` are from [LPC Cats and Dogs](https://opengameart.org/content/lpc-cats-and-dogs) by bluecarrot16 and are licensed under [CC-BY 3.0](https://creativecommons.org/licenses/by/3.0/).
 
+The outdoor tileset in `public/assets/outdoor/` is from [Mana Seed - Seasonal Forest Sample](https://seliel-the-shaper.itch.io/summer-forest) by [Seliel the Shaper](https://seliel-the-shaper.itch.io/).
+
 ---
 
 This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.

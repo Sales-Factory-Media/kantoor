@@ -114,7 +114,7 @@ export function BottomToolbar({
           </button>
         )}
         <span style={{ fontSize: '8px', opacity: 0.4, marginLeft: 8 }}>
-          Furniture by pablodelucca (MIT) | Vehicles by MinZinn (CC-BY 4.0) | Cats by bluecarrot16 (CC-BY 3.0)
+          Furniture by pablodelucca (MIT) | Vehicles by MinZinn (CC-BY 4.0) | Cats by bluecarrot16 (CC-BY 3.0) | Forest by Seliel the Shaper
         </span>
       </div>
     )

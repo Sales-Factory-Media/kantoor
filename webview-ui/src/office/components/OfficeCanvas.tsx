@@ -1,5 +1,6 @@
 import { useRef, useEffect, useCallback } from 'react'
 import { loadCatSprites } from '../cats.js'
+import { loadAndGenerateOutdoor } from '../outdoor/outdoorGenerator.js'
 import type { OfficeState } from '../engine/officeState.js'
 import type { SelectionRenderState } from '../engine/renderer.js'
 import { startGameLoop } from '../engine/gameLoop.js'
@@ -77,6 +78,14 @@ export function OfficeCanvas({ officeState, onClick, zoom, onZoomChange, panRef 
       }
     })
 
+    // Generate outdoor area
+    const layout = officeState.getLayout()
+    if (!officeState.outdoor) {
+      loadAndGenerateOutdoor('assets/outdoor/summer-forest.png', layout.cols, layout.rows).then(outdoor => {
+        if (outdoor) officeState.outdoor = outdoor
+      })
+    }
+
     const stop = startGameLoop(canvas, {
       update: (dt) => {
         officeState.update(dt)
@@ -132,6 +141,7 @@ export function OfficeCanvas({ officeState, onClick, zoom, onZoomChange, panRef 
           officeState.getLayout().rows,
           officeState.rooms,
           officeState.cats,
+          officeState.outdoor,
         )
         offsetRef.current = { x: offsetX, y: offsetY }
       },

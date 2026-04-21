@@ -2,6 +2,7 @@ import { TILE_SIZE, MATRIX_EFFECT_DURATION, CharacterState, Direction } from '..
 import type { CatSprites } from '../cats.js'
 import { createCat, updateCat } from '../cats.js'
 import type { Cat } from '../cats.js'
+import type { OutdoorState } from '../outdoor/outdoorGenerator.js'
 import type { RoomInfo } from '../layout/roomGenerator.js'
 import { generateRoomLayout } from '../layout/roomGenerator.js'
 import {
@@ -50,6 +51,9 @@ export class OfficeState {
   /** Reverse lookup: sub-agent character ID → parent info */
   subagentMeta: Map<number, { parentAgentId: number; parentToolId: string }> = new Map()
   private nextSubagentId = -1
+
+  /** Outdoor WFC-generated nature area around the office */
+  outdoor: OutdoorState | null = null
 
   /** Cats wandering the corridor */
   cats: Cat[] = []

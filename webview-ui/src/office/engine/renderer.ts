@@ -1,6 +1,7 @@
 import { TileType, TILE_SIZE, CharacterState } from '../types.js'
 import type { TileType as TileTypeVal, FurnitureInstance, Character, Seat, FloorColor } from '../types.js'
 import type { Cat } from '../cats.js'
+import type { OutdoorState } from '../outdoor/outdoorGenerator.js'
 import type { RoomInfo } from '../layout/roomGenerator.js'
 import { getCachedSprite, getOutlineSprite } from '../sprites/spriteCache.js'
 import { getCharacterSprites, BUBBLE_PERMISSION_SPRITE, BUBBLE_WAITING_SPRITE } from '../sprites/spriteData.js'
@@ -368,6 +369,7 @@ export function renderFrame(
   layoutRows?: number,
   rooms?: RoomInfo[],
   cats?: Cat[],
+  outdoor?: OutdoorState | null,
 ): { offsetX: number; offsetY: number } {
   // Clear
   ctx.clearRect(0, 0, canvasWidth, canvasHeight)
@@ -381,6 +383,11 @@ export function renderFrame(
   const mapH = rows * TILE_SIZE * zoom
   const offsetX = Math.floor((canvasWidth - mapW) / 2) + Math.round(panX)
   const offsetY = Math.floor((canvasHeight - mapH) / 2) + Math.round(panY)
+
+  // Draw outdoor nature tiles behind the office
+  if (outdoor) {
+    renderOutdoorTiles(ctx, outdoor, offsetX, offsetY, zoom, canvasWidth, canvasHeight)
+  }
 
   // Draw tiles (floor + wall base color)
   renderTileGrid(ctx, tileMap, offsetX, offsetY, zoom, tileColors, layoutCols)
@@ -415,4 +422,27 @@ export function renderFrame(
   renderNames(ctx, characters, offsetX, offsetY, zoom)
 
   return { offsetX, offsetY }
+}
+
+// ── Outdoor rendering ─────────────────────────────────────────
+
+function renderOutdoorTiles(
+  ctx: CanvasRenderingContext2D,
+  outdoor: OutdoorState,
+  officeOffsetX: number,
+  officeOffsetY: number,
+  zoom: number,
+  _canvasWidth: number,
+  _canvasHeight: number,
+): void {
+  const { bakedCanvas, width, height, offsetCol, offsetRow } = outdoor
+  if (!bakedCanvas) return
+
+  // Single blit of the prebaked outdoor canvas, scaled to current zoom.
+  // imageSmoothingEnabled=false (set in gameLoop) keeps integer-zoom pixel-crisp.
+  const baseX = officeOffsetX + offsetCol * TILE_SIZE * zoom
+  const baseY = officeOffsetY + offsetRow * TILE_SIZE * zoom
+  const dw = width * TILE_SIZE * zoom
+  const dh = height * TILE_SIZE * zoom
+  ctx.drawImage(bakedCanvas, Math.round(baseX), Math.round(baseY), dw, dh)
 }
