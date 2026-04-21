@@ -10,12 +10,6 @@ import {
   PC_SPRITE,
   LAMP_SPRITE,
   CRATE_SPRITE,
-  PORSCHE_SPRITE,
-  LAMBO_SPRITE,
-  FERRARI_SPRITE,
-  MULTIPLA_SPRITE,
-  MASSERATI_SPRITE,
-  RANGE_ROVER_SPRITE,
 } from '../sprites/spriteData.js'
 
 export interface LoadedAssetData {
@@ -56,12 +50,6 @@ export const FURNITURE_CATALOG: CatalogEntryWithCategory[] = [
   { type: FurnitureType.PC,         label: 'PC',         footprintW: 1, footprintH: 2, sprite: PC_SPRITE,           isDesk: false, category: 'electronics', canPlaceOnSurfaces: true, backgroundTiles: 1 },
   { type: FurnitureType.LAMP,       label: 'Lamp',       footprintW: 1, footprintH: 1, sprite: LAMP_SPRITE,         isDesk: false, category: 'decor' },
   { type: FurnitureType.CRATE,      label: 'Crate',      footprintW: 1, footprintH: 1, sprite: CRATE_SPRITE,        isDesk: false, category: 'storage' },
-  { type: FurnitureType.PORSCHE,    label: 'Porsche',    footprintW: 5, footprintH: 2, sprite: PORSCHE_SPRITE,      isDesk: false, category: 'misc' },
-  { type: FurnitureType.LAMBO,      label: 'Lambo',      footprintW: 5, footprintH: 2, sprite: LAMBO_SPRITE,        isDesk: false, category: 'misc' },
-  { type: FurnitureType.FERRARI,    label: 'Ferrari',    footprintW: 4, footprintH: 2, sprite: FERRARI_SPRITE,      isDesk: false, category: 'misc' },
-  { type: FurnitureType.MULTIPLA,   label: 'Multipla',   footprintW: 3, footprintH: 1, sprite: MULTIPLA_SPRITE,     isDesk: false, category: 'misc' },
-  { type: FurnitureType.MASSERATI,  label: 'Masserati',  footprintW: 5, footprintH: 2, sprite: MASSERATI_SPRITE,    isDesk: false, category: 'misc' },
-  { type: FurnitureType.RANGE_ROVER, label: 'Range Rover', footprintW: 5, footprintH: 2, sprite: RANGE_ROVER_SPRITE, isDesk: false, category: 'misc' },
 
 ]
 

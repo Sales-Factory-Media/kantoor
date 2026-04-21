@@ -113,6 +113,9 @@ export function BottomToolbar({
             Fetch now
           </button>
         )}
+        <span style={{ fontSize: '8px', opacity: 0.4, marginLeft: 8 }}>
+          Furniture by pablodelucca (MIT) | Vehicles by MinZinn (CC-BY 4.0) | Cats by bluecarrot16 (CC-BY 3.0)
+        </span>
       </div>
     )
   }

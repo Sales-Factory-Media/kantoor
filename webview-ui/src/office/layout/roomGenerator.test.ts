@@ -118,10 +118,12 @@ describe('generateRoomLayout', () => {
       expect(conf.row).toBe(beta.row) // same bottom row
     })
 
-    it('garage only has cars for live agents, not total employed', () => {
-      const { layout } = generateRoomLayout([{ name: 'proj', agentCount: 10 }], 2)
+    it('garage has one car per agent car type', () => {
+      const { layout } = generateRoomLayout([{ name: 'proj', agentCount: 10 }], ['CAR_SEDAN', 'CAR_SPORT'])
       const cars = layout.furniture.filter(f => f.uid.startsWith('garage:car-'))
       expect(cars).toHaveLength(2)
+      expect(cars[0].type).toBe('CAR_SEDAN')
+      expect(cars[1].type).toBe('CAR_SPORT')
     })
   })
 

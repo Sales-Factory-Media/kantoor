@@ -4,6 +4,10 @@
 
 The pixel art assets in `public/assets/` (furniture, floor tiles, wall tiles, character sprites) are sourced from [pablodelucca/pixel-agents](https://github.com/pablodelucca/pixel-agents) and are open source under the MIT license.
 
+The vehicle sprites in `public/assets/vehicles/` are from [MinZinn Pixel Vehicles](https://minzinn.itch.io/pixelvehicles) by [@MinZiin_](https://minzinn.itch.io/) and are licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/).
+
+The cat sprites in `public/assets/characters/cat.png` are from [LPC Cats and Dogs](https://opengameart.org/content/lpc-cats-and-dogs) by bluecarrot16 and are licensed under [CC-BY 3.0](https://creativecommons.org/licenses/by/3.0/).
+
 ---
 
 This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.

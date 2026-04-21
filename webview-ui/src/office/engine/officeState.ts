@@ -1,4 +1,7 @@
 import { TILE_SIZE, MATRIX_EFFECT_DURATION, CharacterState, Direction } from '../types.js'
+import type { CatSprites } from '../cats.js'
+import { createCat, updateCat } from '../cats.js'
+import type { Cat } from '../cats.js'
 import type { RoomInfo } from '../layout/roomGenerator.js'
 import { generateRoomLayout } from '../layout/roomGenerator.js'
 import {
@@ -47,6 +50,13 @@ export class OfficeState {
   /** Reverse lookup: sub-agent character ID → parent info */
   subagentMeta: Map<number, { parentAgentId: number; parentToolId: string }> = new Map()
   private nextSubagentId = -1
+
+  /** Cats wandering the corridor */
+  cats: Cat[] = []
+  /** Corridor tiles for cat pathfinding */
+  corridorTiles: Array<{ col: number; row: number }> = []
+  /** Loaded cat sprite variants */
+  catSprites: CatSprites[] = []
 
   /** Room metadata from auto-generated layout */
   rooms: RoomInfo[] = []
@@ -275,10 +285,14 @@ export class OfficeState {
       agentCount: Math.max(employedCounts.get(name) || 0, liveAgentCounts.get(name) || 0),
     }))
 
-    // Count live agents for garage sizing (only cars for online agents)
-    let totalLiveAgents = 0
-    for (const count of liveAgentCounts.values()) totalLiveAgents += count
-    const { layout, rooms } = generateRoomLayout(sortedProjects, totalLiveAgents)
+    // Collect car types from live agents for the garage
+    const agentCarTypes: string[] = []
+    for (const ch of this.characters.values()) {
+      if (ch.isSubagent) continue
+      if (ch.matrixEffect === 'despawn') continue
+      if (ch.carType) agentCarTypes.push(ch.carType)
+    }
+    const { layout, rooms } = generateRoomLayout(sortedProjects, agentCarTypes)
 
     // Store room metadata
     this.rooms = rooms
@@ -315,6 +329,46 @@ export class OfficeState {
         ch.moveProgress = 0
       }
     }
+
+    // Collect corridor tiles for cat pathfinding
+    this.corridorTiles = []
+    for (let r = 0; r < layout.rows; r++) {
+      for (let c = 0; c < layout.cols; c++) {
+        const tile = layout.tiles[r * layout.cols + c]
+        if (tile !== 0 && tile !== 8) { // not WALL and not VOID
+          // Check if this tile is in the corridor (not inside any room)
+          const inRoom = rooms.some(room =>
+            c >= room.col && c < room.col + room.width &&
+            r >= room.row && r < room.row + room.height
+          )
+          if (!inRoom) {
+            this.corridorTiles.push({ col: c, row: r })
+          }
+        }
+      }
+    }
+
+    // Only spawn cats if none exist yet (preserve across layout rebuilds)
+    if (this.cats.length === 0 && this.catSprites.length > 0 && this.corridorTiles.length > 0) {
+      const catCount = Math.min(3, Math.max(1, Math.floor(this.corridorTiles.length / 15)))
+      for (let i = 0; i < catCount; i++) {
+        const tile = this.corridorTiles[Math.floor(Math.random() * this.corridorTiles.length)]
+        const variant = i % this.catSprites.length
+        this.cats.push(createCat(i, tile.col, tile.row, variant, this.catSprites[variant]))
+      }
+    }
+  }
+
+  /** Update all cats */
+  updateCats(dt: number): void {
+    for (const cat of this.cats) {
+      updateCat(cat, dt, this.corridorTiles)
+    }
+  }
+
+  /** Set cat sprites (called when assets load) */
+  setCatSprites(sprites: CatSprites[]): void {
+    this.catSprites = sprites
   }
 
   /** Pick a name not currently in use by any character */
@@ -927,6 +981,9 @@ export class OfficeState {
     for (const id of toDelete) {
       this.characters.delete(id)
     }
+
+    // Update cats
+    this.updateCats(dt)
   }
 
   getCharacters(): Character[] {

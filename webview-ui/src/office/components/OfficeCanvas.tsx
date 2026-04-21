@@ -1,4 +1,5 @@
 import { useRef, useEffect, useCallback } from 'react'
+import { loadCatSprites } from '../cats.js'
 import type { OfficeState } from '../engine/officeState.js'
 import type { SelectionRenderState } from '../engine/renderer.js'
 import { startGameLoop } from '../engine/gameLoop.js'
@@ -69,6 +70,13 @@ export function OfficeCanvas({ officeState, onClick, zoom, onZoomChange, panRef 
       observer.observe(containerRef.current)
     }
 
+    // Load cat sprites
+    loadCatSprites('assets/characters/cat.png').then(sprites => {
+      if (sprites.length > 0) {
+        officeState.setCatSprites(sprites)
+      }
+    })
+
     const stop = startGameLoop(canvas, {
       update: (dt) => {
         officeState.update(dt)
@@ -123,6 +131,7 @@ export function OfficeCanvas({ officeState, onClick, zoom, onZoomChange, panRef 
           officeState.getLayout().cols,
           officeState.getLayout().rows,
           officeState.rooms,
+          officeState.cats,
         )
         offsetRef.current = { x: offsetX, y: offsetY }
       },

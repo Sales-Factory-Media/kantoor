@@ -135,13 +135,20 @@ export const FurnitureType = {
   PC: 'PC_FRONT_OFF',
   PC_FRONT_OFF: 'PC_FRONT_OFF',
   PC_BACK: 'PC_BACK',
-  // Vehicles (custom sprites, not from upstream)
-  PORSCHE: 'porsche',
-  LAMBO: 'lambo',
-  FERRARI: 'ferrari',
-  MULTIPLA: 'multipla',
-  MASSERATI: 'masserati',
-  RANGE_ROVER: 'range_rover',
+  // Vehicles (MinZinn Pixel Vehicles, CC-BY 4.0)
+  CAR_SEDAN: 'CAR_SEDAN',
+  CAR_SPORT: 'CAR_SPORT',
+  CAR_SUV: 'CAR_SUV',
+  CAR_PICKUP: 'CAR_PICKUP',
+  CAR_COUPE: 'CAR_COUPE',
+  CAR_SUPERCAR: 'CAR_SUPERCAR',
+  // Legacy vehicle aliases
+  PORSCHE: 'CAR_SPORT',
+  LAMBO: 'CAR_SUPERCAR',
+  FERRARI: 'CAR_COUPE',
+  MULTIPLA: 'CAR_SEDAN',
+  MASSERATI: 'CAR_SPORT',
+  RANGE_ROVER: 'CAR_SUV',
   // Legacy aliases
   COOLER: 'COFFEE',
   LAMP: 'CLOCK',
@@ -268,6 +275,8 @@ export interface Character {
   atActivitySpot: boolean
   /** Current activity spot target, or null if heading to seat */
   activityTarget: ActivitySpot | null
+  /** Assigned car type for the garage (persisted per agent) */
+  carType?: string
 }
 
 export interface ConversationEntry {

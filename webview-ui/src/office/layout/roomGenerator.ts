@@ -84,7 +84,13 @@ function fillRoomTiles(
   roomHeight: number,
   floorColor: FloorColor,
   doorSide: 'top' | 'bottom',
+  doorWidth = 1,
+  /** Additional doors on other walls: { side, position (col or row offset) } */
+  extraDoors?: Array<{ side: 'left' | 'right'; row: number }>,
 ): void {
+  const doorStart = Math.floor(roomWidth / 2) - Math.floor(doorWidth / 2)
+  const doorEnd = doorStart + doorWidth - 1
+
   for (let r = 0; r < roomHeight; r++) {
     for (let c = 0; c < roomWidth; c++) {
       const tileRow = roomRow + r
@@ -99,9 +105,21 @@ function fillRoomTiles(
       const isDoorWall = doorSide === 'bottom' ? isBottomWall : isTopWall
       const isOppWall = doorSide === 'bottom' ? isTopWall : isBottomWall
 
+      // Check extra doors on side walls
+      let isExtraDoor = false
+      if (extraDoors && (isLeftWall || isRightWall)) {
+        const side = isLeftWall ? 'left' : 'right'
+        isExtraDoor = extraDoors.some(d => d.side === side && d.row === r)
+      }
+
+      if (isExtraDoor) {
+        tiles[idx] = TileType.FLOOR_1
+        tileColors[idx] = floorColor
+        continue
+      }
+
       if (isDoorWall) {
-        const doorCol = Math.floor(roomWidth / 2)
-        if (c === doorCol) {
+        if (c >= doorStart && c <= doorEnd) {
           tiles[idx] = TileType.FLOOR_1
           tileColors[idx] = floorColor
         } else {
@@ -164,7 +182,7 @@ function buildConfigKey(projects: Array<{ name: string; agentCount: number }>): 
 
 export function generateRoomLayout(
   projects: Array<{ name: string; agentCount: number }>,
-  liveAgentCount?: number,
+  agentCarTypes?: string[],
 ): GeneratedLayout {
   // Only regenerate seed when room config actually changes
   const configKey = buildConfigKey(projects)
@@ -221,37 +239,35 @@ export function generateRoomLayout(
     ? Math.max(...bottomSpecs.map(r => r.roomHeight), ROOM_HEIGHT)
     : ROOM_HEIGHT
 
-  // ── Garage dimensions ───────────────────────────────────────
-  const carCount = liveAgentCount ?? projects.reduce((sum, p) => sum + p.agentCount, 0)
-  const garageInteriorHeight = 1 + carCount * GARAGE_CAR_SLOT_HEIGHT
-  const garageHeight = Math.max(ROOM_HEIGHT, garageInteriorHeight + 2)
-  // Garage shares wall with first room: offset = GARAGE_WIDTH - 1
-  const garageColOffset = GARAGE_WIDTH - 1
-
-  // ── Layout dimensions ───────────────────────────────────────
-  // Adjacent rooms share walls: each additional room adds (width - 1) columns
-  const sharedWallTotal = (specs: { roomWidth?: number; width?: number }[]) =>
-    specs.length === 0 ? 0 : specs.reduce((sum, r) => sum + ((r.roomWidth ?? r.width ?? 0) - 1), 0) + 1
-
+  // ── Layout dimensions (compute first so garage can match full height) ──
   const topRowStart = ROOM_LABEL_ROWS
   const corridorRow = topRowStart + maxTopHeight
   const bottomRowStart = corridorRow + CORRIDOR_HEIGHT
 
+  // Adjacent rooms share walls: each additional room adds (width - 1) columns
+  const sharedWallTotal = (specs: { roomWidth?: number; width?: number }[]) =>
+    specs.length === 0 ? 0 : specs.reduce((sum, r) => sum + ((r.roomWidth ?? r.width ?? 0) - 1), 0) + 1
+
   const topColsTotal = sharedWallTotal(topSpecs)
   const bottomProjectCols = sharedWallTotal(bottomSpecs)
   const specialColsTotal = sharedWallTotal(specialWidths.map(w => ({ width: w })))
-  // Bottom project rooms share wall with first special room
   const bottomColsTotal = bottomProjectCols > 0
     ? bottomProjectCols + specialColsTotal - 1
     : specialColsTotal
 
   const rightSideCols = Math.max(topColsTotal, bottomColsTotal)
-  const totalCols = garageColOffset + rightSideCols
 
-  const totalRowsBase = bottomRowStart + maxBottomHeight
-  const garageTopRow = ROOM_LABEL_ROWS
-  const garageTotalHeight = ROOM_LABEL_ROWS + garageHeight
-  const totalRows = Math.max(totalRowsBase, garageTotalHeight)
+  // ── Garage dimensions ───────────────────────────────────────
+  const garageTopRow = topRowStart
+  const carTypes = agentCarTypes ?? []
+  const carCount = carTypes.length
+  // Garage spans the full office height (top rooms + corridor + bottom rooms)
+  const fullOfficeHeight = bottomRowStart + maxBottomHeight - topRowStart
+  const garageHeight = Math.max(fullOfficeHeight, ROOM_HEIGHT)
+  const garageColOffset = GARAGE_WIDTH - 1
+
+  const totalCols = garageColOffset + rightSideCols
+  const totalRows = topRowStart + garageHeight
 
   // ── Initialize tiles ────────────────────────────────────────
   const tiles: TileTypeVal[] = new Array(totalRows * totalCols).fill(TileType.VOID)
@@ -260,17 +276,17 @@ export function generateRoomLayout(
   const rooms: RoomInfo[] = []
 
   // ── Garage ──────────────────────────────────────────────────
-  fillRoomTiles(tiles, tileColors, totalCols, 0, garageTopRow, GARAGE_WIDTH, garageHeight, GARAGE_FLOOR_COLOR, 'bottom')
+  // Door on right wall at corridor level so agents can walk between garage and hallway
+  const corridorDoorRows: Array<{ side: 'left' | 'right'; row: number }> = []
+  for (let r = 0; r < CORRIDOR_HEIGHT; r++) {
+    corridorDoorRows.push({ side: 'right', row: corridorRow - garageTopRow + r })
+  }
+  fillRoomTiles(tiles, tileColors, totalCols, 0, garageTopRow, GARAGE_WIDTH, garageHeight, GARAGE_FLOOR_COLOR, 'bottom', 3, corridorDoorRows)
 
-  const carTypes = [
-    FurnitureType.PORSCHE, FurnitureType.LAMBO, FurnitureType.FERRARI,
-    FurnitureType.MULTIPLA, FurnitureType.MASSERATI, FurnitureType.RANGE_ROVER,
-  ]
   for (let i = 0; i < carCount; i++) {
-    const carType = carTypes[Math.floor(Math.random() * carTypes.length)]
     furniture.push({
       uid: `garage:car-${i}`,
-      type: carType,
+      type: carTypes[i],
       col: 1,
       row: garageTopRow + 2 + i * GARAGE_CAR_SLOT_HEIGHT,
     })
@@ -450,6 +466,32 @@ export function generateRoomLayout(
     }
   }
 
+  // ── East wall at end of corridor (with door) ────────────────
+  const eastWallCol = totalCols - 1
+  for (let r = 0; r < CORRIDOR_HEIGHT; r++) {
+    const idx = (corridorRow + r) * totalCols + eastWallCol
+    if (idx >= 0 && idx < tiles.length) {
+      // Middle tile(s) are a door
+      if (r === Math.floor(CORRIDOR_HEIGHT / 2)) {
+        tiles[idx] = TileType.FLOOR_1
+        tileColors[idx] = CORRIDOR_FLOOR_COLOR
+      } else {
+        tiles[idx] = TileType.WALL
+        tileColors[idx] = DEFAULT_WALL_COLOR
+      }
+    }
+  }
+
+  // ── Top-right rest space enclosure ─────────────────────────
+  // Right wall from top row down to corridor
+  for (let r = topRowStart; r < corridorRow; r++) {
+    const idx = r * totalCols + (totalCols - 1)
+    if (idx >= 0 && idx < tiles.length && tiles[idx] === TileType.VOID) {
+      tiles[idx] = TileType.WALL
+      tileColors[idx] = DEFAULT_WALL_COLOR
+    }
+  }
+
   // ── Corridor plants (rare, never blocking entrances) ────────
   // Collect all door columns so we know what to avoid
   const doorCols = new Set<number>()
@@ -490,12 +532,12 @@ export function generateRoomLayout(
     corridorPlantsPlaced++
   }
 
-  // ── Filler rooms (fill shorter side gaps) ───────────────────
+  // ── Filler rooms (fill gaps up to the east wall) ────────────
   // topColOffset / bottomColOffset point to the next free column (shared wall col)
-  // We want to extend the shorter side to match the longer side
+  // Extend both sides to the full width so there's no empty space
   const topEnd = topColOffset
   const bottomEnd = bottomColOffset
-  const maxEnd = Math.max(topEnd, bottomEnd)
+  const maxEnd = totalCols
 
   const fillerDefs = [
     { name: KITCHEN_ROOM_NAME, width: KITCHEN_ROOM_WIDTH, color: KITCHEN_FLOOR_COLOR, items: [FurnitureType.COFFEE, FurnitureType.PLANT_2] },
