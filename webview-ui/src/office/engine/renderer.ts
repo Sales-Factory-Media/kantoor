@@ -1,5 +1,7 @@
 import { TileType, TILE_SIZE, CharacterState } from '../types.js'
 import type { TileType as TileTypeVal, FurnitureInstance, Character, Seat, FloorColor } from '../types.js'
+import type { Cat } from '../cats.js'
+import type { OutdoorState } from '../outdoor/outdoorGenerator.js'
 import type { RoomInfo } from '../layout/roomGenerator.js'
 import { getCachedSprite, getOutlineSprite } from '../sprites/spriteCache.js'
 import { getCharacterSprites, BUBBLE_PERMISSION_SPRITE, BUBBLE_WAITING_SPRITE } from '../sprites/spriteData.js'
@@ -92,6 +94,7 @@ export function renderScene(
   zoom: number,
   selectedAgentId: number | null,
   hoveredAgentId: number | null,
+  cats?: Cat[],
 ): void {
   const drawables: ZDrawable[] = []
 
@@ -165,6 +168,29 @@ export function renderScene(
         c.drawImage(cached, drawX, drawY)
       },
     })
+  }
+
+  // Cats
+  if (cats) {
+    for (const cat of cats) {
+      const dirIdx = cat.dir as number // DOWN=0, LEFT=1, RIGHT=2, UP=3
+      const frameIdx = cat.state === 'walk' ? cat.frame % 3 : 1 // idle uses middle frame
+      const spriteData = cat.sprites.walk[dirIdx]?.[frameIdx]
+      if (!spriteData) continue
+
+      // Flip left sprites from right sprites if needed (LEFT=1 uses same data)
+      const cached = getCachedSprite(spriteData, zoom)
+      const drawX = Math.round(offsetX + cat.x * zoom - cached.width / 2)
+      const drawY = Math.round(offsetY + cat.y * zoom - cached.height)
+      const catZY = cat.y + TILE_SIZE / 2
+
+      drawables.push({
+        zY: catZY,
+        draw: (c) => {
+          c.drawImage(cached, drawX, drawY)
+        },
+      })
+    }
   }
 
   // Sort by Y (lower = in front = drawn later)
@@ -302,6 +328,9 @@ export function renderProjectLabels(
   ctx.textBaseline = 'bottom'
 
   for (const room of rooms) {
+    // Skip labels for filler rooms (Kitchen, Server Room, etc.)
+    if (room.isFiller) continue
+
     const centerX = offsetX + (room.col + room.width / 2) * TILE_SIZE * zoom
     // Position above the wall's 3D face (walls extend TILE_SIZE above their tile)
     const labelY = offsetY + (room.row - 1) * TILE_SIZE * zoom - 2 * zoom
@@ -339,6 +368,8 @@ export function renderFrame(
   layoutCols?: number,
   layoutRows?: number,
   rooms?: RoomInfo[],
+  cats?: Cat[],
+  outdoor?: OutdoorState | null,
 ): { offsetX: number; offsetY: number } {
   // Clear
   ctx.clearRect(0, 0, canvasWidth, canvasHeight)
@@ -352,6 +383,11 @@ export function renderFrame(
   const mapH = rows * TILE_SIZE * zoom
   const offsetX = Math.floor((canvasWidth - mapW) / 2) + Math.round(panX)
   const offsetY = Math.floor((canvasHeight - mapH) / 2) + Math.round(panY)
+
+  // Draw outdoor nature tiles behind the office
+  if (outdoor) {
+    renderOutdoorTiles(ctx, outdoor, offsetX, offsetY, zoom, canvasWidth, canvasHeight)
+  }
 
   // Draw tiles (floor + wall base color)
   renderTileGrid(ctx, tileMap, offsetX, offsetY, zoom, tileColors, layoutCols)
@@ -372,7 +408,7 @@ export function renderFrame(
   // Draw walls + furniture + characters (z-sorted)
   const selectedId = selection?.selectedAgentId ?? null
   const hoveredId = selection?.hoveredAgentId ?? null
-  renderScene(ctx, allFurniture, characters, offsetX, offsetY, zoom, selectedId, hoveredId)
+  renderScene(ctx, allFurniture, characters, offsetX, offsetY, zoom, selectedId, hoveredId, cats)
 
   // Project labels above rooms (after scene so walls don't cover them)
   if (rooms) {
@@ -386,4 +422,27 @@ export function renderFrame(
   renderNames(ctx, characters, offsetX, offsetY, zoom)
 
   return { offsetX, offsetY }
+}
+
+// ── Outdoor rendering ─────────────────────────────────────────
+
+function renderOutdoorTiles(
+  ctx: CanvasRenderingContext2D,
+  outdoor: OutdoorState,
+  officeOffsetX: number,
+  officeOffsetY: number,
+  zoom: number,
+  _canvasWidth: number,
+  _canvasHeight: number,
+): void {
+  const { bakedCanvas, width, height, offsetCol, offsetRow } = outdoor
+  if (!bakedCanvas) return
+
+  // Single blit of the prebaked outdoor canvas, scaled to current zoom.
+  // imageSmoothingEnabled=false (set in gameLoop) keeps integer-zoom pixel-crisp.
+  const baseX = officeOffsetX + offsetCol * TILE_SIZE * zoom
+  const baseY = officeOffsetY + offsetRow * TILE_SIZE * zoom
+  const dw = width * TILE_SIZE * zoom
+  const dh = height * TILE_SIZE * zoom
+  ctx.drawImage(bakedCanvas, Math.round(baseX), Math.round(baseY), dw, dh)
 }

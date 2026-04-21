@@ -1,4 +1,6 @@
 import { useRef, useEffect, useCallback } from 'react'
+import { loadCatSprites } from '../cats.js'
+import { loadAndGenerateOutdoor } from '../outdoor/outdoorGenerator.js'
 import type { OfficeState } from '../engine/officeState.js'
 import type { SelectionRenderState } from '../engine/renderer.js'
 import { startGameLoop } from '../engine/gameLoop.js'
@@ -69,6 +71,21 @@ export function OfficeCanvas({ officeState, onClick, zoom, onZoomChange, panRef 
       observer.observe(containerRef.current)
     }
 
+    // Load cat sprites
+    loadCatSprites('assets/characters/cat.png').then(sprites => {
+      if (sprites.length > 0) {
+        officeState.setCatSprites(sprites)
+      }
+    })
+
+    // Generate outdoor area
+    const layout = officeState.getLayout()
+    if (!officeState.outdoor) {
+      loadAndGenerateOutdoor('assets/outdoor/summer-forest.png', layout.cols, layout.rows).then(outdoor => {
+        if (outdoor) officeState.outdoor = outdoor
+      })
+    }
+
     const stop = startGameLoop(canvas, {
       update: (dt) => {
         officeState.update(dt)
@@ -123,6 +140,8 @@ export function OfficeCanvas({ officeState, onClick, zoom, onZoomChange, panRef 
           officeState.getLayout().cols,
           officeState.getLayout().rows,
           officeState.rooms,
+          officeState.cats,
+          officeState.outdoor,
         )
         offsetRef.current = { x: offsetX, y: offsetY }
       },
@@ -362,6 +381,9 @@ export function OfficeCanvas({ officeState, onClick, zoom, onZoomChange, panRef 
   useEffect(() => {
     const keys = keysDownRef.current
     const handleKeyDown = (e: KeyboardEvent) => {
+      // Don't intercept arrow keys when a text input/textarea/select is focused
+      const tag = (e.target as HTMLElement)?.tagName
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
       if (e.key === 'ArrowUp' || e.key === 'ArrowDown' || e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
         e.preventDefault()
         keys.add(e.key)

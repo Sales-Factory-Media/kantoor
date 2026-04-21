@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import type { OfficeState } from '../office/engine/officeState.js'
 import type { ToolActivity, ConversationEntry } from '../office/types.js'
+import { FurnitureType } from '../office/types.js'
 import { extractToolName } from '../office/toolUtils.js'
 import { buildDynamicCatalog } from '../office/layout/furnitureCatalog.js'
 import { setFloorSprites } from '../office/floorTiles.js'
@@ -9,6 +10,14 @@ import { setCharacterTemplates } from '../office/sprites/spriteData.js'
 import { vscode } from '../vscodeApi.js'
 import { playDoneSound, setSoundEnabled } from '../notificationSound.js'
 import { CONVERSATION_MAX_ENTRIES } from '../constants.js'
+
+const CAR_TYPES = [
+  FurnitureType.CAR_SEDAN, FurnitureType.CAR_SPORT, FurnitureType.CAR_SUV,
+  FurnitureType.CAR_PICKUP, FurnitureType.CAR_COUPE, FurnitureType.CAR_SUPERCAR,
+]
+function pickRandomCarType(): string {
+  return CAR_TYPES[Math.floor(Math.random() * CAR_TYPES.length)]
+}
 
 export interface SubagentCharacter {
   id: number
@@ -171,19 +180,22 @@ export function useExtensionMessages(
   const [knownProjects, setKnownProjects] = useState<KnownProject[]>([])
   const knownProjectsRef = useRef<KnownProject[]>([])
 
+  // Offline agents ref for room sizing (effect closure needs current value)
+  const offlineAgentsRef = useRef<OfflineAgent[]>([])
+
   useEffect(() => {
     // Buffer agents from existingAgents until layout is loaded
-    let pendingAgents: Array<{ id: number; palette?: number; hueShift?: number; seatId?: string; name?: string; sessionId?: string; folderName?: string; roleShort?: string; roleFull?: string; workspacePath?: string; persistentAgentId?: string }> = []
+    let pendingAgents: Array<{ id: number; palette?: number; hueShift?: number; seatId?: string; name?: string; sessionId?: string; folderName?: string; roleShort?: string; roleFull?: string; workspacePath?: string; persistentAgentId?: string; carType?: string }> = []
 
     // Cached metadata from seats.json (keyed by sessionId)
     let cachedMeta: Record<string, { name?: string; palette?: number; hueShift?: number; seatId?: string; roleShort?: string; roleFull?: string; workspacePath?: string; persistentAgentId?: string }> = {}
 
     /** Save all non-sub-agent character metadata keyed by sessionId */
     function saveAgentMeta(os: OfficeState): void {
-      const seats: Record<string, { name?: string; palette?: number; hueShift?: number; seatId?: string; roleShort?: string; roleFull?: string; workspacePath?: string; persistentAgentId?: string }> = {}
+      const seats: Record<string, { name?: string; palette?: number; hueShift?: number; seatId?: string; roleShort?: string; roleFull?: string; workspacePath?: string; persistentAgentId?: string; carType?: string }> = {}
       for (const ch of os.characters.values()) {
         if (ch.isSubagent || !ch.sessionId) continue
-        seats[ch.sessionId] = { name: ch.name, palette: ch.palette, hueShift: ch.hueShift, seatId: ch.seatId ?? undefined, roleShort: ch.roleShort, roleFull: ch.roleFull, workspacePath: ch.workspacePath, persistentAgentId: ch.persistentAgentId }
+        seats[ch.sessionId] = { name: ch.name, palette: ch.palette, hueShift: ch.hueShift, seatId: ch.seatId ?? undefined, roleShort: ch.roleShort, roleFull: ch.roleFull, workspacePath: ch.workspacePath, persistentAgentId: ch.persistentAgentId, carType: ch.carType }
       }
       // Merge with cached meta to preserve data for offline agents
       const merged = { ...cachedMeta, ...seats }
@@ -202,7 +214,12 @@ export function useExtensionMessages(
       const os = getOfficeState()
 
       if (msg.type === 'offlineAgents') {
-        setOfflineAgents(msg.agents as OfflineAgent[])
+        const incoming = msg.agents as OfflineAgent[]
+        offlineAgentsRef.current = incoming
+        setOfflineAgents(incoming)
+        if (layoutReadyRef.current) {
+          os.regenerateRoomLayout(knownProjectsRef.current, incoming)
+        }
       } else if (msg.type === 'organogramSnapshot') {
         setOrganogram(msg.organogram as OrganogramPayload)
       } else if (msg.type === 'knownProjects') {
@@ -210,7 +227,7 @@ export function useExtensionMessages(
         knownProjectsRef.current = projects
         setKnownProjects(projects)
         if (layoutReadyRef.current) {
-          os.regenerateRoomLayout(projects)
+          os.regenerateRoomLayout(projects, offlineAgentsRef.current)
         }
       } else if (msg.type === 'layoutLoaded') {
         // Generate room layout from known projects and buffered agents
@@ -223,10 +240,11 @@ export function useExtensionMessages(
             if (p.roleFull) ch.roleFull = p.roleFull
             if (p.workspacePath) ch.workspacePath = p.workspacePath
             if (p.persistentAgentId) ch.persistentAgentId = p.persistentAgentId
+            ch.carType = p.carType || pickRandomCarType()
           }
         }
         pendingAgents = []
-        os.regenerateRoomLayout(knownProjectsRef.current)
+        os.regenerateRoomLayout(knownProjectsRef.current, offlineAgentsRef.current)
         saveAgentMeta(os)
         layoutReadyRef.current = true
         setLayoutReady(true)
@@ -241,16 +259,17 @@ export function useExtensionMessages(
         setAgents((prev) => (prev.includes(id) ? prev : [...prev, id]))
         setSelectedAgent(id)
         os.addAgent(id, m?.palette, m?.hueShift, m?.seatId, undefined, folderName, sessionId, m?.name)
-        if (m) {
+        {
           const ch = os.characters.get(id)
           if (ch) {
-            if (m.roleShort) ch.roleShort = m.roleShort
-            if (m.roleFull) ch.roleFull = m.roleFull
-            if (m.workspacePath) ch.workspacePath = m.workspacePath
-            if (m.persistentAgentId) ch.persistentAgentId = m.persistentAgentId
+            if (m?.roleShort) ch.roleShort = m.roleShort
+            if (m?.roleFull) ch.roleFull = m.roleFull
+            if (m?.workspacePath) ch.workspacePath = m.workspacePath
+            if (m?.persistentAgentId) ch.persistentAgentId = m.persistentAgentId
+            ch.carType = (m as Record<string, unknown>)?.carType as string || pickRandomCarType()
           }
         }
-        os.regenerateRoomLayout(knownProjectsRef.current)
+        os.regenerateRoomLayout(knownProjectsRef.current, offlineAgentsRef.current)
         saveAgentMeta(os)
       } else if (msg.type === 'agentClosed') {
         const id = msg.id as number
@@ -284,10 +303,10 @@ export function useExtensionMessages(
         os.removeAllSubagents(id)
         setSubagentCharacters((prev) => prev.filter((s) => s.parentAgentId !== id))
         os.removeAgent(id)
-        os.regenerateRoomLayout(knownProjectsRef.current)
+        os.regenerateRoomLayout(knownProjectsRef.current, offlineAgentsRef.current)
       } else if (msg.type === 'existingAgents') {
         const incoming = msg.agents as number[]
-        const meta = (msg.agentMeta || {}) as Record<string, { name?: string; palette?: number; hueShift?: number; seatId?: string; roleShort?: string; roleFull?: string; workspacePath?: string; persistentAgentId?: string }>
+        const meta = (msg.agentMeta || {}) as Record<string, { name?: string; palette?: number; hueShift?: number; seatId?: string; roleShort?: string; roleFull?: string; workspacePath?: string; persistentAgentId?: string; carType?: string }>
         const sessionIds = (msg.sessionIds || {}) as Record<number, string>
         const folderNames = (msg.folderNames || {}) as Record<number, string>
         // Cache metadata for later lookups (e.g. new agents arriving with known sessionId)
@@ -297,7 +316,7 @@ export function useExtensionMessages(
           const sid = sessionIds[id]
           // Try sessionId-keyed metadata first, fall back to agentId-keyed (extension compat)
           const m = (sid ? meta[sid] : undefined) || meta[id]
-          pendingAgents.push({ id, palette: m?.palette, hueShift: m?.hueShift, seatId: m?.seatId, name: m?.name, sessionId: sid, folderName: folderNames[id], roleShort: m?.roleShort, roleFull: m?.roleFull, workspacePath: m?.workspacePath, persistentAgentId: m?.persistentAgentId })
+          pendingAgents.push({ id, palette: m?.palette, hueShift: m?.hueShift, seatId: m?.seatId, name: m?.name, sessionId: sid, folderName: folderNames[id], roleShort: m?.roleShort, roleFull: m?.roleFull, workspacePath: m?.workspacePath, persistentAgentId: m?.persistentAgentId, carType: m?.carType })
         }
         setAgents((prev) => {
           const ids = new Set(prev)

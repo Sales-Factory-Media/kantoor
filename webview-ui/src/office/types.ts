@@ -97,22 +97,62 @@ export interface ToolActivity {
 }
 
 export const FurnitureType = {
-  // Original hand-drawn sprites (kept for backward compat)
-  DESK: 'desk',
-  BOOKSHELF: 'bookshelf',
-  PLANT: 'plant',
-  COOLER: 'cooler',
-  WHITEBOARD: 'whiteboard',
-  CHAIR: 'chair',
-  PC: 'pc',
-  LAMP: 'lamp',
-  CRATE: 'crate',
-  PORSCHE: 'porsche',
-  LAMBO: 'lambo',
-  FERRARI: 'ferrari',
-  MULTIPLA: 'multipla',
-  MASSERATI: 'masserati',
-  RANGE_ROVER: 'range_rover',
+  // Desks
+  DESK: 'DESK_FRONT',
+  DESK_FRONT: 'DESK_FRONT',
+  DESK_SIDE: 'DESK_SIDE',
+  COFFEE_TABLE: 'COFFEE_TABLE',
+  SMALL_TABLE_FRONT: 'SMALL_TABLE_FRONT',
+  TABLE_FRONT: 'TABLE_FRONT',
+  // Chairs
+  CHAIR: 'WOODEN_CHAIR_FRONT',
+  WOODEN_CHAIR_FRONT: 'WOODEN_CHAIR_FRONT',
+  WOODEN_CHAIR_BACK: 'WOODEN_CHAIR_BACK',
+  CUSHIONED_CHAIR_FRONT: 'CUSHIONED_CHAIR_FRONT',
+  CUSHIONED_BENCH: 'CUSHIONED_BENCH',
+  WOODEN_BENCH: 'WOODEN_BENCH',
+  SOFA_FRONT: 'SOFA_FRONT',
+  SOFA_BACK: 'SOFA_BACK',
+  SOFA_SIDE: 'SOFA_SIDE',
+  // Wall-mounted
+  BOOKSHELF: 'BOOKSHELF',
+  DOUBLE_BOOKSHELF: 'DOUBLE_BOOKSHELF',
+  WHITEBOARD: 'WHITEBOARD',
+  CLOCK: 'CLOCK',
+  HANGING_PLANT: 'HANGING_PLANT',
+  LARGE_PAINTING: 'LARGE_PAINTING',
+  SMALL_PAINTING: 'SMALL_PAINTING',
+  SMALL_PAINTING_2: 'SMALL_PAINTING_2',
+  // Decor
+  PLANT: 'PLANT',
+  PLANT_2: 'PLANT_2',
+  LARGE_PLANT: 'LARGE_PLANT',
+  CACTUS: 'CACTUS',
+  POT: 'POT',
+  BIN: 'BIN',
+  COFFEE: 'COFFEE',
+  // Electronics
+  PC: 'PC_FRONT_OFF',
+  PC_FRONT_OFF: 'PC_FRONT_OFF',
+  PC_BACK: 'PC_BACK',
+  // Vehicles (MinZinn Pixel Vehicles, CC-BY 4.0)
+  CAR_SEDAN: 'CAR_SEDAN',
+  CAR_SPORT: 'CAR_SPORT',
+  CAR_SUV: 'CAR_SUV',
+  CAR_PICKUP: 'CAR_PICKUP',
+  CAR_COUPE: 'CAR_COUPE',
+  CAR_SUPERCAR: 'CAR_SUPERCAR',
+  // Legacy vehicle aliases
+  PORSCHE: 'CAR_SPORT',
+  LAMBO: 'CAR_SUPERCAR',
+  FERRARI: 'CAR_COUPE',
+  MULTIPLA: 'CAR_SEDAN',
+  MASSERATI: 'CAR_SPORT',
+  RANGE_ROVER: 'CAR_SUV',
+  // Legacy aliases
+  COOLER: 'COFFEE',
+  LAMP: 'CLOCK',
+  CRATE: 'BIN',
 } as const
 export type FurnitureType = (typeof FurnitureType)[keyof typeof FurnitureType]
 
@@ -235,6 +275,8 @@ export interface Character {
   atActivitySpot: boolean
   /** Current activity spot target, or null if heading to seat */
   activityTarget: ActivitySpot | null
+  /** Assigned car type for the garage (persisted per agent) */
+  carType?: string
 }
 
 export interface ConversationEntry {

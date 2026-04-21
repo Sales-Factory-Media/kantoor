@@ -10,12 +10,6 @@ import {
   PC_SPRITE,
   LAMP_SPRITE,
   CRATE_SPRITE,
-  PORSCHE_SPRITE,
-  LAMBO_SPRITE,
-  FERRARI_SPRITE,
-  MULTIPLA_SPRITE,
-  MASSERATI_SPRITE,
-  RANGE_ROVER_SPRITE,
 } from '../sprites/spriteData.js'
 
 export interface LoadedAssetData {
@@ -46,21 +40,16 @@ export interface CatalogEntryWithCategory extends FurnitureCatalogEntry {
 
 export const FURNITURE_CATALOG: CatalogEntryWithCategory[] = [
   // ── Original hand-drawn sprites ──
-  { type: FurnitureType.DESK,       label: 'Desk',       footprintW: 2, footprintH: 2, sprite: DESK_SQUARE_SPRITE,  isDesk: true,  category: 'desks' },
-  { type: FurnitureType.BOOKSHELF,  label: 'Bookshelf',  footprintW: 1, footprintH: 2, sprite: BOOKSHELF_SPRITE,    isDesk: false, category: 'storage' },
-  { type: FurnitureType.PLANT,      label: 'Plant',      footprintW: 1, footprintH: 1, sprite: PLANT_SPRITE,        isDesk: false, category: 'decor' },
+  // Fallback sprites (used when PNG assets not loaded). Dimensions match upstream assets.
+  { type: FurnitureType.DESK,       label: 'Desk',       footprintW: 3, footprintH: 2, sprite: DESK_SQUARE_SPRITE,  isDesk: true,  category: 'desks', backgroundTiles: 1 },
+  { type: FurnitureType.BOOKSHELF,  label: 'Bookshelf',  footprintW: 2, footprintH: 1, sprite: BOOKSHELF_SPRITE,    isDesk: false, category: 'wall', canPlaceOnWalls: true },
+  { type: FurnitureType.PLANT,      label: 'Plant',      footprintW: 1, footprintH: 2, sprite: PLANT_SPRITE,        isDesk: false, category: 'decor', backgroundTiles: 1 },
   { type: FurnitureType.COOLER,     label: 'Cooler',     footprintW: 1, footprintH: 1, sprite: COOLER_SPRITE,       isDesk: false, category: 'misc' },
-  { type: FurnitureType.WHITEBOARD, label: 'Whiteboard', footprintW: 2, footprintH: 1, sprite: WHITEBOARD_SPRITE,   isDesk: false, category: 'decor' },
-  { type: FurnitureType.CHAIR,      label: 'Chair',      footprintW: 1, footprintH: 1, sprite: CHAIR_SPRITE,        isDesk: false, category: 'chairs' },
-  { type: FurnitureType.PC,         label: 'PC',         footprintW: 1, footprintH: 1, sprite: PC_SPRITE,           isDesk: false, category: 'electronics' },
+  { type: FurnitureType.WHITEBOARD, label: 'Whiteboard', footprintW: 2, footprintH: 2, sprite: WHITEBOARD_SPRITE,   isDesk: false, category: 'wall', canPlaceOnWalls: true },
+  { type: FurnitureType.CHAIR,      label: 'Chair',      footprintW: 1, footprintH: 2, sprite: CHAIR_SPRITE,        isDesk: false, category: 'chairs', backgroundTiles: 1 },
+  { type: FurnitureType.PC,         label: 'PC',         footprintW: 1, footprintH: 2, sprite: PC_SPRITE,           isDesk: false, category: 'electronics', canPlaceOnSurfaces: true, backgroundTiles: 1 },
   { type: FurnitureType.LAMP,       label: 'Lamp',       footprintW: 1, footprintH: 1, sprite: LAMP_SPRITE,         isDesk: false, category: 'decor' },
   { type: FurnitureType.CRATE,      label: 'Crate',      footprintW: 1, footprintH: 1, sprite: CRATE_SPRITE,        isDesk: false, category: 'storage' },
-  { type: FurnitureType.PORSCHE,    label: 'Porsche',    footprintW: 5, footprintH: 2, sprite: PORSCHE_SPRITE,      isDesk: false, category: 'misc' },
-  { type: FurnitureType.LAMBO,      label: 'Lambo',      footprintW: 5, footprintH: 2, sprite: LAMBO_SPRITE,        isDesk: false, category: 'misc' },
-  { type: FurnitureType.FERRARI,    label: 'Ferrari',    footprintW: 4, footprintH: 2, sprite: FERRARI_SPRITE,      isDesk: false, category: 'misc' },
-  { type: FurnitureType.MULTIPLA,   label: 'Multipla',   footprintW: 3, footprintH: 1, sprite: MULTIPLA_SPRITE,     isDesk: false, category: 'misc' },
-  { type: FurnitureType.MASSERATI,  label: 'Masserati',  footprintW: 5, footprintH: 2, sprite: MASSERATI_SPRITE,    isDesk: false, category: 'misc' },
-  { type: FurnitureType.RANGE_ROVER, label: 'Range Rover', footprintW: 5, footprintH: 2, sprite: RANGE_ROVER_SPRITE, isDesk: false, category: 'misc' },
 
 ]
 

@@ -260,29 +260,63 @@ export interface LoadedFloorTiles {
 }
 
 /**
- * Load floor tile patterns from floors.png (7 tiles, 16px each, horizontal strip)
+ * Load floor tile patterns from floors.png (sprite sheet) or individual floor_N.png files
  */
 export async function loadFloorTiles(
   assetsRoot: string,
 ): Promise<LoadedFloorTiles | null> {
   try {
     const floorPath = path.join(assetsRoot, 'assets', 'floors.png')
-    if (!fs.existsSync(floorPath)) {
-      console.log('[AssetLoader] No floors.png found at:', floorPath)
+    if (fs.existsSync(floorPath)) {
+      // Load from horizontal sprite sheet
+      console.log('[AssetLoader] Loading floor tiles from:', floorPath)
+      const pngBuffer = fs.readFileSync(floorPath)
+      const png = PNG.sync.read(pngBuffer)
+      const sprites: string[][][] = []
+      for (let t = 0; t < FLOOR_PATTERN_COUNT; t++) {
+        const sprite: string[][] = []
+        for (let y = 0; y < FLOOR_TILE_SIZE; y++) {
+          const row: string[] = []
+          for (let x = 0; x < FLOOR_TILE_SIZE; x++) {
+            const px = t * FLOOR_TILE_SIZE + x
+            const idx = (y * png.width + px) * 4
+            const r = png.data[idx]
+            const g = png.data[idx + 1]
+            const b = png.data[idx + 2]
+            const a = png.data[idx + 3]
+            if (a < PNG_ALPHA_THRESHOLD) {
+              row.push('')
+            } else {
+              row.push(`#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`.toUpperCase())
+            }
+          }
+          sprite.push(row)
+        }
+        sprites.push(sprite)
+      }
+      console.log(`[AssetLoader] ✅ Loaded ${sprites.length} floor tile patterns from sprite sheet`)
+      return { sprites }
+    }
+
+    // Fallback: load individual floor_N.png files from floors/ directory
+    const floorsDir = path.join(assetsRoot, 'assets', 'floors')
+    if (!fs.existsSync(floorsDir)) {
+      console.log('[AssetLoader] No floors.png or floors/ directory found')
       return null
     }
 
-    console.log('[AssetLoader] Loading floor tiles from:', floorPath)
-    const pngBuffer = fs.readFileSync(floorPath)
-    const png = PNG.sync.read(pngBuffer)
+    console.log('[AssetLoader] Loading individual floor tiles from:', floorsDir)
     const sprites: string[][][] = []
     for (let t = 0; t < FLOOR_PATTERN_COUNT; t++) {
+      const tilePath = path.join(floorsDir, `floor_${t}.png`)
+      if (!fs.existsSync(tilePath)) continue
+      const pngBuffer = fs.readFileSync(tilePath)
+      const png = PNG.sync.read(pngBuffer)
       const sprite: string[][] = []
-      for (let y = 0; y < FLOOR_TILE_SIZE; y++) {
+      for (let y = 0; y < Math.min(FLOOR_TILE_SIZE, png.height); y++) {
         const row: string[] = []
-        for (let x = 0; x < FLOOR_TILE_SIZE; x++) {
-          const px = t * FLOOR_TILE_SIZE + x
-          const idx = (y * png.width + px) * 4
+        for (let x = 0; x < Math.min(FLOOR_TILE_SIZE, png.width); x++) {
+          const idx = (y * png.width + x) * 4
           const r = png.data[idx]
           const g = png.data[idx + 1]
           const b = png.data[idx + 2]
@@ -298,7 +332,7 @@ export async function loadFloorTiles(
       sprites.push(sprite)
     }
 
-    console.log(`[AssetLoader] ✅ Loaded ${sprites.length} floor tile patterns`)
+    console.log(`[AssetLoader] ✅ Loaded ${sprites.length} floor tile patterns from individual files`)
     return { sprites }
   } catch (err) {
     console.error(`[AssetLoader] ❌ Error loading floor tiles: ${err instanceof Error ? err.message : err}`)

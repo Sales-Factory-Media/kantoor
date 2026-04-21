@@ -55,6 +55,12 @@ export function layoutToFurnitureInstances(furniture: PlacedFurniture[]): Furnit
       }
     }
 
+    // Wall-mounted items render in front of the wall they're on
+    if (entry.canPlaceOnWalls) {
+      // Boost zY to render in front of the wall's 3D face at (row+2)*TILE_SIZE
+      zY = (item.row + entry.footprintH + 1) * TILE_SIZE + 0.5
+    }
+
     // Surface items render in front of the desk they sit on
     if (entry.canPlaceOnSurfaces) {
       for (let dr = 0; dr < entry.footprintH; dr++) {

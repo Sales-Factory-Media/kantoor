@@ -43,7 +43,7 @@ export async function launchNewTerminal(
 	terminal.show();
 
 	const sessionId = crypto.randomUUID();
-	terminal.sendText(`claude --model 'claude-opus-4-6[1m]' --session-id ${sessionId}`);
+	terminal.sendText(`claude --model 'claude-opus-4-7[1m]' --session-id ${sessionId}`);
 
 	const projectDir = getProjectDirPath(cwd);
 	if (!projectDir) {

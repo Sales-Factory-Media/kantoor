@@ -61,7 +61,7 @@ on run argv
 	if cwd is not "" then
 		set cmd to "cd " & quoted form of cwd & " && "
 	end if
-	set cmd to cmd & "claude --model 'claude-opus-4-6[1m]' --resume " & sid
+	set cmd to cmd & "claude --model 'claude-opus-4-7[1m]' --resume " & sid
 	tell application "iTerm2"
 		activate
 		if (count of windows) = 0 then
@@ -108,7 +108,7 @@ on run argv
 	set initialPrompt to item 4 of argv
 	set mcpConfig to item 5 of argv
 	set extraFlags to item 6 of argv
-	set cmd to "cd " & quoted form of cwd & " && claude --model 'claude-opus-4-6[1m]' --session-id " & sid
+	set cmd to "cd " & quoted form of cwd & " && claude --model 'claude-opus-4-7[1m]' --session-id " & sid
 	if mcpConfig is not "" then
 		set cmd to cmd & " --mcp-config " & quoted form of mcpConfig
 	end if
