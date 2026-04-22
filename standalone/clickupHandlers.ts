@@ -218,58 +218,41 @@ export function launchAgentOnTicket(
 	const pa = persistentAgents.find(p => p.id === agentId);
 	if (!pa) return { success: false, error: `Agent not found: ${agentId}` };
 
+	const brief = options?.additionalPrompt?.trim();
+	const briefBlock = brief ? `${brief}\n\n` : `⚠ No Brief was passed by Darryl — you'll need to read the ticket yourself.\n\n`;
+
 	let callInTask: string;
 	if (options?.aiReviewMode) {
-		// AI Review mode: Copilot has reviewed the PR. Process its feedback (or confirm none) and route the ticket.
-		callInTask = `You have been reassigned to ClickUp ticket ${ticketId}: "${ticketName}" because it is currently in the **AI Review** state. GitHub Copilot has reviewed the pull request and may have left inline review comments.
+		callInTask = `Ticket ${ticketId}: "${ticketName}" is in **AI Review**. Copilot reviewed the PR — you process the feedback.
 Ticket URL: ${ticketUrl}
 
-## Your job
+${briefBlock}## Steps
+1. Move ticket to "in progress".
+2. Find the PR (branch \`feature/CU-${ticketId}-*\`). Read Copilot's review + inline comments via \`mcp__github__pull_request_read\`.
+3. Triage: actionable (real bug / security / broken convention) vs not (style opinions you disagree with, already-addressed).
+4a. Actionable: check out the branch, fix, commit with \`CU-${ticketId}\` ref, push, comment what you addressed + what you deliberately skipped (and why), move ticket back to "ai review".
+4b. Nothing actionable: comment confirming review, move ticket to "qa test".
 
-1. Move the ticket to "in progress" using \`mcp__clickup__clickup_update_task\` (task_id: "${ticketId}", status: "in progress").
-2. Read the full ticket with \`mcp__clickup__clickup_get_task\` and ALL comments with \`mcp__clickup__clickup_get_task_comments\`.
-3. Find the PR linked to this ticket (check the ticket's linked tasks, the description, or look for a branch \`feature/CU-${ticketId}-*\`). Use \`mcp__github__pull_request_read\` and the GitHub review/comment tools to find Copilot's review comments. Specifically check:
-   - Inline review comments left by Copilot on the PR diff
-   - Top-level PR review comments by Copilot
-   - Any conversation threads where Copilot raised concerns
-4. Decide whether there is **actionable feedback** that genuinely needs to be addressed:
-   - **Actionable**: a real bug, a security issue, a clear regression, a violated convention you should respect.
-   - **Not actionable**: stylistic preferences you disagree with, low-confidence suggestions, things already addressed.
-5. Then take ONE of these two paths:
-
-### If there IS actionable feedback to fix:
-- Check out the existing feature branch (\`feature/CU-${ticketId}-*\`).
-- Implement the requested changes.
-- Commit and push (follow the Git Conventions in your system prompt — the CU-${ticketId} reference is mandatory).
-- Add a ClickUp comment summarizing what you addressed and explicitly listing anything you intentionally did NOT change and why.
-- Move the ticket back to **"ai review"** so Copilot can review the new commit: \`mcp__clickup__clickup_update_task\` (task_id: "${ticketId}", status: "ai review").
-
-### If there is NO actionable feedback (or all feedback has been addressed and resolved):
-- Add a ClickUp comment confirming you reviewed Copilot's feedback and explaining why no further changes are needed (or that all prior concerns are resolved).
-- Move the ticket to **"qa test"**: \`mcp__clickup__clickup_update_task\` (task_id: "${ticketId}", status: "qa test"). A human will take over from here.
-
-## Important
-
-- Do NOT loop forever. If you have already gone through 3 AI Review rounds on this ticket (count the prior "ai review" → "to do" or "ai review" → "in progress" cycles in the comments), and Copilot keeps flagging minor stylistic things, just move to "qa test" and let the human decide.
-- Always commit and push BEFORE moving the ticket back to "ai review", otherwise Copilot will re-review the same code.
-- Update MemPalace with what you addressed and any patterns you noticed.`;
+Rules: commit+push BEFORE flipping back to "ai review". 3-round cap — if this is round 3+, forward to "qa test" unless there's a real bug.`;
 	} else {
-		// Standard "do new work" mode
-		callInTask = `Work on ClickUp ticket ${ticketId}: "${ticketName}". Use the ClickUp MCP tools to read the ticket details, update status, and add comments as you make progress. Ticket URL: ${ticketUrl}\n\nBefore starting any work, check if a branch already exists with the ticket ID (e.g. feature/CU-${ticketId}-*). If it does, check it out. If not, create a new feature branch from develop following the convention: feature/CU-${ticketId}-<short-description>.\n\nWhen you are done with the work and your PR is open, move the ticket to "ai review" using mcp__clickup__clickup_update_task (task_id: "${ticketId}", status: "ai review"). GitHub Copilot will then review your PR. Do NOT move the ticket directly to "qa test" — Darryl will reassign someone (possibly you) to process Copilot's feedback later.`;
+		callInTask = `Ticket ${ticketId}: "${ticketName}" (${ticketUrl}).
+
+${briefBlock}## Steps
+1. Move ticket to "in progress".
+2. Check out or create branch \`feature/CU-${ticketId}-<short-desc>\` from develop.
+3. Do the work. Rely on the Brief above — only re-read the ticket if the Brief is missing something specific.
+4. Open a PR. Commit messages must include \`CU-${ticketId}\`.
+5. Move ticket to **"ai review"** (not "qa test") — Copilot reviews, then you may be reassigned to process its feedback.`;
 	}
 
 	const knownProjects = loadKnownProjects();
 	const project = knownProjects.find(p => p.workspacePath === pa.workspacePath);
 	if (project?.description) {
-		callInTask += `\n\n## Project Context\n\n${project.description}`;
-	}
-
-	if (options?.additionalPrompt) {
-		callInTask += `\n\n## Additional Instructions\n\n${options.additionalPrompt}`;
+		callInTask += `\n\n## Project\n${project.description}`;
 	}
 
 	if (options?.useTeam) {
-		callInTask += '\n\nCreate an agent team to work on this ticket. Break the work into parallel tasks and spawn teammates to handle them.';
+		callInTask += '\n\nUse team mode: spawn sub-agents for parallel work.';
 	}
 
 	ensureAgentMemory(agentId);
@@ -391,58 +374,28 @@ export function handleDarrylHandleTicket(msg: Record<string, unknown>, ctx: Serv
 	const systemPrompt = buildDarrylSystemPrompt(darryl, roster, SERVER_PORT);
 
 	const initialTask = isAiReviewMode
-		? `ClickUp ticket ${ticketId}: "${ticketName}" is in **AI Review** state. GitHub Copilot has reviewed (or is reviewing) the pull request. Your job is to dispatch an agent to process Copilot's feedback and route the ticket forward.
-Ticket URL: ${ticketUrl}
+		? `Ticket ${ticketId}: "${ticketName}" is in **AI Review**. Dispatch an agent to process Copilot's feedback.
+URL: ${ticketUrl}
 
 ## Steps
+1. \`clickup_get_task\` + \`clickup_get_task_comments\` once. Find: the original implementer (comment "Assigned to worker: <name>"), the project workspace, how many prior AI Review rounds (count "ai review" → "in progress" cycles).
+2. Pick an agent: prefer the original implementer (best context). Fallback = free agent in same workspace.
+3. Dispatch with \`aiReviewMode:true\` and a short Brief summarizing what Copilot flagged:
+\`curl -X POST http://localhost:${SERVER_PORT}/api/launch-agent -d '{"agentId":"...","ticketId":"${ticketId}","ticketName":"${ticketName}","ticketUrl":"${ticketUrl}","aiReviewMode":true,"additionalPrompt":"<Brief>"}'\`
+4. Comment on the ticket naming who you reassigned.
 
-1. Read the full ticket with \`mcp__clickup__clickup_get_task\` (task_id: "${ticketId}") and ALL comments with \`mcp__clickup__clickup_get_task_comments\`. Identify:
-   - Which workspace/project this ticket belongs to (look at the linked branch \`feature/CU-${ticketId}-*\` or any prior assignment comments — comments like "Assigned to worker: ..." identify the original implementer).
-   - Whether a previous agent has already cycled through AI Review (count prior "ai review" → "in progress" cycles in the comments).
-2. Pick which agent should process the feedback:
-   - **Preferred**: the same agent who originally implemented the ticket — they have the most context. Find them in your roster by name.
-   - **Fallback**: any free (OFFLINE) agent in the SAME workspace as the ticket's project.
-   - Avoid switching agents mid-ticket unless the original is gone.
-3. Dispatch them with the AI Review mode flag set:
-\`\`\`
-curl -X POST http://localhost:${SERVER_PORT}/api/launch-agent \\
-  -H 'Content-Type: application/json' \\
-  -d '{"agentId":"<id>","ticketId":"${ticketId}","ticketName":"${ticketName}","ticketUrl":"${ticketUrl}","aiReviewMode":true}'
-\`\`\`
-   The \`aiReviewMode: true\` flag gives the agent the right initial task automatically — they will move the ticket to "in progress", read Copilot's feedback, decide whether to fix anything, and either move back to "ai review" (after pushing fixes) or forward to "qa test" (when no actionable feedback remains).
-4. Comment on the ClickUp ticket noting which agent you reassigned and why. Use \`mcp__clickup__clickup_create_task_comment\`.
-5. Update MemPalace with your dispatch decision (\`mcp__mempalace__mempalace_add_drawer\`). Record generously.
-
-## Important
-
-- Do NOT do the AI Review processing yourself — your job is to dispatch. The reassigned agent owns the work.
-- Do NOT change the ticket status yourself. The reassigned agent will move it to "in progress" as their first step.
-- If you have already cycled the same ticket through AI Review 3 or more times (count from comments), instruct the reassigned agent in an additionalPrompt to be conservative: only fix genuine issues, otherwise forward to qa test.`
-		: `Assess ClickUp ticket ${ticketId}: "${ticketName}"
-Ticket URL: ${ticketUrl}
+Rules: do NOT change the ticket status yourself (the reassigned agent will). 3+ prior rounds → tell them in the Brief to be conservative and forward to "qa test" unless there's a real bug.`
+		: `Ticket ${ticketId}: "${ticketName}" (${ticketUrl}).
 
 ## Steps
+1. \`clickup_get_task\` + \`clickup_get_task_comments\` once.
+2. Is the ticket complete enough to dispatch?
+   - **No** → comment with specific questions, unassign yourself, assign "${DARRYL_ESCALATION_USERNAME}", move ticket to "to do". Stop.
+   - **Yes** → pick the right free agent from your roster, then dispatch them with a Brief:
+     \`curl -X POST http://localhost:${SERVER_PORT}/api/launch-agent -d '{"agentId":"...","ticketId":"${ticketId}","ticketName":"${ticketName}","ticketUrl":"${ticketUrl}","additionalPrompt":"<Brief>","useTeam":<bool>}'\`
+3. Move the ticket to "in progress" yourself ONLY if dispatch succeeded. Otherwise leave it.
 
-1. FIRST: Move the ticket to "in progress" using mcp__clickup__clickup_update_task (task_id: "${ticketId}", status: "in progress")
-2. Read the full ticket with mcp__clickup__clickup_get_task (task_id: "${ticketId}")
-3. Read the ticket's comments with mcp__clickup__clickup_get_task_comments (task_id: "${ticketId}") to check for additional context, questions, or prior discussion
-4. Decide if the ticket is complete enough to work on (considering both the description and comments)
-5. Then follow ONE of these paths:
-
-### If NOT complete (needs human input):
-- Comment on the ticket with your questions using mcp__clickup__clickup_create_task_comment
-- Unassign yourself ("${DARRYL_CLICKUP_USERNAME}") and assign "${DARRYL_ESCALATION_USERNAME}" using mcp__clickup__clickup_update_task
-- Move the ticket back to "to do" using mcp__clickup__clickup_update_task (status: "to do")
-
-### If complete AND you can do it yourself:
-- Do the work
-- When finished and your PR is open, move the ticket to "ai review" using mcp__clickup__clickup_update_task (status: "ai review"). GitHub Copilot will review the PR; you (as Darryl) will see the ticket again later in "ai review" state and reassign someone to process Copilot's feedback. Do NOT move directly to "qa test".
-
-### If complete AND you delegate to another agent:
-- Pick the best agent from your roster and launch them via the HTTP API
-- IMPORTANT: In the additionalPrompt, instruct them that when they finish and their PR is open, they must move the ticket to "ai review" (NOT "qa test") so GitHub Copilot can review.
-
-6. Update MemPalace with your decision (use mcp__mempalace__mempalace_add_drawer)`;
+The Brief should summarize the ticket in 2–6 bullets so the worker doesn't re-read everything. Use the template from your system prompt.`;
 
 	// Launch Darryl
 	const newSessionId = crypto.randomUUID();
@@ -519,70 +472,27 @@ export function handleJanDesignBriefing(msg: Record<string, unknown>, ctx: Serve
 	// Build initial task based on ticket status — two distinct modes
 	const isRefineMode = ticketStatus === 'to refine';
 
-	const initialTask = `You have received a design ticket via ClickUp ticket ${ticketId}: "${ticketName}"
-Ticket URL: ${ticketUrl}
-Current ticket status: **${ticketStatus}**
+	const initialTask = isRefineMode
+		? `Ticket ${ticketId}: "${ticketName}" (${ticketUrl}) — status **"to refine"** → Phase 1 UX Exploration.
 
 ## Steps
+1. \`clickup_get_task\` + \`clickup_get_task_comments\` once. If the brief is unclear, comment with questions and leave the status as "to refine". Stop.
+2. Move ticket to "in progress". Capture: the parent list id, the project workspace (e.g. \`~/Projects/brightmind\`).
+3. **Write 5 UX briefing sub-tickets** (follow the "UX briefing creation" section of your system prompt — one direction per sub-ticket, FULL scope each, different axes).
+4. **Dispatch one designer per sub-ticket** in quick succession (fleet runs them in parallel). For EACH sub-ticket:
+   \`curl -X POST http://localhost:${SERVER_PORT}/api/launch-designer -d '{"workspacePath":"<project>","ticketId":"<sub-id>","ticketName":"UX Direction N: ...","ticketUrl":"<sub-url>","additionalPrompt":"<Brief>"}'\`
+   The Brief (template in your system prompt) tells the designer what to build without needing to re-read everything.
+5. Only \`success:true\` counts as dispatched. On \`success:false\`, leave sub-ticket status alone, wait ~60s, retry.
+6. Poll ticket statuses instead of blocking. When all 5 are in "qa test", review them and comment with art-direction feedback.`
+		: `Ticket ${ticketId}: "${ticketName}" (${ticketUrl}) — status **"to do"** → Phase 2 Visual Design.
 
-1. FIRST: Move the ticket to "in progress" using mcp__clickup__clickup_update_task (task_id: "${ticketId}", status: "in progress")
-2. Read the full ticket with mcp__clickup__clickup_get_task (task_id: "${ticketId}")
-3. Read the ticket's comments with mcp__clickup__clickup_get_task_comments (task_id: "${ticketId}") for additional context
-4. Assess the ticket: Is it clear enough to proceed? Does it have the information you need?
-
-### If NOT complete (needs more info):
-- Comment on the ticket with specific questions using mcp__clickup__clickup_create_task_comment
-- Move the ticket back to "${ticketStatus}" using mcp__clickup__clickup_update_task (status: "${ticketStatus}")
-
-${isRefineMode ? `### Mode: UX Exploration (ticket was "to refine")
-
-This ticket is in the **brainstorming/exploration phase**. Your job is to kick off Phase 1 — UX Exploration.
-You do the PM work yourself — do NOT delegate to a separate PM agent.
-
-**Step A — Write 5 UX briefings yourself as ClickUp sub-tickets:**
-Follow the "Writing UX Briefings" section in your system prompt. For each of the 5 directions:
-1. Call \`mcp__clickup__clickup_create_task\` with \`parent: "${ticketId}"\`, in the SAME list as the parent ticket (read the parent's \`list.id\`).
-2. Name it \`"UX Direction {N}: {Direction Title}"\`. Use the "Briefing ticket format" from your system prompt for the description.
-3. Tag it \`"UX-prototype-briefing"\` via \`mcp__clickup__clickup_add_tag_to_task\`.
-4. Set priority \`"normal"\`.
-After creating all 5, comment on ticket "${ticketId}" with a short summary of the 5 directions you wrote.
-
-**Step B — Dispatch one designer per briefing, in parallel across the fleet:**
-For each of the 5 briefing sub-tickets you just created:
-\`\`\`
-curl -X POST http://localhost:${SERVER_PORT}/api/launch-designer -H 'Content-Type: application/json' -d '{"workspacePath":"<project-workspace-path>","ticketId":"<sub-ticket-id>","ticketName":"UX Direction {N}: ...","ticketUrl":"<sub-ticket-url>"}'
-\`\`\`
-**Fleet behavior:** the endpoint tries the hub's Figma first; if busy, it cascades to any connected worker laptop with a free Figma. Response: \`{"success":true, "worker":"<device-name>"}\` on pickup, or \`{"success":false, "error":"..."}\` when every device is busy.
-
-**ACK-DRIVEN DISPATCH — read carefully:**
-- Only treat a ticket as "dispatched" when the HTTP response is \`success:true\`. The designer on that device moves the sub-ticket to "in progress" as their first step.
-- If \`success:false\`, do NOT assume a designer is working. Do NOT change the sub-ticket's status. Wait ~60 seconds and retry.
-- Devices run in parallel — dispatch up to N designers concurrently (N = 1 hub + connected worker laptops). Send the calls in quick succession; each one that returns \`success:true\` goes to a different machine. Then poll ClickUp to track progress, don't block.
-- Use the workspace path of the PROJECT being designed (e.g. ~/Projects/brightmind), NOT the kantoor-workspace.` : `### Mode: Visual Design (ticket was "to do")
-
-This ticket is in the **production-ready visual implementation phase**. The UX exploration is done — a direction has been chosen.
-Your job is to kick off Phase 2 — Visual Design for polished, production-ready output.
-
-**Step A — Hand off to the Visual Design Team:**
-Dispatch a Visual Designer on this ticket:
-\`\`\`
-curl -X POST http://localhost:${SERVER_PORT}/api/launch-visual-designer -H 'Content-Type: application/json' -d '{"workspacePath":"<project-workspace-path>","ticketId":"${ticketId}","ticketName":"${ticketName}","ticketUrl":"${ticketUrl}"}'
-\`\`\`
-**Fleet behavior:** the endpoint first tries the hub's Figma; if busy, it automatically falls over to any connected remote worker laptop with a free Figma. Response is \`{"success":true, "worker":"<laptop-name>"}\` on pickup, or \`{"success":false, "error":"..."}\` when every device is busy.
-
-**ACK-DRIVEN DISPATCH — read carefully:**
-- Only treat the ticket as handed off when \`success:true\`. The Visual Designer on that device moves the ticket to "in progress" as their first step.
-- If \`success:false\`, do NOT change the ticket status yourself — leave it where it was and retry the call after ~60 seconds.
-- Use the workspace path of the PROJECT being designed (e.g. ~/Projects/brightmind), NOT the kantoor-workspace.
-
-**Step B — Let the AI Review pipeline run:**
-You do NOT review the visual output yourself anymore. When the Visual Designer finishes, they move the ticket to "ai review", and the team's Visual Quality Reviewer automatically picks it up. The Visual QA decides:
-- **Pass** → ticket moves to "qa test" for human review (your job is done for this ticket)
-- **Fail** → ticket moves back to "to do" with structured feedback, and a free Visual Designer auto-picks it up for revision
-
-You can monitor progress via ClickUp comments, but no manual review action is required from you on visual tickets unless something looks off after the human QA pass.`}
-
-5. Update MemPalace with your decisions (use mcp__mempalace__mempalace_add_drawer)`;
+## Steps
+1. \`clickup_get_task\` + \`clickup_get_task_comments\` once. Find the approved UX direction and its Figma node link.
+2. Dispatch ONE Visual Designer with a Brief:
+   \`curl -X POST http://localhost:${SERVER_PORT}/api/launch-visual-designer -d '{"workspacePath":"<project>","ticketId":"${ticketId}","ticketName":"${ticketName}","ticketUrl":"${ticketUrl}","additionalPrompt":"<Brief>"}'\`
+   The Brief MUST include the approved UX Figma node URL, the scope, and any DS notes. Template in your system prompt.
+3. Only \`success:true\` counts. On \`success:false\`, leave ticket alone, wait ~60s, retry.
+4. That's it for you — Visual QA AI Review runs automatically when the designer finishes.`;
 
 	// Launch Jan
 	const newSessionId = crypto.randomUUID();
@@ -680,6 +590,7 @@ function tryLaunchDesignerLocal(msg: Record<string, unknown>, ctx: ServerContext
 	const ticketName = msg.ticketName as string;
 	const ticketUrl = msg.ticketUrl as string;
 	const revisionMode = msg.revisionMode as boolean | undefined;
+	const brief = typeof msg.additionalPrompt === 'string' ? msg.additionalPrompt.trim() : '';
 
 	if (!workspacePath) {
 		return { success: false, error: 'Missing required field: workspacePath' };
@@ -708,7 +619,8 @@ function tryLaunchDesignerLocal(msg: Record<string, unknown>, ctx: ServerContext
 	const designer = persistentAgents.find(
 		p => p.roleShort === DESIGNER_ROLE_SHORT
 			&& p.teamId === TEAM_UX_ID
-			&& !p.currentSessionId,
+			&& !p.currentSessionId
+			&& !p.retired,
 	);
 
 	if (!designer) {
@@ -718,34 +630,23 @@ function tryLaunchDesignerLocal(msg: Record<string, unknown>, ctx: ServerContext
 	// Reassign workspace to the target project for this session
 	designer.workspacePath = workspacePath;
 
-	// Build designer-specific system prompt
 	const systemPrompt = buildDesignerSystemPrompt(designer, projectDescription);
 
-	const revisionPreamble = revisionMode
-		? `IMPORTANT: This is a REVISION. Jan (Art Director) has reviewed your previous work and requested changes.
-Read the ClickUp comments carefully — Jan's latest review comment contains specific, actionable feedback you MUST address.
-Focus on the requested changes while preserving what Jan approved.
-
-`
+	const briefBlock = brief
+		? `${brief}\n\n`
+		: `⚠ No Brief was passed by Jan — you will need to read the ticket description yourself.\n\n`;
+	const revisionLine = revisionMode
+		? 'REVISION: read the LATEST Jan review comment on the ticket for required changes. Preserve what was approved.\n\n'
 		: '';
 
-	const initialTask = `${revisionPreamble}You have been assigned a design briefing via ClickUp ticket ${ticketId}: "${ticketName}"
-Ticket URL: ${ticketUrl}
+	const initialTask = `Ticket ${ticketId}: "${ticketName}" (${ticketUrl})
 
-## Steps
-
-1. FIRST: Move the ticket to "in progress" using mcp__clickup__clickup_update_task (task_id: "${ticketId}", status: "in progress")
-2. Read the full ticket with mcp__clickup__clickup_get_task (task_id: "${ticketId}")
-3. Read the ticket's comments with mcp__clickup__clickup_get_task_comments (task_id: "${ticketId}") for additional context
-4. Search MemPalace for relevant design decisions and component knowledge
-5. Create your design on a clean Figma playground board:
-   - Name your page/frame: \`${ticketId} — ${ticketName}\`
-   - Focus on creating a genuinely unique design direction
-   - Follow the design principles in your system prompt
-6. Take screenshots of your work using figma_take_screenshot
-7. Post your results as a comment on the ClickUp ticket with screenshots and a summary of your design approach
-8. Move the ticket to "qa test" using mcp__clickup__clickup_update_task (task_id: "${ticketId}", status: "qa test")
-9. Update MemPalace with what you designed and key decisions (use mcp__mempalace__mempalace_add_drawer)`;
+${revisionLine}${briefBlock}## Steps
+1. Move ticket to "in progress".
+2. Open a new Figma page: \`${ticketId} — ${ticketName}\`.
+3. Design based on the Brief above. Only pull the sub-ticket if you need a detail the Brief doesn't cover.
+4. Screenshot + post Figma page URL as a ClickUp comment.
+5. Move ticket to "qa test".`;
 
 	// Launch the designer
 	const newSessionId = crypto.randomUUID();
@@ -801,6 +702,7 @@ function tryLaunchVisualDesignerLocal(msg: Record<string, unknown>, ctx: ServerC
 	const ticketName = msg.ticketName as string;
 	const ticketUrl = msg.ticketUrl as string;
 	const revisionMode = msg.revisionMode as boolean | undefined;
+	const brief = typeof msg.additionalPrompt === 'string' ? msg.additionalPrompt.trim() : '';
 
 	if (!workspacePath) {
 		return { success: false, error: 'Missing required field: workspacePath' };
@@ -829,7 +731,8 @@ function tryLaunchVisualDesignerLocal(msg: Record<string, unknown>, ctx: ServerC
 	const designer = persistentAgents.find(
 		p => p.roleShort === VISUAL_DESIGNER_ROLE_SHORT
 			&& p.teamId === TEAM_VISUAL_ID
-			&& !p.currentSessionId,
+			&& !p.currentSessionId
+			&& !p.retired,
 	);
 
 	if (!designer) {
@@ -839,37 +742,26 @@ function tryLaunchVisualDesignerLocal(msg: Record<string, unknown>, ctx: ServerC
 	// Reassign workspace to the target project for this session
 	designer.workspacePath = workspacePath;
 
-	// Build visual designer-specific system prompt
 	const designConfig = getJanDesignConfig();
 	const systemPrompt = buildVisualDesignerSystemPrompt(designer, projectDescription, designConfig);
 
-	const revisionPreamble = revisionMode
-		? `IMPORTANT: This is a REVISION. Jan (Art Director) has reviewed your previous work and requested changes.
-Read the ClickUp comments carefully — Jan's latest review comment contains specific, actionable feedback you MUST address.
-Focus on the requested changes while preserving what Jan approved.
-
-`
+	const briefBlock = brief
+		? `${brief}\n\n`
+		: `⚠ No Brief was passed by Jan — look at the ticket to find the approved UX Figma node.\n\n`;
+	const revisionLine = revisionMode
+		? 'REVISION: read the LATEST Jan/QA review comment on the ticket and address it. Preserve what was approved.\n\n'
 		: '';
 
-	const initialTask = `${revisionPreamble}You have been assigned a visual design task via ClickUp ticket ${ticketId}: "${ticketName}"
-Ticket URL: ${ticketUrl}
+	const initialTask = `Ticket ${ticketId}: "${ticketName}" (${ticketUrl})
 
-## Steps
-
-1. FIRST: Move the ticket to "in progress" using mcp__clickup__clickup_update_task (task_id: "${ticketId}", status: "in progress")
-2. Read the design handbook from the ClickUp document at ${designConfig.clickupDocUrl} — understand the design system rules
-3. Read the full ticket with mcp__clickup__clickup_get_task (task_id: "${ticketId}")
-4. Read the ticket's comments with mcp__clickup__clickup_get_task_comments (task_id: "${ticketId}") — find the approved UX direction and Figma references
-5. Examine the approved UX designs in Figma — take screenshots to understand the structure
-6. Search MemPalace for relevant design decisions and component knowledge
-7. Create your polished visual implementation on a clean Figma playground board:
-   - Name your page: \`${ticketId} — Visual Design\`
-   - Build to the **Quality Checklist in your system prompt** — that exact list is what the Visual Quality Reviewer will judge you against (design system compliance, tokens, alignment, states, accessibility, responsiveness, faithfulness to UX, overflow, autolayout, component library hygiene). Address every item from the start.
-   - Use design system components from the library; create new variants in the design system or a separate component library file rather than as one-offs
-8. Take screenshots of your work using figma_take_screenshot
-9. Post your results as a comment on the ClickUp ticket with screenshots and the Figma page link. If any checklist item is N/A for a justified reason, state it explicitly so the reviewer can confirm.
-10. Move the ticket to "ai review" using mcp__clickup__clickup_update_task (task_id: "${ticketId}", status: "ai review") — the Visual Quality Reviewer will then automatically pick it up
-11. Update MemPalace with what you designed and key decisions (use mcp__mempalace__mempalace_add_drawer) — record generously, the team benefits from over-sharing`;
+${revisionLine}${briefBlock}## Steps
+1. Move ticket to "in progress".
+2. Run \`/figma-component-preflight\`.
+3. Open the component library from ${designConfig.clickupDocUrl}; learn what components exist.
+4. Open the approved UX Figma node (from the Brief). Use \`figma_get_file_data\` / \`figma_take_screenshot\`.
+5. Create page \`${ticketId} — Visual Design\`. For every UI element: use a library component. If one is missing, ADD IT TO THE LIBRARY FIRST, then use it.
+6. Screenshot + post Figma page URL as a ClickUp comment. Note any checklist items you flag N/A.
+7. Move ticket to "ai review".`;
 
 	// Launch the visual designer
 	const newSessionId = crypto.randomUUID();

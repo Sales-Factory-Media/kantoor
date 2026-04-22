@@ -120,7 +120,7 @@ describe('buildSystemPrompt', () => {
 		const prompt = buildSystemPrompt(agent);
 		expect(prompt).toContain('MEMORY.md');
 		expect(prompt).toContain('MemPalace');
-		expect(prompt).toContain('BEFORE YOU START');
+		expect(prompt).toContain('mempalace_search');
 	});
 
 	it('omits role line when both roleShort and roleFull are empty', () => {
@@ -186,28 +186,29 @@ describe('buildDarrylSystemPrompt', () => {
 		const prompt = buildDarrylSystemPrompt(darryl, roster, 3333);
 		expect(prompt).toContain('**Jim**');
 		expect(prompt).toContain('**Pam**');
-		expect(prompt).toContain('OFFLINE (available)');
-		expect(prompt).toContain('ONLINE (busy)');
+		expect(prompt).toContain('free');
+		expect(prompt).toContain('BUSY');
 	});
 
-	it('includes project description in roster when provided', () => {
+	it('includes project name in roster when provided', () => {
 		const roster = makeRoster([
 			{ id: 'a1', name: 'Jim', projectName: 'crm', projectDescription: 'Customer management app' },
 		]);
 		const prompt = buildDarrylSystemPrompt(darryl, roster, 3333);
-		expect(prompt).toContain('crm — Customer management app');
+		expect(prompt).toContain('crm');
 	});
 
 	it('includes memory path and MemPalace instructions', () => {
 		const prompt = buildDarrylSystemPrompt(darryl, makeRoster(), 3333);
 		expect(prompt).toContain('MEMORY.md');
 		expect(prompt).toContain('MemPalace');
-		expect(prompt).toContain('BEFORE YOU START');
+		expect(prompt).toContain('mempalace_search');
 	});
 
-	it('includes decision framework section', () => {
+	it('includes prominent rules section', () => {
 		const prompt = buildDarrylSystemPrompt(darryl, makeRoster(), 3333);
-		expect(prompt).toContain('## Decision Framework');
+		expect(prompt).toContain('## RULES');
+		expect(prompt).toContain('additionalPrompt');
 	});
 });
 
