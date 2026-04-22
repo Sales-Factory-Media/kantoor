@@ -3,6 +3,7 @@ import * as path from 'path';
 import * as os from 'os';
 import * as crypto from 'crypto';
 import {
+	SERVER_PORT,
 	MEMPALACE_SERVER_PORT,
 	DARRYL_ROLE_SHORT,
 	DESIGNER_ROLE_SHORT,
@@ -20,6 +21,7 @@ import {
 	DEFAULT_DESIGN_FIGMA_URL,
 	DEFAULT_DESIGN_CLICKUP_DOC_URL,
 	AI_REVIEW_ENABLED,
+	VISUAL_DESIGN_DARK_MODE_REQUIRED,
 } from './constants.js';
 import { writeJson } from './serverHelpers.js';
 import { loadKnownProjects } from '../src/projectStore.js';
@@ -488,6 +490,36 @@ export function pickRandomName(existingAgents: PersistentAgent[]): string {
 	return `${base} ${suffix}`;
 }
 
+/**
+ * Self-exit block — tells the agent the curl command to close its own iTerm2 session when done.
+ * Gated on currentSessionId: offline-roster agents don't get this block. `port` is the local
+ * server the agent runs against (each hub/worker machine runs its own server on SERVER_PORT,
+ * so the URL `http://localhost:<port>` always targets the agent's own machine).
+ */
+function buildSelfExitBlock(sessionId: string | undefined, port: number): string[] {
+	if (!sessionId) return [];
+	return [
+		'',
+		'## Self-Exit',
+		'',
+		'When you have completed ALL of your work (code committed, PR opened, ticket status updated, MemPalace / memory file updated), close your session with:',
+		'',
+		'```',
+		`curl -s -X POST http://localhost:${port}/api/agent-exit -H 'Content-Type: application/json' -d '{"sessionId":"${sessionId}"}'`,
+		'```',
+		'',
+		`Your session ID: ${sessionId}`,
+		'',
+		'Before exiting, ensure:',
+		'1. All code changes committed and pushed.',
+		'2. PR opened (if applicable).',
+		'3. ClickUp ticket status updated (e.g. `qa test`, `refinement`, `on hold`).',
+		'4. MemPalace and/or your memory file updated with what you accomplished.',
+		'',
+		'The exit command closes your terminal session. Do NOT call it until the four items above are done — there is no coming back.',
+	];
+}
+
 function buildMemoryBlock(memoryPath: string, sessionCount?: number, lastSessionEnd?: string): string[] {
 	const lines = [
 		'## MemPalace (shared team memory)',
@@ -552,6 +584,7 @@ export function buildSystemPrompt(agent: PersistentAgent, projectDescription?: s
 			]),
 		'Do NOT mark the ticket "done" or "complete" — that\'s the human\'s call.',
 	);
+	lines.push(...buildSelfExitBlock(agent.currentSessionId, SERVER_PORT));
 	return lines.join('\n');
 }
 
@@ -618,6 +651,7 @@ export function buildDarrylSystemPrompt(agent: PersistentAgent, roster: RosterEn
 	}
 
 	lines.push('', ...buildMemoryBlock(memoryPath, agent.sessionCount, agent.lastSessionEnd));
+	lines.push(...buildSelfExitBlock(agent.currentSessionId, serverPort));
 	return lines.join('\n');
 }
 
@@ -677,6 +711,7 @@ export function buildJanSystemPrompt(agent: PersistentAgent, roster: RosterEntry
 	}
 
 	lines.push('', ...buildMemoryBlock(memoryPath, agent.sessionCount, agent.lastSessionEnd));
+	lines.push(...buildSelfExitBlock(agent.currentSessionId, serverPort));
 	return lines.join('\n');
 }
 
@@ -711,6 +746,7 @@ export function buildDesignerSystemPrompt(agent: PersistentAgent, projectDescrip
 	}
 
 	lines.push('', ...buildMemoryBlock(memoryPath, agent.sessionCount, agent.lastSessionEnd));
+	lines.push(...buildSelfExitBlock(agent.currentSessionId, SERVER_PORT));
 	return lines.join('\n');
 }
 
@@ -729,6 +765,9 @@ export const VISUAL_DESIGN_CHECKLIST: string[] = [
 	'**Overflow** — no element unintentionally extends outside its parent container. Truncation must be intentional and styled.',
 	'**Autolayout** — components must use Figma autolayout properly (frames, padding, gaps, sizing rules) — not absolute positioning hacks.',
 	'**Component library up to date** — if you create new components or new variants of existing components, they must either live in the central design system OR in a separate, named component library file. Never leave one-off components stranded on a playground page.',
+	...(VISUAL_DESIGN_DARK_MODE_REQUIRED
+		? ['**Dark mode parity** — every screen must ship a dark-mode variant built with DS mode tokens. No hardcoded dark colors; light and dark must use the same component instances.']
+		: ['**Light mode only** — the team is not shipping dark mode yet. Designs must be light-mode only. A dark-mode variant on the page = FAIL (it pollutes the component library with untoken\'d dark styles).']),
 ];
 
 export function buildVisualDesignerSystemPrompt(agent: PersistentAgent, projectDescription?: string, designConfig?: DesignConfig): string {
@@ -743,6 +782,9 @@ export function buildVisualDesignerSystemPrompt(agent: PersistentAgent, projectD
 		'3. **Tokens only.** Color / spacing / typography come from design-system variables & styles. No hex literals, no magic-number padding, no off-scale fonts.',
 		'4. **Playground only.** Your deliverable page is named `{ticket_id} — Visual Design`. Never edit main files or unrelated pages.',
 		'5. **Faithful to UX.** Retain every feature of the approved UX direction. Re-skin, don\'t redesign.',
+		VISUAL_DESIGN_DARK_MODE_REQUIRED
+			? '6. **Dark mode is REQUIRED.** Ship both light and dark variants of every screen, built with DS mode tokens. Never hardcode dark-mode hex colors — use the mode-aware tokens. No dark variant on a screen = rejection.'
+			: '6. **Light mode ONLY.** Do NOT create a dark-mode variant. The team is not rolling out dark mode yet. A dark-mode page / frame / variant on your deliverable = rejection, even if the UX shows dark. If the Brief or UX implies dark, confirm with Jan first — do not invent dark mode on your own.',
 		'',
 		'## Reference material',
 		`- Design handbook / DS reference: ${cfg.clickupDocUrl}`,
@@ -795,6 +837,7 @@ export function buildVisualDesignerSystemPrompt(agent: PersistentAgent, projectD
 	}
 
 	lines.push('', ...buildMemoryBlock(memoryPath, agent.sessionCount, agent.lastSessionEnd));
+	lines.push(...buildSelfExitBlock(agent.currentSessionId, SERVER_PORT));
 	return lines.join('\n');
 }
 
@@ -842,6 +885,9 @@ export function buildVisualQaSystemPrompt(agent: PersistentAgent, designConfig?:
 		'8. Overflow — ...',
 		'9. Autolayout — ...',
 		'10. Component library up to date — ...',
+		VISUAL_DESIGN_DARK_MODE_REQUIRED
+			? '11. Dark mode parity — ...'
+			: '11. Light mode only (dark-mode variants = FAIL) — ...',
 		'',
 		'### Strengths',
 		'- <specifics>',
@@ -851,6 +897,7 @@ export function buildVisualQaSystemPrompt(agent: PersistentAgent, designConfig?:
 		'```',
 		'',
 		...buildMemoryBlock(memoryPath, agent.sessionCount, agent.lastSessionEnd),
+		...buildSelfExitBlock(agent.currentSessionId, SERVER_PORT),
 	];
 	return lines.join('\n');
 }

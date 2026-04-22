@@ -152,9 +152,12 @@ export function handleLaunchAgent(msg: Record<string, unknown>, ctx: ServerConte
 		return;
 	}
 	ensureAgentMemory(agentId);
-	const task = useTeam && callInTask
+	const teamTask = useTeam && callInTask
 		? `${callInTask}\n\nCreate an agent team to work on this. Break the work into parallel tasks and spawn teammates to handle them.`
 		: callInTask;
+	const task = teamTask
+		? teamTask + '\n\nWhen you have finished this work, exit your session using the `curl /api/agent-exit` command described in your system prompt. Don\'t exit until everything is saved.'
+		: undefined;
 	if (!launchPersistentAgent(pa, persistentAgents, task)) {
 		console.log(`[Standalone] Failed to launch agent session for ${pa.name}`);
 	}

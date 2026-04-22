@@ -54,6 +54,13 @@ export const MAX_REVISION_COUNT = 3;
 // true to re-enable the Copilot + Visual QA review loops.
 export const AI_REVIEW_ENABLED = false;
 
+// ── Visual Design: Dark Mode ───────────────────────────────
+// When false (default 2026-04-22), Visual Designers are explicitly told NOT to
+// produce a dark-mode variant. When true, dark mode becomes a required deliverable
+// and the Visual QA checks for parity. Flip this when the design system is ready
+// for dark mode across the product.
+export const VISUAL_DESIGN_DARK_MODE_REQUIRED = false;
+
 // ── Multi-Worker ───────────────────────────────────────────
 export const WORKER_HEARTBEAT_INTERVAL_MS = 30_000;
 export const WORKER_HEARTBEAT_TIMEOUT_MS = 90_000;

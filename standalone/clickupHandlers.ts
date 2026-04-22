@@ -42,6 +42,11 @@ import {
 } from './workerRegistry.js';
 import { REVIEW_TRIGGER_DELAY_MS } from './constants.js';
 
+// Append this to every initial task so the agent remembers to close its iTerm
+// session when the work is done. The curl command itself is detailed in the
+// agent's system prompt (see buildSelfExitBlock in agentStore.ts).
+const EXIT_REMINDER = '\n\nWhen you have finished this work (PR open, ticket status flipped, memory updated), exit your session using the `curl /api/agent-exit` command described in your system prompt. Don\'t exit until everything is saved — there is no coming back.';
+
 // ── Polling ──────────────────────────────────────────────────
 
 export function startClickupPolling(ctx: ServerContext): void {
@@ -260,6 +265,8 @@ ${briefBlock}## Steps
 		callInTask += '\n\nUse team mode: spawn sub-agents for parallel work.';
 	}
 
+	callInTask += EXIT_REMINDER;
+
 	ensureAgentMemory(agentId);
 	let mempalaceHost: string | undefined;
 	if (ctx.mempalaceServerUrl) {
@@ -378,7 +385,7 @@ export function handleDarrylHandleTicket(msg: Record<string, unknown>, ctx: Serv
 	// Build prompts
 	const systemPrompt = buildDarrylSystemPrompt(darryl, roster, SERVER_PORT);
 
-	const initialTask = isAiReviewMode
+	let initialTask = isAiReviewMode
 		? `Ticket ${ticketId}: "${ticketName}" is in **AI Review**. Dispatch an agent to process Copilot's feedback.
 URL: ${ticketUrl}
 
@@ -401,6 +408,8 @@ Rules: do NOT change the ticket status yourself (the reassigned agent will). 3+ 
 3. Move the ticket to "in progress" yourself ONLY if dispatch succeeded. Otherwise leave it.
 
 The Brief should summarize the ticket in 2–6 bullets so the worker doesn't re-read everything. Use the template from your system prompt.`;
+
+	initialTask += EXIT_REMINDER;
 
 	// Launch Darryl
 	const newSessionId = crypto.randomUUID();
@@ -477,7 +486,7 @@ export function handleJanDesignBriefing(msg: Record<string, unknown>, ctx: Serve
 	// Build initial task based on ticket status — two distinct modes
 	const isRefineMode = ticketStatus === 'to refine';
 
-	const initialTask = isRefineMode
+	let initialTask = isRefineMode
 		? `Ticket ${ticketId}: "${ticketName}" (${ticketUrl}) — status **"to refine"** → Phase 1 UX Exploration.
 
 ## Steps
@@ -492,14 +501,18 @@ export function handleJanDesignBriefing(msg: Record<string, unknown>, ctx: Serve
 		: `Ticket ${ticketId}: "${ticketName}" (${ticketUrl}) — status **"to do"** → Phase 2 Visual Design.
 
 ## Steps
-1. \`clickup_get_task\` + \`clickup_get_task_comments\` once. Find the approved UX direction and its Figma node link.
-2. Dispatch ONE Visual Designer with a Brief:
+1. \`clickup_get_task\` + \`clickup_get_task_comments\` once. Try to find an approved UX direction (a sub-ticket tagged \`UX-prototype-briefing\`, or a Figma node URL posted as a comment, or an explicit "approved UX:" line).
+   - **If you find approved UX** → your Brief cites that Figma node URL + any DS notes.
+   - **If there is NO UX sub-ticket and NO UX Figma URL in the comments** → treat this as a greenfield visual task. Do NOT go hunting for UX, do NOT stall, do NOT ask questions. Write a Brief from the ticket description alone and dispatch. Mention in the Brief that there is no prior UX so the designer knows they're defining the layout themselves.
+2. Dispatch ONE Visual Designer with the Brief:
    \`curl -X POST http://localhost:${SERVER_PORT}/api/launch-visual-designer -d '{"workspacePath":"<project>","ticketId":"${ticketId}","ticketName":"${ticketName}","ticketUrl":"${ticketUrl}","additionalPrompt":"<Brief>"}'\`
-   The Brief MUST include the approved UX Figma node URL, the scope, and any DS notes. Template in your system prompt.
+   Brief template is in your system prompt — fill what you have, flag what's missing.
 3. Only \`success:true\` counts. On \`success:false\`, leave ticket alone, wait ~60s, retry.
 4. ${AI_REVIEW_ENABLED
 	? 'That\'s it for you — Visual QA AI Review runs automatically when the designer finishes. PASS → "qa test", FAIL → revision auto-pickup.'
 	: 'That\'s it for you — the designer will move the ticket to "qa test" when finished, and a human reviews from there.'}`;
+
+	initialTask += EXIT_REMINDER;
 
 	// Launch Jan
 	const newSessionId = crypto.randomUUID();
@@ -653,7 +666,7 @@ ${revisionLine}${briefBlock}## Steps
 2. Open a new Figma page: \`${ticketId} — ${ticketName}\`.
 3. Design based on the Brief above. Only pull the sub-ticket if you need a detail the Brief doesn't cover.
 4. Screenshot + post Figma page URL as a ClickUp comment.
-5. Move ticket to "qa test".`;
+5. Move ticket to "qa test".${EXIT_REMINDER}`;
 
 	// Launch the designer
 	const newSessionId = crypto.randomUUID();
@@ -767,7 +780,7 @@ ${revisionLine}${briefBlock}## Steps
 3. Create the page \`${ticketId} — Visual Design\`. If the shopping list includes candidates, also create \`__Candidates — ${ticketId}\` in the same file.
 4. Build the screens using just-in-time lookup (C). New components go on the candidates page, NOT the canonical DS.
 5. Final audit (F). Screenshot + post Figma page URL as a ClickUp comment (include a "Candidates for promotion" list if any, and note any checklist items you flag N/A).
-6. ${AI_REVIEW_ENABLED ? 'Move ticket to "ai review" — the Visual Quality Reviewer will auto-pick it up.' : 'Move ticket to "qa test". A human reviews from there.'}`;
+6. ${AI_REVIEW_ENABLED ? 'Move ticket to "ai review" — the Visual Quality Reviewer will auto-pick it up.' : 'Move ticket to "qa test". A human reviews from there.'}${EXIT_REMINDER}`;
 
 	// Launch the visual designer
 	const newSessionId = crypto.randomUUID();
@@ -848,7 +861,7 @@ export function handleJanReviewDesigner(
 		});
 
 	const systemPrompt = buildJanSystemPrompt(jan, roster, SERVER_PORT);
-	const initialTask = buildJanReviewPrompt({ ticketId, ticketName, ticketUrl, designerName });
+	const initialTask = buildJanReviewPrompt({ ticketId, ticketName, ticketUrl, designerName }) + EXIT_REMINDER;
 
 	const newSessionId = crypto.randomUUID();
 	jan.currentSessionId = newSessionId;
@@ -973,7 +986,7 @@ export function handleVisualQaReview(
 
 	const qaDesignConfig = getJanDesignConfig();
 	const systemPrompt = buildVisualQaSystemPrompt(qa, qaDesignConfig);
-	const initialTask = buildVisualQaInitialTask({ ticketId, ticketName, ticketUrl, designerName });
+	const initialTask = buildVisualQaInitialTask({ ticketId, ticketName, ticketUrl, designerName }) + EXIT_REMINDER;
 
 	const newSessionId = crypto.randomUUID();
 	qa.currentSessionId = newSessionId;

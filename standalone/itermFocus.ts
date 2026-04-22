@@ -49,6 +49,56 @@ function findTtyForSession(sessionId: string): string | null {
 }
 
 /**
+ * Close the iTerm2 session running the Claude session with the given session ID.
+ * Returns true if the session was found and closed, false otherwise.
+ */
+export function closeItermSession(sessionId: string): boolean {
+	try {
+		const tty = findTtyForSession(sessionId);
+		if (!tty) {
+			console.log(`[iTerm Close] No TTY found for session ${sessionId}`);
+			return false;
+		}
+		return closeByTty(tty);
+	} catch (err) {
+		console.log(`[iTerm Close] Error: ${err}`);
+		return false;
+	}
+}
+
+function closeByTty(tty: string): boolean {
+	try {
+		const script = `
+on run argv
+	set targetTty to item 1 of argv
+	tell application "iTerm2"
+		repeat with w in windows
+			repeat with t in tabs of w
+				repeat with s in sessions of t
+					if tty of s contains targetTty then
+						close s
+						return "closed"
+					end if
+				end repeat
+			end repeat
+		end repeat
+	end tell
+	return "not_found"
+end run`;
+		const result = execFileSync('osascript', ['-e', script, tty], {
+			encoding: 'utf-8',
+			timeout: 5000,
+		}).trim();
+
+		const success = result === 'closed';
+		console.log(`[iTerm Close] ${success ? 'Closed' : 'Not found'} session with TTY ${tty}`);
+		return success;
+	} catch {
+		return false;
+	}
+}
+
+/**
  * Launch a new iTerm2 tab and run `claude --session-id <sessionId>` in the given directory.
  */
 export function launchItermSession(sessionId: string, cwd?: string): boolean {
