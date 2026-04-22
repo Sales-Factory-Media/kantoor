@@ -3,7 +3,6 @@ import * as path from 'path';
 import * as os from 'os';
 import * as crypto from 'crypto';
 import {
-	SERVER_PORT,
 	MEMPALACE_SERVER_PORT,
 	DARRYL_ROLE_SHORT,
 	DESIGNER_ROLE_SHORT,
@@ -491,32 +490,49 @@ export function pickRandomName(existingAgents: PersistentAgent[]): string {
 }
 
 /**
- * Self-exit block — tells the agent the curl command to close its own iTerm2 session when done.
- * Gated on currentSessionId: offline-roster agents don't get this block. `port` is the local
- * server the agent runs against (each hub/worker machine runs its own server on SERVER_PORT,
- * so the URL `http://localhost:<port>` always targets the agent's own machine).
+ * Self-exit block — tells the agent the bash command to close its own iTerm2 tab
+ * when its work is complete. Works by finding the shell's own controlling TTY and
+ * closing the matching iTerm2 session via osascript. No sessionId or server call
+ * needed — the agent discovers its own tab from within its own shell.
+ *
+ * macOS + iTerm2 only (silently no-ops elsewhere — it's a best-effort cleanup).
  */
-function buildSelfExitBlock(sessionId: string | undefined, port: number): string[] {
-	if (!sessionId) return [];
+function buildSelfExitBlock(): string[] {
 	return [
 		'',
 		'## Self-Exit',
 		'',
-		'When you have completed ALL of your work (code committed, PR opened, ticket status updated, MemPalace / memory file updated), close your session with:',
+		'When you have completed ALL of your work (code committed, PR opened, ticket status updated, MemPalace / memory file updated), close your own iTerm tab by running this exact `Bash` command:',
 		'',
+		'```bash',
+		'# Walk up the process tree until we find a TTY (the Bash tool subshell has no controlling',
+		'# TTY of its own — the TTY lives on the `claude` CLI process a few levels up).',
+		'PID=$$; TTY=\'??\'',
+		'while [ "$PID" != "1" ] && [ "$TTY" = \'??\' ]; do',
+		'  TTY=$(ps -o tty= -p "$PID" 2>/dev/null | tr -d \' \')',
+		'  [ "$TTY" != \'??\' ] && break',
+		'  PID=$(ps -o ppid= -p "$PID" 2>/dev/null | tr -d \' \')',
+		'done',
+		'osascript <<EOF',
+		'tell application "iTerm2"',
+		'  repeat with w in windows',
+		'    repeat with t in tabs of w',
+		'      repeat with s in sessions of t',
+		'        if tty of s contains "$TTY" then close s',
+		'      end repeat',
+		'    end repeat',
+		'  end repeat',
+		'end tell',
+		'EOF',
 		'```',
-		`curl -s -X POST http://localhost:${port}/api/agent-exit -H 'Content-Type: application/json' -d '{"sessionId":"${sessionId}"}'`,
-		'```',
 		'',
-		`Your session ID: ${sessionId}`,
-		'',
-		'Before exiting, ensure:',
+		'Before running it, ensure:',
 		'1. All code changes committed and pushed.',
 		'2. PR opened (if applicable).',
 		'3. ClickUp ticket status updated (e.g. `qa test`, `refinement`, `on hold`).',
 		'4. MemPalace and/or your memory file updated with what you accomplished.',
 		'',
-		'The exit command closes your terminal session. Do NOT call it until the four items above are done — there is no coming back.',
+		'This closes your terminal tab. Do NOT run it until the four items above are done — there is no coming back.',
 	];
 }
 
@@ -584,7 +600,7 @@ export function buildSystemPrompt(agent: PersistentAgent, projectDescription?: s
 			]),
 		'Do NOT mark the ticket "done" or "complete" — that\'s the human\'s call.',
 	);
-	lines.push(...buildSelfExitBlock(agent.currentSessionId, SERVER_PORT));
+	lines.push(...buildSelfExitBlock());
 	return lines.join('\n');
 }
 
@@ -651,7 +667,7 @@ export function buildDarrylSystemPrompt(agent: PersistentAgent, roster: RosterEn
 	}
 
 	lines.push('', ...buildMemoryBlock(memoryPath, agent.sessionCount, agent.lastSessionEnd));
-	lines.push(...buildSelfExitBlock(agent.currentSessionId, serverPort));
+	lines.push(...buildSelfExitBlock());
 	return lines.join('\n');
 }
 
@@ -711,7 +727,7 @@ export function buildJanSystemPrompt(agent: PersistentAgent, roster: RosterEntry
 	}
 
 	lines.push('', ...buildMemoryBlock(memoryPath, agent.sessionCount, agent.lastSessionEnd));
-	lines.push(...buildSelfExitBlock(agent.currentSessionId, serverPort));
+	lines.push(...buildSelfExitBlock());
 	return lines.join('\n');
 }
 
@@ -746,7 +762,7 @@ export function buildDesignerSystemPrompt(agent: PersistentAgent, projectDescrip
 	}
 
 	lines.push('', ...buildMemoryBlock(memoryPath, agent.sessionCount, agent.lastSessionEnd));
-	lines.push(...buildSelfExitBlock(agent.currentSessionId, SERVER_PORT));
+	lines.push(...buildSelfExitBlock());
 	return lines.join('\n');
 }
 
@@ -837,7 +853,7 @@ export function buildVisualDesignerSystemPrompt(agent: PersistentAgent, projectD
 	}
 
 	lines.push('', ...buildMemoryBlock(memoryPath, agent.sessionCount, agent.lastSessionEnd));
-	lines.push(...buildSelfExitBlock(agent.currentSessionId, SERVER_PORT));
+	lines.push(...buildSelfExitBlock());
 	return lines.join('\n');
 }
 
@@ -897,7 +913,7 @@ export function buildVisualQaSystemPrompt(agent: PersistentAgent, designConfig?:
 		'```',
 		'',
 		...buildMemoryBlock(memoryPath, agent.sessionCount, agent.lastSessionEnd),
-		...buildSelfExitBlock(agent.currentSessionId, SERVER_PORT),
+		...buildSelfExitBlock(),
 	];
 	return lines.join('\n');
 }

@@ -43,9 +43,9 @@ import {
 import { REVIEW_TRIGGER_DELAY_MS } from './constants.js';
 
 // Append this to every initial task so the agent remembers to close its iTerm
-// session when the work is done. The curl command itself is detailed in the
-// agent's system prompt (see buildSelfExitBlock in agentStore.ts).
-const EXIT_REMINDER = '\n\nWhen you have finished this work (PR open, ticket status flipped, memory updated), exit your session using the `curl /api/agent-exit` command described in your system prompt. Don\'t exit until everything is saved — there is no coming back.';
+// tab when the work is done. The exact bash block is in the agent's system
+// prompt under "## Self-Exit" (see buildSelfExitBlock in agentStore.ts).
+const EXIT_REMINDER = '\n\nWhen you have finished this work (PR open, ticket status flipped, memory updated), run the `## Self-Exit` bash block from your system prompt to close your iTerm tab. Don\'t run it until everything is saved — there is no coming back.';
 
 // ── Polling ──────────────────────────────────────────────────
 
