@@ -19,6 +19,7 @@ import {
 	JAN_WORKSPACE,
 	DEFAULT_DESIGN_FIGMA_URL,
 	DEFAULT_DESIGN_CLICKUP_DOC_URL,
+	AI_REVIEW_ENABLED,
 } from './constants.js';
 import { writeJson } from './serverHelpers.js';
 import { loadKnownProjects } from '../src/projectStore.js';
@@ -542,7 +543,13 @@ export function buildSystemPrompt(agent: PersistentAgent, projectDescription?: s
 		'',
 		'## Ticket Status on Completion',
 		'',
-		'When your PR is open, move the ticket to **"qa test"** using `mcp__clickup__clickup_update_task` (status: "qa test"). A human will review from there.',
+		...(AI_REVIEW_ENABLED
+			? [
+				'When your PR is open, move the ticket to **"ai review"** using `mcp__clickup__clickup_update_task` (status: "ai review"). GitHub Copilot will review the PR; Darryl will later reassign someone (possibly you) with `aiReviewMode:true` to process Copilot\'s feedback. Do NOT move directly to "qa test".',
+			]
+			: [
+				'When your PR is open, move the ticket to **"qa test"** using `mcp__clickup__clickup_update_task` (status: "qa test"). A human will review from there.',
+			]),
 		'Do NOT mark the ticket "done" or "complete" — that\'s the human\'s call.',
 	);
 	return lines.join('\n');
@@ -561,21 +568,34 @@ export interface RosterEntry {
 
 export function buildDarrylSystemPrompt(agent: PersistentAgent, roster: RosterEntry[], serverPort: number): string {
 	const memoryPath = getAgentMemoryPath(agent.id);
-	const lines = [
-		'You are Darryl, the Foreman. You ASSESS and DISPATCH — you never implement tickets yourself.',
-		'',
-		'## RULES (violating these = failure)',
+	const rules: string[] = [
 		'1. NEVER write code or edit files for a ticket. Your job is to decide WHO works on it.',
 		'2. Only dispatch OFFLINE agents whose workspace matches the ticket\'s project.',
 		'3. When you dispatch, ALWAYS include a **Brief** in `additionalPrompt` (2–6 bullets: goal, key constraints, pointers to the exact artifacts needed). This stops the worker from re-reading every comment.',
 		'4. If the ticket is unclear, comment with questions, unassign yourself, assign the escalation user, move back to "to do". Do NOT dispatch a worker to a half-baked ticket.',
+	];
+	if (AI_REVIEW_ENABLED) {
+		rules.push('5. AI Review: 3-round cap. After 3 cycles, tell the worker (in `additionalPrompt`) to be conservative and forward to `qa test` unless there\'s a real bug.');
+	}
+	const dispatchApiExtras = AI_REVIEW_ENABLED
+		? 'Add `"useTeam":true` for complex multi-part work. Add `"aiReviewMode":true` for tickets in the `ai review` state.'
+		: 'Add `"useTeam":true` for complex multi-part work.';
+	const lifecycleLine = AI_REVIEW_ENABLED
+		? '`to do` → you dispatch → worker does the work, opens a PR, moves the ticket to `ai review` → Copilot reviews → you see it in `ai review` on next poll and reassign with `aiReviewMode:true` (prefer the original implementer — find them in the "Assigned to worker: ..." comment).'
+		: '`to do` → you dispatch → worker does the work, opens a PR, moves the ticket to `qa test` → human reviews from there. The AI Review (Copilot) loop is currently paused — workers go directly to `qa test`.';
+
+	const lines = [
+		'You are Darryl, the Foreman. You ASSESS and DISPATCH — you never implement tickets yourself.',
+		'',
+		'## RULES (violating these = failure)',
+		...rules,
 		'',
 		'## Dispatch API (port ' + serverPort + ')',
 		'`curl -X POST http://localhost:' + serverPort + '/api/launch-agent -d \'{"agentId":"...","ticketId":"...","ticketName":"...","ticketUrl":"...","additionalPrompt":"<Brief>"}\'`',
-		'Add `"useTeam":true` for complex multi-part work.',
+		dispatchApiExtras,
 		'',
 		'## Ticket lifecycle',
-		'`to do` → you dispatch → worker does the work, opens a PR, moves the ticket to `qa test` → human reviews from there. The AI Review (Copilot) loop is currently paused — workers go directly to `qa test`.',
+		lifecycleLine,
 		'',
 		'## Briefing template (paste in `additionalPrompt`)',
 		'```',
@@ -749,14 +769,14 @@ export function buildVisualDesignerSystemPrompt(agent: PersistentAgent, projectD
 		'',
 		'**E. Running tally.** While building, keep a mental count: elements built vs library instances used. If you ever find yourself about to draw a rectangle that resembles a library component, stop — that\'s a `figma_search_components` trigger.',
 		'',
-		'**F. Final check (one call).** Before flipping the ticket to `qa test`, run `figma_execute` on the page to count node types. If the ratio of plain `FRAME` nodes to `INSTANCE` nodes at the element level looks wrong (many raw frames that should have been instances), fix before posting — don\'t ship and let the human QA catch it.',
+		`**F. Final check (one call).** Before flipping the ticket to \`${AI_REVIEW_ENABLED ? 'ai review' : 'qa test'}\`, run \`figma_execute\` on the page to count node types. If the ratio of plain \`FRAME\` nodes to \`INSTANCE\` nodes at the element level looks wrong (many raw frames that should have been instances), fix before posting — don't ship and let the ${AI_REVIEW_ENABLED ? 'Visual QA' : 'human QA'} catch it.`,
 		'',
 		'## Workflow',
 		'1. Read Jan\'s Brief. Don\'t re-fetch the parent ticket unless the Brief is missing something specific.',
 		'2. Do the **family scan** (A) + **shopping list** (B).',
 		'3. Create the page `{ticket_id} — Visual Design` and, if needed, `__Candidates — {ticket_id}`.',
 		'4. Build screens — just-in-time lookup (C), candidate protocol (D), running tally (E).',
-		'5. Final check (F). Screenshot + post Figma URL as a ClickUp comment (include the Candidates-for-promotion list if any). Move ticket to `qa test`.',
+		`5. Final check (F). Screenshot + post Figma URL as a ClickUp comment (include the Candidates-for-promotion list if any). Move ticket to \`${AI_REVIEW_ENABLED ? 'ai review' : 'qa test'}\`.`,
 		'',
 		'## Quality checklist — the QA will grade against this exact list',
 		...VISUAL_DESIGN_CHECKLIST.map(item => `- ${item}`),

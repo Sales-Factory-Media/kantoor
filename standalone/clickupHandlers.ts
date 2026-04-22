@@ -237,6 +237,9 @@ ${briefBlock}## Steps
 
 Rules: commit+push BEFORE flipping back to "ai review". 3-round cap — if this is round 3+, forward to "qa test" unless there's a real bug.`;
 	} else {
+		const finalStep = AI_REVIEW_ENABLED
+			? 'Move ticket to **"ai review"** (not "qa test") — Copilot reviews, then you may be reassigned to process its feedback.'
+			: 'Move ticket to **"qa test"**. A human reviews from there.';
 		callInTask = `Ticket ${ticketId}: "${ticketName}" (${ticketUrl}).
 
 ${briefBlock}## Steps
@@ -244,7 +247,7 @@ ${briefBlock}## Steps
 2. Check out or create branch \`feature/CU-${ticketId}-<short-desc>\` from develop.
 3. Do the work. Rely on the Brief above — only re-read the ticket if the Brief is missing something specific.
 4. Open a PR. Commit messages must include \`CU-${ticketId}\`.
-5. Move ticket to **"qa test"**. A human reviews from there.`;
+5. ${finalStep}`;
 	}
 
 	const knownProjects = loadKnownProjects();
@@ -494,7 +497,9 @@ export function handleJanDesignBriefing(msg: Record<string, unknown>, ctx: Serve
    \`curl -X POST http://localhost:${SERVER_PORT}/api/launch-visual-designer -d '{"workspacePath":"<project>","ticketId":"${ticketId}","ticketName":"${ticketName}","ticketUrl":"${ticketUrl}","additionalPrompt":"<Brief>"}'\`
    The Brief MUST include the approved UX Figma node URL, the scope, and any DS notes. Template in your system prompt.
 3. Only \`success:true\` counts. On \`success:false\`, leave ticket alone, wait ~60s, retry.
-4. That's it for you — the designer will move the ticket to "qa test" when finished, and a human reviews from there.`;
+4. ${AI_REVIEW_ENABLED
+	? 'That\'s it for you — Visual QA AI Review runs automatically when the designer finishes. PASS → "qa test", FAIL → revision auto-pickup.'
+	: 'That\'s it for you — the designer will move the ticket to "qa test" when finished, and a human reviews from there.'}`;
 
 	// Launch Jan
 	const newSessionId = crypto.randomUUID();
@@ -762,7 +767,7 @@ ${revisionLine}${briefBlock}## Steps
 3. Create the page \`${ticketId} — Visual Design\`. If the shopping list includes candidates, also create \`__Candidates — ${ticketId}\` in the same file.
 4. Build the screens using just-in-time lookup (C). New components go on the candidates page, NOT the canonical DS.
 5. Final audit (F). Screenshot + post Figma page URL as a ClickUp comment (include a "Candidates for promotion" list if any, and note any checklist items you flag N/A).
-6. Move ticket to "qa test". A human reviews from there.`;
+6. ${AI_REVIEW_ENABLED ? 'Move ticket to "ai review" — the Visual Quality Reviewer will auto-pick it up.' : 'Move ticket to "qa test". A human reviews from there.'}`;
 
 	// Launch the visual designer
 	const newSessionId = crypto.randomUUID();
