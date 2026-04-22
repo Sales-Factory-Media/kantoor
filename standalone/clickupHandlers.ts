@@ -2,7 +2,7 @@ import * as path from 'path';
 import * as os from 'os';
 import * as crypto from 'crypto';
 import { loadKnownProjects } from '../src/projectStore.js';
-import { CLICKUP_POLL_INTERVAL_MS, DARRYL_ROLE_SHORT, DARRYL_CLICKUP_USERNAME, DARRYL_ESCALATION_USERNAME, DARRYL_WORKSPACE, JAN_ROLE_SHORT, JAN_CLICKUP_USERNAME, JAN_WORKSPACE, DESIGNER_ROLE_SHORT, VISUAL_DESIGNER_ROLE_SHORT, VISUAL_QA_ROLE_SHORT, TEAM_UX_ID, TEAM_VISUAL_ID, SERVER_PORT, WORKER_ROLE_DEV, WORKER_ROLE_DESIGNER, DEFAULT_WORKER_ROLES } from './constants.js';
+import { CLICKUP_POLL_INTERVAL_MS, DARRYL_ROLE_SHORT, DARRYL_CLICKUP_USERNAME, DARRYL_ESCALATION_USERNAME, DARRYL_WORKSPACE, JAN_ROLE_SHORT, JAN_CLICKUP_USERNAME, JAN_WORKSPACE, DESIGNER_ROLE_SHORT, VISUAL_DESIGNER_ROLE_SHORT, VISUAL_QA_ROLE_SHORT, TEAM_UX_ID, TEAM_VISUAL_ID, SERVER_PORT, WORKER_ROLE_DEV, WORKER_ROLE_DESIGNER, DEFAULT_WORKER_ROLES, AI_REVIEW_ENABLED } from './constants.js';
 import { launchAgentSession } from './itermFocus.js';
 import {
 	savePersistentAgents,
@@ -79,11 +79,11 @@ export function autoDarrylPickup(ctx: ServerContext): void {
 	// Workers don't auto-pickup — they receive tickets from the hub
 	if (ctx.isWorkerMode) return;
 
-	// Collect TODO and AI REVIEW tickets assigned to Darryl
+	// Collect TODO (and AI REVIEW, if enabled) tickets assigned to Darryl
 	const todoTickets: Array<{ id: string; name: string; url: string; status: string }> = [];
 	for (const group of ctx.clickupTickets) {
 		const statusLower = group.name.toLowerCase();
-		if (statusLower !== 'to do' && statusLower !== 'ai review') continue;
+		if (statusLower !== 'to do' && !(AI_REVIEW_ENABLED && statusLower === 'ai review')) continue;
 		for (const task of group.tasks) {
 			if (task.assignees.some(a => a.username === DARRYL_CLICKUP_USERNAME)) {
 				todoTickets.push({ id: task.id, name: task.name, url: task.url, status: statusLower });
@@ -93,12 +93,14 @@ export function autoDarrylPickup(ctx: ServerContext): void {
 
 	if (todoTickets.length === 0) return;
 
-	// Prioritize ai review tickets over to do — process Copilot feedback before starting new work
-	todoTickets.sort((a, b) => {
-		if (a.status === 'ai review' && b.status !== 'ai review') return -1;
-		if (a.status !== 'ai review' && b.status === 'ai review') return 1;
-		return 0;
-	});
+	// When AI Review is enabled, prioritize ai-review tickets over to-do so Copilot feedback gets processed first
+	if (AI_REVIEW_ENABLED) {
+		todoTickets.sort((a, b) => {
+			if (a.status === 'ai review' && b.status !== 'ai review') return -1;
+			if (a.status !== 'ai review' && b.status === 'ai review') return 1;
+			return 0;
+		});
+	}
 
 	// Check available dev-capable capacity (hub + idle remote dev workers)
 	const capacity = getAvailableCapacity(ctx, WORKER_ROLE_DEV);
@@ -242,7 +244,7 @@ ${briefBlock}## Steps
 2. Check out or create branch \`feature/CU-${ticketId}-<short-desc>\` from develop.
 3. Do the work. Rely on the Brief above — only re-read the ticket if the Brief is missing something specific.
 4. Open a PR. Commit messages must include \`CU-${ticketId}\`.
-5. Move ticket to **"ai review"** (not "qa test") — Copilot reviews, then you may be reassigned to process its feedback.`;
+5. Move ticket to **"qa test"**. A human reviews from there.`;
 	}
 
 	const knownProjects = loadKnownProjects();
@@ -492,7 +494,7 @@ export function handleJanDesignBriefing(msg: Record<string, unknown>, ctx: Serve
    \`curl -X POST http://localhost:${SERVER_PORT}/api/launch-visual-designer -d '{"workspacePath":"<project>","ticketId":"${ticketId}","ticketName":"${ticketName}","ticketUrl":"${ticketUrl}","additionalPrompt":"<Brief>"}'\`
    The Brief MUST include the approved UX Figma node URL, the scope, and any DS notes. Template in your system prompt.
 3. Only \`success:true\` counts. On \`success:false\`, leave ticket alone, wait ~60s, retry.
-4. That's it for you — Visual QA AI Review runs automatically when the designer finishes.`;
+4. That's it for you — the designer will move the ticket to "qa test" when finished, and a human reviews from there.`;
 
 	// Launch Jan
 	const newSessionId = crypto.randomUUID();
@@ -760,7 +762,7 @@ ${revisionLine}${briefBlock}## Steps
 3. Create the page \`${ticketId} — Visual Design\`. If the shopping list includes candidates, also create \`__Candidates — ${ticketId}\` in the same file.
 4. Build the screens using just-in-time lookup (C). New components go on the candidates page, NOT the canonical DS.
 5. Final audit (F). Screenshot + post Figma page URL as a ClickUp comment (include a "Candidates for promotion" list if any, and note any checklist items you flag N/A).
-6. Move ticket to "ai review".`;
+6. Move ticket to "qa test". A human reviews from there.`;
 
 	// Launch the visual designer
 	const newSessionId = crypto.randomUUID();
@@ -909,8 +911,12 @@ export function handleDesignerSessionEnded(
 	const completedTicket = { ticketId, ticketName, ticketUrl, designerName, workspacePath };
 
 	if (agentRole === VISUAL_DESIGNER_ROLE_SHORT) {
-		console.log(`[Hub] Remote Visual Designer finished ticket ${ticketId} — triggering Visual QA AI review`);
-		setTimeout(() => handleVisualQaReview(completedTicket, ctx), REVIEW_TRIGGER_DELAY_MS);
+		if (AI_REVIEW_ENABLED) {
+			console.log(`[Hub] Remote Visual Designer finished ticket ${ticketId} — triggering Visual QA AI review`);
+			setTimeout(() => handleVisualQaReview(completedTicket, ctx), REVIEW_TRIGGER_DELAY_MS);
+		} else {
+			console.log(`[Hub] Remote Visual Designer finished ticket ${ticketId} — AI review paused, no auto-QA`);
+		}
 		return;
 	}
 	if (agentRole === DESIGNER_ROLE_SHORT) {
@@ -918,8 +924,15 @@ export function handleDesignerSessionEnded(
 		setTimeout(() => handleJanReviewDesigner(completedTicket, ctx), REVIEW_TRIGGER_DELAY_MS);
 		return;
 	}
-	if (agentRole === VISUAL_QA_ROLE_SHORT || agentRole === JAN_ROLE_SHORT) {
-		console.log(`[Hub] Remote ${agentRole} finished ticket ${ticketId} — running revision pickup`);
+	if (agentRole === VISUAL_QA_ROLE_SHORT) {
+		if (AI_REVIEW_ENABLED) {
+			console.log(`[Hub] Remote Visual QA finished ticket ${ticketId} — running revision pickup`);
+			setTimeout(() => autoDesignerRevisionPickup(ctx), REVIEW_TRIGGER_DELAY_MS);
+		}
+		return;
+	}
+	if (agentRole === JAN_ROLE_SHORT) {
+		console.log(`[Hub] Remote Jan finished ticket ${ticketId} — running revision pickup`);
 		setTimeout(() => autoDesignerRevisionPickup(ctx), REVIEW_TRIGGER_DELAY_MS);
 		return;
 	}
@@ -995,6 +1008,7 @@ export function handleVisualQaReview(
  */
 export function autoVisualQaPickup(ctx: ServerContext): void {
 	if (ctx.isWorkerMode) return;
+	if (!AI_REVIEW_ENABLED) return; // AI Review pipeline paused — QA doesn't auto-pickup ai-review tickets
 
 	const qa = ctx.persistentAgents.find(
 		p => p.roleShort === VISUAL_QA_ROLE_SHORT && p.teamId === TEAM_VISUAL_ID,

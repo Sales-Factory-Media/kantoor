@@ -48,6 +48,12 @@ export const DEFAULT_DESIGN_CLICKUP_DOC_URL = 'https://app.clickup.com/901524149
 export const REVIEW_TRIGGER_DELAY_MS = 5000;
 export const MAX_REVISION_COUNT = 3;
 
+// ── AI Review pipeline (PAUSED 2026-04-22) ─────────────────
+// When false, workers always move tickets directly to "qa test" — no ai-review
+// intermediate step, no auto Visual QA, no Darryl AI Review dispatch. Flip to
+// true to re-enable the Copilot + Visual QA review loops.
+export const AI_REVIEW_ENABLED = false;
+
 // ── Multi-Worker ───────────────────────────────────────────
 export const WORKER_HEARTBEAT_INTERVAL_MS = 30_000;
 export const WORKER_HEARTBEAT_TIMEOUT_MS = 90_000;
