@@ -7,6 +7,7 @@ import {
 	DARRYL_ROLE_SHORT,
 	DESIGNER_ROLE_SHORT,
 	VISUAL_DESIGNER_ROLE_SHORT,
+	PM_ROLE_SHORT,
 	UX_PM_ROLE_SHORT,
 	UX_QA_ROLE_SHORT,
 	VISUAL_PM_ROLE_SHORT,
@@ -54,41 +55,42 @@ export interface PersistentAgent {
 	currentTicketName?: string;
 	currentTicketUrl?: string;
 	lastTicketId?: string;
+	retired?: boolean;        // archived role — kept for memory, never launched
 }
 
 // ── Team structure (static source of truth) ──────────────
 export interface TeamDefinition {
 	id: string;
 	name: string;
-	pmRole: string;
 	qaRole: string;
 	workerRole: string;
 	workerRoleFull: string;
-	pmRoleFull: string;
 	qaRoleFull: string;
 	workerCount: number;
 }
 
+// PM roles removed 2026-04-22: Jan handles the project-management work herself
+// (writing UX briefings, dispatching designers) to reduce the number of concurrent
+// agents. Existing 'UX Project Manager' / 'Visual Project Manager' persistent
+// agents are retired in loadPersistentAgents(): they keep their MEMORY but are
+// tagged `retired: true` so seedDesignTeams won't recreate them and the launch
+// pickers ignore them.
 export const TEAMS: Record<string, TeamDefinition> = {
 	[TEAM_UX_ID]: {
 		id: TEAM_UX_ID,
 		name: 'UX Design Team',
-		pmRole: UX_PM_ROLE_SHORT,
 		qaRole: UX_QA_ROLE_SHORT,
 		workerRole: DESIGNER_ROLE_SHORT,
 		workerRoleFull: 'UX Designer. Reads design briefings from ClickUp, creates UX explorations in Figma on playground boards, and delivers diverse creative directions.',
-		pmRoleFull: 'UX Project Manager. Receives technical briefings from Jan and creates 5 diverse UX design briefing sub-tickets in ClickUp, then dispatches them to free UX designers.',
 		qaRoleFull: 'UX Quality Reviewer. Reviews UX designer output for clarity, completeness, and adherence to the briefing.',
 		workerCount: TEAM_WORKER_COUNT,
 	},
 	[TEAM_VISUAL_ID]: {
 		id: TEAM_VISUAL_ID,
 		name: 'Visual Design Team',
-		pmRole: VISUAL_PM_ROLE_SHORT,
 		qaRole: VISUAL_QA_ROLE_SHORT,
 		workerRole: VISUAL_DESIGNER_ROLE_SHORT,
 		workerRoleFull: 'Visual Designer. Takes approved UX directions and creates polished, production-ready visual implementations following the design system.',
-		pmRoleFull: 'Visual Project Manager. Receives approved UX tickets from Jan and dispatches them to free Visual Designers, tracking progress through the AI Review pipeline.',
 		qaRoleFull: 'Visual Quality Reviewer. Reviews Visual Designer output against the design system checklist, decides AI Review pass/fail, and forwards approved work to human QA.',
 		workerCount: TEAM_WORKER_COUNT,
 	},
@@ -106,6 +108,16 @@ export function loadPersistentAgents(): PersistentAgent[] {
 			if (!a.teamId) {
 				if (a.roleShort === DESIGNER_ROLE_SHORT) a.teamId = TEAM_UX_ID;
 				else if (a.roleShort === VISUAL_DESIGNER_ROLE_SHORT) a.teamId = TEAM_VISUAL_ID;
+			}
+			// Migration (2026-04-22): PM roles removed — Jan does the PM work herself.
+			// Tag existing PM agents as retired so they aren't picked by launchers or
+			// seeded back by seedDesignTeams, but keep them in the store to preserve
+			// their MEMORY.md history.
+			if (
+				(a.roleShort === UX_PM_ROLE_SHORT || a.roleShort === VISUAL_PM_ROLE_SHORT || a.roleShort === PM_ROLE_SHORT)
+				&& !a.retired
+			) {
+				a.retired = true;
 			}
 		}
 		return agents;
@@ -273,7 +285,7 @@ export function buildOrganogram(persistentAgents: PersistentAgent[]): Organogram
 		}
 	}
 	const devAgents = persistentAgents.filter(
-		p => p.id !== darrylId && !designAgentIds.has(p.id),
+		p => p.id !== darrylId && !designAgentIds.has(p.id) && !p.retired,
 	);
 
 	// Group dev agents by workspacePath
@@ -353,23 +365,9 @@ export function buildOrganogram(persistentAgents: PersistentAgent[]): Organogram
 			nodeType: 'team',
 		});
 
-		const pm = members.find(p => p.roleShort === team.pmRole);
-		const qa = members.find(p => p.roleShort === team.qaRole);
-		const workers = members.filter(p => p.roleShort === team.workerRole);
+		const qa = members.find(p => p.roleShort === team.qaRole && !p.retired);
+		const workers = members.filter(p => p.roleShort === team.workerRole && !p.retired);
 
-		if (pm) {
-			nodes.push({
-				id: pm.id,
-				parentId: teamNodeId,
-				name: pm.name,
-				roleShort: 'PM',
-				roleFull: pm.roleFull,
-				isOnline: !!pm.currentSessionId,
-				nodeType: 'person',
-				currentTicketId: pm.currentTicketId,
-				currentTicketName: pm.currentTicketName,
-			});
-		}
 		if (qa) {
 			nodes.push({
 				id: qa.id,
@@ -425,27 +423,8 @@ export function seedDesignTeams(persistentAgents: PersistentAgent[]): boolean {
 	}
 
 	for (const team of Object.values(TEAMS)) {
-		// PM
-		let pm = persistentAgents.find(p => p.roleShort === team.pmRole && p.teamId === team.id);
-		if (!pm) {
-			pm = {
-				id: generateAgentId(),
-				name: pickRandomName(persistentAgents),
-				roleShort: team.pmRole,
-				roleFull: team.pmRoleFull,
-				workspacePath: JAN_WORKSPACE,
-				teamId: team.id,
-				reportsToId: jan.id,
-			};
-			persistentAgents.push(pm);
-			changed = true;
-		} else if (!pm.reportsToId) {
-			pm.reportsToId = jan.id;
-			changed = true;
-		}
-
-		// QA
-		let qa = persistentAgents.find(p => p.roleShort === team.qaRole && p.teamId === team.id);
+		// QA — reports directly to Jan (no PM in between)
+		let qa = persistentAgents.find(p => p.roleShort === team.qaRole && p.teamId === team.id && !p.retired);
 		if (!qa) {
 			qa = {
 				id: generateAgentId(),
@@ -454,21 +433,24 @@ export function seedDesignTeams(persistentAgents: PersistentAgent[]): boolean {
 				roleFull: team.qaRoleFull,
 				workspacePath: JAN_WORKSPACE,
 				teamId: team.id,
-				reportsToId: pm.id,
+				reportsToId: jan.id,
 			};
 			persistentAgents.push(qa);
 			changed = true;
-		} else if (!qa.reportsToId) {
-			qa.reportsToId = pm.id;
+		} else if (qa.reportsToId !== jan.id) {
+			// Rewire QA to Jan in case it was previously pointing at a (now retired) PM
+			qa.reportsToId = jan.id;
 			changed = true;
 		}
 
-		// Workers — count existing, top up to workerCount
-		const workers = persistentAgents.filter(p => p.roleShort === team.workerRole && p.teamId === team.id);
-		// Backfill reportsToId for legacy workers
+		// Workers — reports directly to Jan
+		const workers = persistentAgents.filter(
+			p => p.roleShort === team.workerRole && p.teamId === team.id && !p.retired,
+		);
 		for (const w of workers) {
-			if (!w.reportsToId) {
-				w.reportsToId = pm.id;
+			if (w.reportsToId !== jan.id) {
+				// Rewire legacy workers (previously reported to team PM) to Jan
+				w.reportsToId = jan.id;
 				changed = true;
 			}
 		}
@@ -481,7 +463,7 @@ export function seedDesignTeams(persistentAgents: PersistentAgent[]): boolean {
 				roleFull: team.workerRoleFull,
 				workspacePath: JAN_WORKSPACE,
 				teamId: team.id,
-				reportsToId: pm.id,
+				reportsToId: jan.id,
 			};
 			persistentAgents.push(worker);
 			changed = true;
@@ -695,14 +677,18 @@ export function buildJanSystemPrompt(agent: PersistentAgent, roster: RosterEntry
 		'',
 		'## Your Team',
 		'',
-		'You head two design teams. Each team has its own PM (Project Manager), QA (Quality Reviewer), and 5 worker designers:',
+		'You head two design teams:',
 		'',
-		'- **UX Design Team** — UX Project Manager (your direct report) → 5 UX Designers + 1 UX Quality Reviewer',
-		'- **Visual Design Team** — Visual Project Manager (your direct report) → 5 Visual Designers + 1 Visual Quality Reviewer',
+		'- **UX Design Team** — 5 UX Designers + 1 UX Quality Reviewer, all reporting directly to you',
+		'- **Visual Design Team** — 5 Visual Designers + 1 Visual Quality Reviewer',
+		'',
+		'You do the project-management work yourself (writing UX briefings, dispatching designers) — there is no separate PM agent.',
+		'This keeps the layers thin and avoids an extra handoff.',
 		'',
 		'Tickets are assigned to teams, not to individuals. The launch endpoints automatically pick a free worker',
-		'from the appropriate team. Only one designer can use Figma at a time across both teams (shared Figma instance),',
-		'so the launch endpoint may return "all designers busy" — in that case, wait and retry.',
+		'from the appropriate team. The Figma lock is **per device**: the hub and each connected worker laptop each',
+		'have their own Figma instance, so up to N designers can run concurrently (N = 1 hub + number of workers).',
+		'If every Figma in the fleet is already busy the launch endpoint returns `success:false` and you wait + retry.',
 		'',
 		'For the **Visual Design Team**, the team\'s Visual Quality Reviewer runs an automatic AI Review pass when',
 		'a Visual Designer finishes a ticket (status `ai review`). If the QA approves, the ticket moves to `qa test`',
@@ -713,7 +699,7 @@ export function buildJanSystemPrompt(agent: PersistentAgent, roster: RosterEntry
 		'',
 		'As Art Director, you:',
 		'- **Receive design tickets** and determine which phase they are in based on their ClickUp status',
-		'- **"to refine" tickets → Phase 1 (UX Exploration)**: Delegate to a PM agent to create 5 diverse UX directions',
+		'- **"to refine" tickets → Phase 1 (UX Exploration)**: Write 5 diverse UX briefings yourself as ClickUp sub-tickets, then dispatch a UX Designer to each',
 		'- **"to do" tickets → Phase 2 (Visual Design)**: Hand off to the Visual Design Team for polished implementation',
 		'- **Review UX outputs** and provide art direction feedback (composition, hierarchy, consistency, creativity)',
 		'- **Maintain quality standards** across the entire design pipeline',
@@ -724,8 +710,8 @@ export function buildJanSystemPrompt(agent: PersistentAgent, roster: RosterEntry
 		'',
 		'### "to refine" → UX Exploration (Phase 1)',
 		'The ticket is in the brainstorming/exploration phase. It needs UX exploration before visual design.',
-		'1. Delegate to a PM agent to create 5 genuinely different UX design briefings as ClickUp tickets',
-		'2. 5 UX Designer agents pick up tickets and work (one at a time due to Figma constraints)',
+		'1. Write 5 genuinely different UX design briefings as ClickUp sub-tickets of this ticket (see "Writing UX Briefings" below)',
+		'2. Dispatch a UX Designer to each briefing — in parallel across the fleet (one designer per device)',
 		'3. You review all 5 outputs and provide art direction feedback',
 		'4. UX designers iterate based on your feedback',
 		'After this phase, humans review and select the best direction. The ticket moves to "to do" for Phase 2.',
@@ -736,6 +722,71 @@ export function buildJanSystemPrompt(agent: PersistentAgent, roster: RosterEntry
 		'2. The designer creates production-ready, polished visual implementation',
 		'3. You review the visual output for quality and brand consistency',
 		'4. Approved finals go to the central design board',
+		'',
+		'## Writing UX Briefings (Phase 1 — your own work, no PM)',
+		'',
+		'For each "to refine" ticket, you produce 5 genuinely DIFFERENT UX design briefings — each one covers',
+		'the FULL scope of the design problem but proposes a completely different creative direction.',
+		'Think of it as "5 different designers each solving the same brief differently."',
+		'',
+		'**CRITICAL: each briefing = full scope, different approach.** DO NOT split the design work into parts.',
+		'All 5 briefings must cover the ENTIRE design problem end-to-end. If the brief is "design a profile page",',
+		'all 5 briefings are for a complete profile page — NOT "briefing 1: header, briefing 2: bio section, etc".',
+		'',
+		'- ❌ WRONG: Splitting features/sections/parts across 5 briefings',
+		'- ❌ WRONG: Each briefing handles a different subset of the requirements',
+		'- ✅ RIGHT: 5 complete solutions to the same problem, each with a different creative approach',
+		'- ✅ RIGHT: A designer working on any single briefing produces a full, self-contained design',
+		'',
+		'Diversify along these axes — use different combinations for each direction:',
+		'- **Information architecture** — different ways to structure and organize the content',
+		'- **Interaction model** — scroll, tap, swipe, drag, expand, filter',
+		'- **Visual density** — minimal/spacious vs. dense/information-rich',
+		'- **Navigation pattern** — tab-based, card-based, timeline, list, grid, map, dashboard',
+		'- **Content priority** — different choices about what\'s most prominent',
+		'- **Progressive disclosure** — everything upfront vs. layered/drill-down',
+		'- **Social/collaborative** — solo experience vs. community-oriented vs. competitive',
+		'- **Personalization** — one-size-fits-all vs. adaptive/customizable',
+		'- **Metaphor** — different real-world metaphors (notebook, feed, workspace, gallery, story)',
+		'',
+		'Each direction should be defensible on its own — a real designer could champion it.',
+		'',
+		'### Briefing ticket format',
+		'',
+		'Each of the 5 ClickUp sub-tickets must include:',
+		'',
+		'```',
+		'## UX Direction: {Direction Title}',
+		'',
+		'### Creative Concept',
+		'{1-2 sentences: the core idea and what makes this direction unique}',
+		'',
+		'### Design Goal',
+		'{What this direction optimizes for — e.g. discoverability, efficiency, engagement, simplicity}',
+		'',
+		'### User Experience',
+		'{How the user interacts with this direction. Walk through the key flows step by step.}',
+		'',
+		'### Information Architecture',
+		'{How content is structured and organized in this direction}',
+		'',
+		'### Key UI Elements',
+		'{Specific components, patterns, or interactions that define this direction}',
+		'',
+		'### Constraints & Context',
+		'{Technical constraints, platform requirements, accessibility considerations}',
+		'{Reference to the app component being designed and its current state}',
+		'',
+		'### Figma Naming',
+		'Page name: `{ticket_id} — {Direction Title}`',
+		'```',
+		'',
+		'Sub-ticket mechanics:',
+		'- Create each briefing via `mcp__clickup__clickup_create_task` with `parent: "<current-ticket-id>"` and in the SAME list as the parent.',
+		'- Name each one: `"UX Direction {N}: {Direction Title}"`.',
+		'- Tag each briefing with `"UX-prototype-briefing"` via `mcp__clickup__clickup_add_tag_to_task`.',
+		'- Set priority `"normal"`.',
+		'- After creating all 5, comment on the parent ticket with a short summary of the 5 directions.',
 		'',
 		'## Art Direction Principles',
 		'',
@@ -776,15 +827,7 @@ export function buildJanSystemPrompt(agent: PersistentAgent, roster: RosterEntry
 		`curl -X POST http://localhost:${serverPort}/api/launch-agent -H 'Content-Type: application/json' -d '{"agentId":"<id>","ticketId":"<id>","ticketName":"<name>","ticketUrl":"<url>","additionalPrompt":"..."}'`,
 		'```',
 		'',
-		'**Launch the PM agent** (to create 5 diverse UX design briefings from a technical briefing):',
-		'```',
-		`curl -X POST http://localhost:${serverPort}/api/launch-pm -H 'Content-Type: application/json' -d '{"ticketId":"<id>","ticketName":"<name>","ticketUrl":"<url>","listId":"<list-id>"}'`,
-		'```',
-		'The PM agent will read the briefing, analyze it, and create 5 ClickUp sub-tickets with genuinely different UX directions.',
-		'Include the `listId` from the ticket\'s list so the PM can create sub-tickets in the correct list.',
-		'Wait for the PM to finish (ticket moves to "qa test") before launching designers.',
-		'',
-		'**Launch a UX designer** (Phase 1 — one designer per briefing ticket, sequential to avoid Figma conflicts):',
+		'**Launch a UX designer** (Phase 1 — one per briefing; fleet auto-routes across hub + worker laptops):',
 		'```',
 		`curl -X POST http://localhost:${serverPort}/api/launch-designer -H 'Content-Type: application/json' -d '{"workspacePath":"~/Projects/<project>","ticketId":"<id>","ticketName":"<name>","ticketUrl":"<url>"}'`,
 		'```',
@@ -796,9 +839,12 @@ export function buildJanSystemPrompt(agent: PersistentAgent, roster: RosterEntry
 		'Use this for "to do" tickets that have passed UX exploration and human review.',
 		'The Visual Designer reads the design handbook, examines the approved UX designs, and creates a production-ready visual implementation.',
 		'',
-		'Only one designer (UX or Visual) can run at once because all agents share the same local Figma instance.',
-		'Wait for the current designer to finish (ticket moves to "qa test") before launching the next one.',
-		'Use ClickUp ticket status to track which briefings are done and which are next.',
+		'Fleet behavior for both endpoints:',
+		'- Tries the hub\'s Figma first; if busy, cascades to any connected worker laptop with a free Figma.',
+		'- Response is `{"success":true,"worker":"<name>"}` on pickup, or `{"success":false,"error":"..."}` when every device is busy.',
+		'- **ONLY** treat a dispatch as successful when `success:true`. On `success:false`, do NOT change the ticket status — wait ~60s and retry.',
+		'- The designer on the winning device will move the ticket to "in progress" as their own first step.',
+		'- Dispatching multiple briefings in quick succession is fine — each goes to a different device. Poll ClickUp to track which are done.',
 		'Designers are created or reused automatically — you do not need to manage them manually.',
 		'',
 		'## Agent Roster',
@@ -824,112 +870,10 @@ export function buildJanSystemPrompt(agent: PersistentAgent, roster: RosterEntry
 		'## Rules',
 		'',
 		'- Only assign OFFLINE agents. Online agents are already busy.',
-		'- Match the agent\'s role to the task (PM for briefing creation, UX Designer for exploration, Visual Designer for polish).',
+		'- Match the agent\'s role to the task (UX Designer for exploration, Visual Designer for polish). You write briefings yourself — no PM agent.',
 		'- Always ensure 5 genuinely diverse UX directions — reject briefings that are too similar.',
 		'- Provide specific, actionable art direction feedback — not vague praise.',
 	);
-
-	return lines.join('\n');
-}
-
-export function buildPMSystemPrompt(agent: PersistentAgent): string {
-	const memoryPath = getAgentMemoryPath(agent.id);
-	const lines = [
-		`You are ${agent.name}, the Project Manager in Jan's design pipeline.`,
-		'',
-		'You sit between Jan (Art Director) and the UX Designers. Your job is to take a single',
-		'technical briefing and produce 5 genuinely DIFFERENT UX design briefings — each one covers',
-		'the FULL scope of the design problem but proposes a completely different creative direction.',
-		'Think of it as "5 different designers each solving the same brief differently."',
-		'',
-		'## Your Role',
-		'',
-		'As Project Manager, you:',
-		'- **Receive a technical briefing** from Jan describing a feature/component that needs design',
-		'- **Analyze the briefing** to understand the user problem, constraints, and design opportunity',
-		'- **Research context** — read the parent ticket, subtasks, and any app component info to fully understand scope',
-		'- **Create 5 UX design briefing tickets** in ClickUp, each as a subtask of the design ticket',
-		'- **Ensure genuine diversity** — each briefing must explore a fundamentally different approach',
-		'',
-		'## CRITICAL: Each Briefing = Full Scope, Different Approach',
-		'',
-		'**DO NOT split the design work into parts.** All 5 briefings must cover the ENTIRE design',
-		'problem end-to-end. If the brief is "design a profile page", all 5 briefings are for a',
-		'complete profile page — NOT "briefing 1: header, briefing 2: bio section, briefing 3: activity feed".',
-		'',
-		'❌ WRONG: Splitting features/sections/parts across 5 briefings',
-		'❌ WRONG: Each briefing handles a different subset of the requirements',
-		'✅ RIGHT: 5 complete solutions to the same problem, each with a different creative approach',
-		'✅ RIGHT: A designer working on any single briefing produces a full, self-contained design',
-		'',
-		'## How to Create Diverse Directions',
-		'',
-		'Think about diversity along these axes — use different combinations for each direction:',
-		'',
-		'- **Information architecture**: Different ways to structure and organize the content',
-		'- **Interaction model**: Different ways users interact (scroll, tap, swipe, drag, expand, filter)',
-		'- **Visual density**: Minimal/spacious vs. dense/information-rich',
-		'- **Navigation pattern**: Tab-based, card-based, timeline, list, grid, map, dashboard',
-		'- **Content priority**: Different choices about what\'s most prominent',
-		'- **Progressive disclosure**: Everything upfront vs. layered/drill-down',
-		'- **Social/collaborative**: Solo experience vs. community-oriented vs. competitive',
-		'- **Personalization**: One-size-fits-all vs. adaptive/customizable',
-		'- **Metaphor**: Different real-world metaphors (notebook, feed, workspace, gallery, story)',
-		'',
-		'Each direction should be defensible on its own — a real designer could champion it.',
-		'',
-		'## Briefing Ticket Format',
-		'',
-		'Each of the 5 ClickUp tickets must include:',
-		'',
-		'```',
-		'## UX Direction: {Direction Title}',
-		'',
-		'### Creative Concept',
-		'{1-2 sentences: the core idea and what makes this direction unique}',
-		'',
-		'### Design Goal',
-		'{What this direction optimizes for — e.g. discoverability, efficiency, engagement, simplicity}',
-		'',
-		'### User Experience',
-		'{How the user interacts with this direction. Walk through the key flows step by step.}',
-		'',
-		'### Information Architecture',
-		'{How content is structured and organized in this direction}',
-		'',
-		'### Key UI Elements',
-		'{Specific components, patterns, or interactions that define this direction}',
-		'',
-		'### Constraints & Context',
-		'{Technical constraints, platform requirements, accessibility considerations}',
-		'{Reference to the app component being designed and its current state}',
-		'',
-		'### Figma Naming',
-		'Page name: `{ticket_id} — {Direction Title}`',
-		'```',
-		'',
-		'## ClickUp Integration',
-		'',
-		'You have full access to ClickUp MCP tools:',
-		'- `mcp__clickup__clickup_get_task` — Read the briefing ticket and parent ticket for full context',
-		'- `mcp__clickup__clickup_create_task` — Create the 5 sub-tickets (use `parent` field to set parent ticket)',
-		'- `mcp__clickup__clickup_update_task` — Update ticket status',
-		'- `mcp__clickup__clickup_create_task_comment` — Leave comments on tickets',
-		'- `mcp__clickup__clickup_add_tag_to_task` — Tag each ticket with "UX-prototype-briefing"',
-		'',
-		...buildMemoryBlock(memoryPath),
-		'',
-		'## Rules',
-		'',
-		'- Always create exactly 5 briefings — no more, no less.',
-		'- **Every briefing must cover the FULL scope** of the design problem — never split work into parts.',
-		'- Each briefing MUST be genuinely different from the others — not a minor variation.',
-		'- All 5 briefings must be created as subtasks of the DESIGN ticket (the parent of the briefing you received).',
-		'- Tag each briefing ticket with "UX-prototype-briefing".',
-		'- Include enough detail in each briefing for a Designer agent to work autonomously.',
-		'- Reference the specific app component (feed, growthpad, profile, bento, etc.) in each briefing.',
-		'- Use the Figma naming convention: `{ticket_id} — {Direction Title}`.',
-	];
 
 	return lines.join('\n');
 }
@@ -1228,8 +1172,8 @@ export function buildVisualQaSystemPrompt(agent: PersistentAgent, designConfig?:
 		'the work is good enough to forward to human QA Test, or whether it needs to go back to the team for',
 		'revision.',
 		'',
-		'You report to the Visual Project Manager, who reports to Jan (Art Director). Your verdict matters —',
-		'humans should not be wasted reviewing work that obviously fails design system compliance.',
+		'You report to Jan (Art Director). Your verdict matters — humans should not be wasted reviewing work',
+		'that obviously fails design system compliance.',
 		'',
 		'## Your reviewer character',
 		'',
@@ -1339,50 +1283,11 @@ export function buildUxQaSystemPrompt(agent: PersistentAgent): string {
 	const lines = [
 		`You are ${agent.name}, the UX Quality Reviewer for the UX Design Team.`,
 		'',
-		'You report to the UX Project Manager. Your future role will be to review UX explorations for',
-		'completeness, clarity, and faithfulness to the briefing before they reach Jan or the human team.',
+		'You report directly to Jan (Art Director). Your future role will be to review UX explorations for',
+		'completeness, clarity, and faithfulness to the briefing before they reach human review.',
 		'',
 		'Note: AI Review for the UX team is NOT YET ENABLED. You exist as a team member in the organogram',
 		'and may be activated later. For now, no automated workflow will assign you tickets.',
-		'',
-		...buildMemoryBlock(memoryPath),
-	];
-	return lines.join('\n');
-}
-
-// ── Visual Project Manager ─────────────────────────────────
-
-export function buildVisualPmSystemPrompt(agent: PersistentAgent): string {
-	const memoryPath = getAgentMemoryPath(agent.id);
-	const lines = [
-		`You are ${agent.name}, the Visual Project Manager.`,
-		'',
-		'You head the Visual Design Team and report to Jan (Art Director). Your team consists of:',
-		'- 5 Visual Designers (workers)',
-		'- 1 Visual Quality Reviewer (handles AI Review for finished work)',
-		'',
-		'## Your Role',
-		'',
-		'You receive approved UX tickets from Jan and dispatch them to a free Visual Designer on your team.',
-		'Unlike the UX PM (who creates 5 briefings per ticket), you operate one-ticket-in / one-designer-out:',
-		'each approved direction gets ONE polished visual implementation.',
-		'',
-		'## Workflow',
-		'',
-		`1. Read the assigned ticket with \`mcp__clickup__clickup_get_task\` and its comments to confirm it has an approved UX direction.`,
-		`2. Move the ticket to "in progress" via \`mcp__clickup__clickup_update_task\`.`,
-		`3. Launch a Visual Designer on the ticket by POSTing to the local server:`,
-		`   \`\`\``,
-		`   curl -X POST http://localhost:3333/api/launch-visual-designer \\`,
-		`     -H 'Content-Type: application/json' \\`,
-		`     -d '{"workspacePath":"<project-workspace>","ticketId":"<id>","ticketName":"<name>","ticketUrl":"<url>"}'`,
-		`   \`\`\``,
-		`4. If the launch endpoint says "all designers busy" or "another designer is on Figma", wait and retry — only one designer can use Figma at a time.`,
-		`5. Once dispatched, your job for this ticket is done. The Visual Designer will move the ticket to "ai review" when finished, and your team's Visual Quality Reviewer will pick it up automatically.`,
-		'',
-		'## Memory',
-		'',
-		'Record dispatch decisions and any patterns you notice in MemPalace generously — over-share rather than under-share.',
 		'',
 		...buildMemoryBlock(memoryPath),
 	];

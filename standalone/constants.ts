@@ -19,15 +19,19 @@ export const JAN_ROLE_SHORT = 'Art Director';
 export const JAN_CLICKUP_USERNAME = 'Jan Levinson';
 export const JAN_WORKSPACE = '~/Projects/kantoor-workspace';
 
-// ── Project Manager ──────────────────────────────────────
+// ── Project Manager (RETIRED 2026-04-22) ─────────────────
+// PM agents are no longer launched. Jan does the PM work herself.
+// These constants are kept only so loadPersistentAgents() can tag
+// legacy PM agents as `retired: true` during migration.
 export const PM_ROLE_SHORT = 'Project Manager';
-export const PM_WORKSPACE = '~/Projects/kantoor-workspace';
 
 // ── Design Teams ──────────────────────────────────────────
 // NOTE: DESIGNER_ROLE_SHORT renamed from 'Designer' to 'UX Designer'.
 // Existing persisted agents are migrated on load (see agentStore.ts).
 export const DESIGNER_ROLE_SHORT = 'UX Designer';
 export const VISUAL_DESIGNER_ROLE_SHORT = 'Visual Designer';
+// UX_PM_ROLE_SHORT / VISUAL_PM_ROLE_SHORT are retired (2026-04-22).
+// Kept for the loadPersistentAgents() retirement migration.
 export const UX_PM_ROLE_SHORT = 'UX Project Manager';
 export const UX_QA_ROLE_SHORT = 'UX Quality Reviewer';
 export const VISUAL_PM_ROLE_SHORT = 'Visual Project Manager';

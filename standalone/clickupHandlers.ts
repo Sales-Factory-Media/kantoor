@@ -2,7 +2,7 @@ import * as path from 'path';
 import * as os from 'os';
 import * as crypto from 'crypto';
 import { loadKnownProjects } from '../src/projectStore.js';
-import { CLICKUP_POLL_INTERVAL_MS, DARRYL_ROLE_SHORT, DARRYL_CLICKUP_USERNAME, DARRYL_ESCALATION_USERNAME, DARRYL_WORKSPACE, JAN_ROLE_SHORT, JAN_CLICKUP_USERNAME, JAN_WORKSPACE, PM_ROLE_SHORT, PM_WORKSPACE, DESIGNER_ROLE_SHORT, VISUAL_DESIGNER_ROLE_SHORT, UX_PM_ROLE_SHORT, UX_QA_ROLE_SHORT, VISUAL_PM_ROLE_SHORT, VISUAL_QA_ROLE_SHORT, TEAM_UX_ID, TEAM_VISUAL_ID, SERVER_PORT, WORKER_ROLE_DEV, WORKER_ROLE_DESIGNER, DEFAULT_WORKER_ROLES } from './constants.js';
+import { CLICKUP_POLL_INTERVAL_MS, DARRYL_ROLE_SHORT, DARRYL_CLICKUP_USERNAME, DARRYL_ESCALATION_USERNAME, DARRYL_WORKSPACE, JAN_ROLE_SHORT, JAN_CLICKUP_USERNAME, JAN_WORKSPACE, DESIGNER_ROLE_SHORT, VISUAL_DESIGNER_ROLE_SHORT, VISUAL_QA_ROLE_SHORT, TEAM_UX_ID, TEAM_VISUAL_ID, SERVER_PORT, WORKER_ROLE_DEV, WORKER_ROLE_DESIGNER, DEFAULT_WORKER_ROLES } from './constants.js';
 import { launchAgentSession } from './itermFocus.js';
 import {
 	savePersistentAgents,
@@ -10,7 +10,6 @@ import {
 	generateAgentId,
 	buildDarrylSystemPrompt,
 	buildJanSystemPrompt,
-	buildPMSystemPrompt,
 	buildDesignerSystemPrompt,
 	buildVisualDesignerSystemPrompt,
 	buildVisualQaSystemPrompt,
@@ -538,29 +537,27 @@ Current ticket status: **${ticketStatus}**
 ${isRefineMode ? `### Mode: UX Exploration (ticket was "to refine")
 
 This ticket is in the **brainstorming/exploration phase**. Your job is to kick off Phase 1 — UX Exploration.
+You do the PM work yourself — do NOT delegate to a separate PM agent.
 
-**Step A — Delegate to PM agent to create 5 UX briefings:**
-Launch the PM agent via the HTTP API. The PM will read the briefing and create 5 diverse UX design sub-tickets.
-\`\`\`
-curl -X POST http://localhost:${SERVER_PORT}/api/launch-pm -H 'Content-Type: application/json' -d '{"ticketId":"${ticketId}","ticketName":"${ticketName}","ticketUrl":"${ticketUrl}","listId":"<list-id-from-ticket>"}'
-\`\`\`
-Find the list ID from the ticket details (it's in the "list" field). Wait for the PM to finish (ticket status moves to "qa test").
+**Step A — Write 5 UX briefings yourself as ClickUp sub-tickets:**
+Follow the "Writing UX Briefings" section in your system prompt. For each of the 5 directions:
+1. Call \`mcp__clickup__clickup_create_task\` with \`parent: "${ticketId}"\`, in the SAME list as the parent ticket (read the parent's \`list.id\`).
+2. Name it \`"UX Direction {N}: {Direction Title}"\`. Use the "Briefing ticket format" from your system prompt for the description.
+3. Tag it \`"UX-prototype-briefing"\` via \`mcp__clickup__clickup_add_tag_to_task\`.
+4. Set priority \`"normal"\`.
+After creating all 5, comment on ticket "${ticketId}" with a short summary of the 5 directions you wrote.
 
-**Step B — Review the 5 briefings for diversity:**
-Once the PM is done, read the 5 sub-tickets it created. Verify they are genuinely different directions, not minor variations.
-If any briefings are too similar, comment on them with specific feedback.
-
-**Step C — Launch designers, one per device (parallel across the fleet):**
-For each of the 5 briefing sub-tickets, dispatch a designer:
+**Step B — Dispatch one designer per briefing, in parallel across the fleet:**
+For each of the 5 briefing sub-tickets you just created:
 \`\`\`
-curl -X POST http://localhost:${SERVER_PORT}/api/launch-designer -H 'Content-Type: application/json' -d '{"workspacePath":"<project-workspace-path>","ticketId":"<id>","ticketName":"<name>","ticketUrl":"<url>"}'
+curl -X POST http://localhost:${SERVER_PORT}/api/launch-designer -H 'Content-Type: application/json' -d '{"workspacePath":"<project-workspace-path>","ticketId":"<sub-ticket-id>","ticketName":"UX Direction {N}: ...","ticketUrl":"<sub-ticket-url>"}'
 \`\`\`
-**Fleet behavior:** the endpoint first tries to launch on the hub (where you're running). If the hub's Figma is already busy with a designer, it automatically cascades to any connected remote worker laptop with a free Figma. You get back \`{"success": true, "worker": "<laptop-name>"}\` when someone picks it up, or \`{"success": false, "error": "..."}\` if EVERY Figma instance in the fleet is busy.
+**Fleet behavior:** the endpoint tries the hub's Figma first; if busy, it cascades to any connected worker laptop with a free Figma. Response: \`{"success":true, "worker":"<device-name>"}\` on pickup, or \`{"success":false, "error":"..."}\` when every device is busy.
 
 **ACK-DRIVEN DISPATCH — read carefully:**
-- Only treat a ticket as "dispatched" when the HTTP response is \`success:true\`. The designer agent on that device will then move the sub-ticket to "in progress" themselves as their own first step.
-- If \`success:false\`, DO NOT assume a designer is working. The sub-ticket's status does not change. Wait ~60 seconds and retry; eventually a device frees up.
-- Because devices run in parallel, you can dispatch up to N designers concurrently (N = 1 hub + number of connected worker laptops). Dispatch quickly, then poll ticket statuses instead of serially waiting.
+- Only treat a ticket as "dispatched" when the HTTP response is \`success:true\`. The designer on that device moves the sub-ticket to "in progress" as their first step.
+- If \`success:false\`, do NOT assume a designer is working. Do NOT change the sub-ticket's status. Wait ~60 seconds and retry.
+- Devices run in parallel — dispatch up to N designers concurrently (N = 1 hub + connected worker laptops). Send the calls in quick succession; each one that returns \`success:true\` goes to a different machine. Then poll ClickUp to track progress, don't block.
 - Use the workspace path of the PROJECT being designed (e.g. ~/Projects/brightmind), NOT the kantoor-workspace.` : `### Mode: Visual Design (ticket was "to do")
 
 This ticket is in the **production-ready visual implementation phase**. The UX exploration is done — a direction has been chosen.
@@ -611,107 +608,6 @@ You can monitor progress via ClickUp comments, but no manual review action is re
 	}
 }
 
-// ── PM (Project Manager) launch ─────────────────────────────
-
-/**
- * Launch the PM agent on a design briefing ticket.
- * The PM reads the briefing, analyzes context, and creates 5 diverse UX design
- * briefing sub-tickets in ClickUp. Called by Jan when she receives a complete briefing.
- */
-export function handleLaunchPM(msg: Record<string, unknown>, ctx: ServerContext): { success: boolean; error?: string } {
-	const ticketId = msg.ticketId as string;
-	const ticketName = msg.ticketName as string;
-	const ticketUrl = msg.ticketUrl as string;
-	const listId = msg.listId as string;
-
-	if (!ticketId || !ticketName || !ticketUrl) {
-		return { success: false, error: 'Missing required fields: ticketId, ticketName, ticketUrl' };
-	}
-
-	const { persistentAgents } = ctx;
-
-	// Check if PM is already running
-	const activePM = persistentAgents.find(
-		p => p.roleShort === PM_ROLE_SHORT && p.currentSessionId,
-	);
-	if (activePM) {
-		return { success: false, error: `PM "${activePM.name}" is already running. Wait for it to finish before launching another.` };
-	}
-
-	// Find an idle PM or create one
-	let pm = persistentAgents.find(
-		p => p.roleShort === PM_ROLE_SHORT && !p.currentSessionId,
-	);
-
-	if (!pm) {
-		pm = {
-			id: generateAgentId(),
-			name: pickRandomName(persistentAgents),
-			roleShort: PM_ROLE_SHORT,
-			roleFull: 'Project Manager in Jan\'s design pipeline. Analyzes technical briefings and creates 5 diverse UX design briefing tickets.',
-			workspacePath: PM_WORKSPACE,
-		};
-		persistentAgents.push(pm);
-	}
-
-	const systemPrompt = buildPMSystemPrompt(pm);
-
-	const listIdInstruction = listId
-		? `Use list_id "${listId}" when creating the sub-tickets.`
-		: 'Read the parent ticket to find which list it belongs to, and create sub-tickets in that same list.';
-
-	const initialTask = `You have been assigned a design briefing by Jan (Art Director) via ClickUp ticket ${ticketId}: "${ticketName}"
-Ticket URL: ${ticketUrl}
-
-## Steps
-
-1. FIRST: Move the ticket to "in progress" using mcp__clickup__clickup_update_task (task_id: "${ticketId}", status: "in progress")
-2. Read the full ticket with mcp__clickup__clickup_get_task (task_id: "${ticketId}", subtasks: true)
-3. Read the ticket's comments with mcp__clickup__clickup_get_task_comments (task_id: "${ticketId}") for additional context from Jan
-4. If the ticket has a parent, read the parent ticket too for broader project context
-5. Search MemPalace for relevant design decisions and component knowledge
-6. Analyze the briefing and identify 5 genuinely DIFFERENT UX design directions
-7. Create 5 ClickUp sub-tickets, each as a subtask of ticket "${ticketId}" (use parent: "${ticketId}")
-   ${listIdInstruction}
-   - Name each ticket: "UX Direction {N}: {Direction Title}"
-   - Include the full briefing format from your system prompt
-   - Set priority to "normal"
-   - Tag each ticket with "UX-prototype-briefing" using mcp__clickup__clickup_add_tag_to_task
-8. After creating all 5 tickets, comment on the parent ticket "${ticketId}" with a summary of the 5 directions you created
-9. Move the ticket to "qa test" using mcp__clickup__clickup_update_task (task_id: "${ticketId}", status: "qa test")
-10. Update MemPalace with your design directions and reasoning (use mcp__mempalace__mempalace_add_drawer and mcp__mempalace__mempalace_kg_add)`;
-
-	// Launch the PM
-	const newSessionId = crypto.randomUUID();
-	pm.currentSessionId = newSessionId;
-	pm.currentTicketId = ticketId;
-	pm.currentTicketName = ticketName;
-	pm.currentTicketUrl = ticketUrl;
-	ensureAgentMemory(pm.id);
-
-	let mempalaceHost: string | undefined;
-	if (ctx.mempalaceServerUrl) {
-		try {
-			mempalaceHost = new URL(ctx.mempalaceServerUrl).hostname;
-		} catch {
-			mempalaceHost = undefined;
-		}
-	}
-
-	const cwd = expandHome(pm.workspacePath || '~');
-	const mcpConfigPath = ensureMempalaceMcpConfig(mempalaceHost);
-	if (launchAgentSession(newSessionId, cwd, systemPrompt, initialTask, { mcpConfigPath, extraFlags: ['--dangerously-skip-permissions'] })) {
-		savePersistentAgents(persistentAgents);
-		console.log(`[Standalone] Launched PM "${pm.name}" for ticket ${ticketId}`);
-		return { success: true };
-	}
-
-	pm.currentSessionId = undefined;
-	savePersistentAgents(persistentAgents);
-	console.log(`[Standalone] Failed to launch PM "${pm.name}" for ticket ${ticketId}`);
-	return { success: false, error: 'Failed to launch PM session' };
-}
-
 // ── Designer launch (sequential, one at a time per device) ─────────────────
 // Fleet semantics: the Figma lock is PER DEVICE. Jan can have one designer
 // running on the hub AND one on each remote worker laptop simultaneously.
@@ -719,7 +615,7 @@ Ticket URL: ${ticketUrl}
 async function dispatchDesignerToFleet(
 	msg: Record<string, unknown>,
 	ctx: ServerContext,
-	rpcType: 'launchDesigner' | 'launchVisualDesigner' | 'launchPM',
+	rpcType: 'launchDesigner' | 'launchVisualDesigner',
 	localError?: string,
 ): Promise<{ success: boolean; error?: string; worker?: string }> {
 	const ticketId = msg.ticketId as string | undefined;

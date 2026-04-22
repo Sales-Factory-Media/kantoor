@@ -43,7 +43,6 @@ import {
 	handleClickupConfigure,
 	handleDarrylHandleTicket,
 	handleJanDesignBriefing,
-	handleLaunchPM,
 	handleLaunchDesigner,
 	handleLaunchVisualDesigner,
 	handleJanReviewDesigner,
@@ -265,10 +264,6 @@ const messageHandlers: Record<string, (ws: WebSocket, msg: Record<string, unknow
 	updateProjectDescription: (_ws, msg, ctx) => handleUpdateProjectDescription(msg, ctx),
 	darrylHandleTicket: (_ws, msg, ctx) => handleDarrylHandleTicket(msg, ctx),
 	janDesignBriefing: (_ws, msg, ctx) => handleJanDesignBriefing(msg, ctx),
-	launchPM: (_ws, msg, ctx) => {
-		const result = handleLaunchPM(msg, ctx);
-		ctx.broadcastSink.postMessage({ type: 'pmLaunched', ...result });
-	},
 	launchDesigner: (_ws, msg, ctx) => {
 		handleLaunchDesigner(msg, ctx).then(result => {
 			ctx.broadcastSink.postMessage({ type: 'designerLaunched', ...result });

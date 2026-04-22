@@ -15,7 +15,6 @@ import {
 	handleDarrylHandleTicket,
 	handleLaunchDesigner,
 	handleLaunchVisualDesigner,
-	handleLaunchPM,
 } from './clickupHandlers.js';
 import type { ServerContext } from './serverContext.js';
 
@@ -102,7 +101,7 @@ function handleHubMessage(
 		handleRegistered(msg, ctx);
 	} else if (type === 'handleTicket') {
 		handleTicketFromHub(ws, msg, ctx);
-	} else if (type === 'launchDesigner' || type === 'launchVisualDesigner' || type === 'launchPM') {
+	} else if (type === 'launchDesigner' || type === 'launchVisualDesigner') {
 		handleLaunchRpcFromHub(ws, type, msg, ctx).catch(err => {
 			console.error(`[Worker] ${type} RPC error:`, err);
 			const requestId = msg.requestId as string | undefined;
@@ -119,7 +118,7 @@ function handleHubMessage(
 
 async function handleLaunchRpcFromHub(
 	ws: WebSocket,
-	rpcType: 'launchDesigner' | 'launchVisualDesigner' | 'launchPM',
+	rpcType: 'launchDesigner' | 'launchVisualDesigner',
 	msg: Record<string, unknown>,
 	ctx: ServerContext,
 ): Promise<void> {
@@ -144,10 +143,8 @@ async function handleLaunchRpcFromHub(
 	let result: { success: boolean; error?: string; worker?: string };
 	if (rpcType === 'launchDesigner') {
 		result = await handleLaunchDesigner(launchMsg, ctx);
-	} else if (rpcType === 'launchVisualDesigner') {
-		result = await handleLaunchVisualDesigner(launchMsg, ctx);
 	} else {
-		result = handleLaunchPM(launchMsg, ctx);
+		result = await handleLaunchVisualDesigner(launchMsg, ctx);
 	}
 
 	console.log(`[Worker] ${rpcType} result: success=${result.success}${result.error ? ` error="${result.error}"` : ''}`);
