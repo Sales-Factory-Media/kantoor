@@ -2,7 +2,7 @@ import * as path from 'path';
 import * as os from 'os';
 import * as crypto from 'crypto';
 import { loadKnownProjects } from '../src/projectStore.js';
-import { CLICKUP_POLL_INTERVAL_MS, DARRYL_ROLE_SHORT, DARRYL_CLICKUP_USERNAME, DARRYL_ESCALATION_USERNAME, DARRYL_WORKSPACE, JAN_ROLE_SHORT, JAN_CLICKUP_USERNAME, JAN_WORKSPACE, PM_ROLE_SHORT, PM_WORKSPACE, DESIGNER_ROLE_SHORT, VISUAL_DESIGNER_ROLE_SHORT, UX_PM_ROLE_SHORT, UX_QA_ROLE_SHORT, VISUAL_PM_ROLE_SHORT, VISUAL_QA_ROLE_SHORT, TEAM_UX_ID, TEAM_VISUAL_ID, SERVER_PORT } from './constants.js';
+import { CLICKUP_POLL_INTERVAL_MS, DARRYL_ROLE_SHORT, DARRYL_CLICKUP_USERNAME, DARRYL_ESCALATION_USERNAME, DARRYL_WORKSPACE, JAN_ROLE_SHORT, JAN_CLICKUP_USERNAME, JAN_WORKSPACE, PM_ROLE_SHORT, PM_WORKSPACE, DESIGNER_ROLE_SHORT, VISUAL_DESIGNER_ROLE_SHORT, UX_PM_ROLE_SHORT, UX_QA_ROLE_SHORT, VISUAL_PM_ROLE_SHORT, VISUAL_QA_ROLE_SHORT, TEAM_UX_ID, TEAM_VISUAL_ID, SERVER_PORT, WORKER_ROLE_DEV, WORKER_ROLE_DESIGNER, DEFAULT_WORKER_ROLES } from './constants.js';
 import { launchAgentSession } from './itermFocus.js';
 import {
 	savePersistentAgents,
@@ -33,10 +33,15 @@ import { launchPersistentAgent } from './agentHandlers.js';
 import {
 	getAvailableCapacity,
 	getIdleWorkers,
+	getIdleWorkersWithRole,
 	addAssignment,
 	collectAgentMemories,
 	broadcastWorkerStatus,
+	sendWorkerRequest,
+	clearWorkerTicket,
+	saveAgentMemoryFromWorker,
 } from './workerRegistry.js';
+import { REVIEW_TRIGGER_DELAY_MS } from './constants.js';
 
 // ── Polling ──────────────────────────────────────────────────
 
@@ -96,17 +101,18 @@ export function autoDarrylPickup(ctx: ServerContext): void {
 		return 0;
 	});
 
-	// Check available capacity (hub + idle remote workers)
-	const capacity = getAvailableCapacity(ctx);
+	// Check available dev-capable capacity (hub + idle remote dev workers)
+	const capacity = getAvailableCapacity(ctx, WORKER_ROLE_DEV);
 	if (capacity === 0) return;
 
 	// Distribute tickets up to available capacity
 	const ticketsToAssign = todoTickets.slice(0, capacity);
-	const idleWorkers = getIdleWorkers(ctx);
+	const idleWorkers = getIdleWorkers(ctx, WORKER_ROLE_DEV);
 
-	// Hub is available if Darryl isn't currently running
+	// Hub is available if it has the dev role AND Darryl isn't currently running
+	const hubHasDevRole = (ctx.workerIdentity?.roles ?? [...DEFAULT_WORKER_ROLES]).includes(WORKER_ROLE_DEV);
 	const darryl = ctx.persistentAgents.find(p => p.name === 'Darryl');
-	const hubAvailable = !darryl?.currentSessionId;
+	const hubAvailable = hubHasDevRole && !darryl?.currentSessionId;
 
 	// Build a queue of available slots: hub first, then remote workers
 	const slots: Array<{ type: 'hub' } | { type: 'worker'; worker: typeof idleWorkers[0] }> = [];
@@ -544,24 +550,33 @@ Find the list ID from the ticket details (it's in the "list" field). Wait for th
 Once the PM is done, read the 5 sub-tickets it created. Verify they are genuinely different directions, not minor variations.
 If any briefings are too similar, comment on them with specific feedback.
 
-**Step C — Launch designers ONE AT A TIME:**
-For each of the 5 briefing sub-tickets, launch a designer:
+**Step C — Launch designers, one per device (parallel across the fleet):**
+For each of the 5 briefing sub-tickets, dispatch a designer:
 \`\`\`
 curl -X POST http://localhost:${SERVER_PORT}/api/launch-designer -H 'Content-Type: application/json' -d '{"workspacePath":"<project-workspace-path>","ticketId":"<id>","ticketName":"<name>","ticketUrl":"<url>"}'
 \`\`\`
-IMPORTANT: Only one designer can run at a time (they share the same local Figma instance).
-Launch the first designer, wait for it to finish (ticket moves to "qa test"), then launch the next.
-Use the workspace path of the PROJECT being designed (e.g. ~/Projects/brightmind), NOT the kantoor-workspace.` : `### Mode: Visual Design (ticket was "to do")
+**Fleet behavior:** the endpoint first tries to launch on the hub (where you're running). If the hub's Figma is already busy with a designer, it automatically cascades to any connected remote worker laptop with a free Figma. You get back \`{"success": true, "worker": "<laptop-name>"}\` when someone picks it up, or \`{"success": false, "error": "..."}\` if EVERY Figma instance in the fleet is busy.
+
+**ACK-DRIVEN DISPATCH — read carefully:**
+- Only treat a ticket as "dispatched" when the HTTP response is \`success:true\`. The designer agent on that device will then move the sub-ticket to "in progress" themselves as their own first step.
+- If \`success:false\`, DO NOT assume a designer is working. The sub-ticket's status does not change. Wait ~60 seconds and retry; eventually a device frees up.
+- Because devices run in parallel, you can dispatch up to N designers concurrently (N = 1 hub + number of connected worker laptops). Dispatch quickly, then poll ticket statuses instead of serially waiting.
+- Use the workspace path of the PROJECT being designed (e.g. ~/Projects/brightmind), NOT the kantoor-workspace.` : `### Mode: Visual Design (ticket was "to do")
 
 This ticket is in the **production-ready visual implementation phase**. The UX exploration is done — a direction has been chosen.
 Your job is to kick off Phase 2 — Visual Design for polished, production-ready output.
 
 **Step A — Hand off to the Visual Design Team:**
-Launch a Visual Designer from the Visual Design Team on this ticket. The endpoint automatically picks a free team member; if all 5 are busy or another designer is currently on Figma, it returns an error and you should wait + retry.
+Dispatch a Visual Designer on this ticket:
 \`\`\`
 curl -X POST http://localhost:${SERVER_PORT}/api/launch-visual-designer -H 'Content-Type: application/json' -d '{"workspacePath":"<project-workspace-path>","ticketId":"${ticketId}","ticketName":"${ticketName}","ticketUrl":"${ticketUrl}"}'
 \`\`\`
-Use the workspace path of the PROJECT being designed (e.g. ~/Projects/brightmind), NOT the kantoor-workspace.
+**Fleet behavior:** the endpoint first tries the hub's Figma; if busy, it automatically falls over to any connected remote worker laptop with a free Figma. Response is \`{"success":true, "worker":"<laptop-name>"}\` on pickup, or \`{"success":false, "error":"..."}\` when every device is busy.
+
+**ACK-DRIVEN DISPATCH — read carefully:**
+- Only treat the ticket as handed off when \`success:true\`. The Visual Designer on that device moves the ticket to "in progress" as their first step.
+- If \`success:false\`, do NOT change the ticket status yourself — leave it where it was and retry the call after ~60 seconds.
+- Use the workspace path of the PROJECT being designed (e.g. ~/Projects/brightmind), NOT the kantoor-workspace.
 
 **Step B — Let the AI Review pipeline run:**
 You do NOT review the visual output yourself anymore. When the Visual Designer finishes, they move the ticket to "ai review", and the team's Visual Quality Reviewer automatically picks it up. The Visual QA decides:
@@ -697,18 +712,73 @@ Ticket URL: ${ticketUrl}
 	return { success: false, error: 'Failed to launch PM session' };
 }
 
-// ── Designer launch (sequential, one at a time) ────────────
+// ── Designer launch (sequential, one at a time per device) ─────────────────
+// Fleet semantics: the Figma lock is PER DEVICE. Jan can have one designer
+// running on the hub AND one on each remote worker laptop simultaneously.
+
+async function dispatchDesignerToFleet(
+	msg: Record<string, unknown>,
+	ctx: ServerContext,
+	rpcType: 'launchDesigner' | 'launchVisualDesigner' | 'launchPM',
+	localError?: string,
+): Promise<{ success: boolean; error?: string; worker?: string }> {
+	const ticketId = msg.ticketId as string | undefined;
+	const ticketName = msg.ticketName as string | undefined;
+	const remoteWorkers = getIdleWorkersWithRole(ctx, WORKER_ROLE_DESIGNER);
+	if (remoteWorkers.length === 0) {
+		return { success: false, error: localError
+			? `${localError} No idle remote designer workers connected — wait and retry.`
+			: 'Local Figma busy and no remote designer workers connected — wait and retry.' };
+	}
+
+	// Ship agent memories so the designer on the worker has up-to-date context
+	const agentMemories = collectAgentMemories(ctx.persistentAgents);
+	const rpcPayload = { ...msg, agentMemories };
+
+	const failures: string[] = [];
+	for (const worker of remoteWorkers) {
+		console.log(`[Hub] Trying to dispatch ${rpcType} for ticket ${ticketId} → worker "${worker.name}" (${worker.hostname})`);
+		const resp = await sendWorkerRequest(ctx, worker, { type: rpcType, payload: rpcPayload });
+		if (resp.success) {
+			if (ticketId) {
+				worker.currentTicketId = ticketId;
+				worker.currentTicketName = ticketName ?? ticketId;
+			}
+			broadcastWorkerStatus(ctx);
+			console.log(`[Hub] Worker "${worker.name}" accepted ${rpcType} for ticket ${ticketId}`);
+			return { success: true, worker: worker.name };
+		}
+		failures.push(`${worker.name}: ${resp.error ?? 'declined'}`);
+	}
+
+	return { success: false, error: localError
+		? `${localError} Tried ${failures.length} remote worker(s) — all busy or unreachable (${failures.join('; ')}).`
+		: `All ${failures.length} remote designer worker(s) busy or unreachable (${failures.join('; ')}).` };
+}
+
+
 
 /**
  * Launch a single designer agent on a briefing ticket.
  * Designers run in the specified project workspace directory (not centralized).
- * Reuses an idle designer agent for the workspace or creates a new one.
  *
- * Jan should call this once per briefing ticket. Only one designer runs at a time
- * to avoid Figma MCP conflicts (all agents share the same local Figma instance).
- * Use ClickUp ticket status to track which briefings are done and which are next.
+ * On the hub: tries to launch locally first (one designer per machine — shared Figma).
+ * If the local Figma is busy, cascades to any idle remote worker that advertises the
+ * 'designer' role. Returns `{ success, worker }` so callers (Jan, humans) can confirm
+ * that the job actually started on some device before assuming progress.
+ *
+ * On a worker: launches locally (this path is triggered by a hub RPC).
  */
-export function handleLaunchDesigner(msg: Record<string, unknown>, ctx: ServerContext): { success: boolean; error?: string } {
+export async function handleLaunchDesigner(msg: Record<string, unknown>, ctx: ServerContext): Promise<{ success: boolean; error?: string; worker?: string }> {
+	const local = tryLaunchDesignerLocal(msg, ctx);
+	if (local.success) return { ...local, worker: ctx.workerIdentity?.name };
+	if (!ctx.isWorkerMode && local.figmaBusy) {
+		return dispatchDesignerToFleet(msg, ctx, 'launchDesigner', local.error);
+	}
+	return local;
+}
+
+function tryLaunchDesignerLocal(msg: Record<string, unknown>, ctx: ServerContext): { success: boolean; error?: string; figmaBusy?: boolean } {
 	const workspacePath = msg.workspacePath as string;
 	const ticketId = msg.ticketId as string;
 	const ticketName = msg.ticketName as string;
@@ -724,12 +794,12 @@ export function handleLaunchDesigner(msg: Record<string, unknown>, ctx: ServerCo
 
 	const { persistentAgents } = ctx;
 
-	// Figma lock: only one designer (UX OR Visual) can run at a time across all teams
+	// Figma lock: only one designer (UX OR Visual) can run at a time on THIS machine
 	const activeDesigner = persistentAgents.find(
 		p => (p.roleShort === DESIGNER_ROLE_SHORT || p.roleShort === VISUAL_DESIGNER_ROLE_SHORT) && p.currentSessionId,
 	);
 	if (activeDesigner) {
-		return { success: false, error: `Designer "${activeDesigner.name}" (${activeDesigner.roleShort}) is already running on Figma. Wait for it to finish before launching another.` };
+		return { success: false, figmaBusy: true, error: `Local Figma busy: designer "${activeDesigner.name}" (${activeDesigner.roleShort}) is already running.` };
 	}
 
 	// Resolve project description
@@ -817,9 +887,19 @@ Ticket URL: ${ticketUrl}
 /**
  * Launch a visual designer agent on an approved ticket for polished implementation.
  * Similar to handleLaunchDesigner but uses the Visual Designer role and system prompt.
- * Only one designer (UX or Visual) runs at a time to avoid Figma MCP conflicts.
+ * On the hub: launches locally if Figma is free, else cascades to any idle 'designer'
+ * worker on the fleet so Jan can have a visual designer running on each device.
  */
-export function handleLaunchVisualDesigner(msg: Record<string, unknown>, ctx: ServerContext): { success: boolean; error?: string } {
+export async function handleLaunchVisualDesigner(msg: Record<string, unknown>, ctx: ServerContext): Promise<{ success: boolean; error?: string; worker?: string }> {
+	const local = tryLaunchVisualDesignerLocal(msg, ctx);
+	if (local.success) return { ...local, worker: ctx.workerIdentity?.name };
+	if (!ctx.isWorkerMode && local.figmaBusy) {
+		return dispatchDesignerToFleet(msg, ctx, 'launchVisualDesigner', local.error);
+	}
+	return local;
+}
+
+function tryLaunchVisualDesignerLocal(msg: Record<string, unknown>, ctx: ServerContext): { success: boolean; error?: string; figmaBusy?: boolean } {
 	const workspacePath = msg.workspacePath as string;
 	const ticketId = msg.ticketId as string;
 	const ticketName = msg.ticketName as string;
@@ -835,12 +915,12 @@ export function handleLaunchVisualDesigner(msg: Record<string, unknown>, ctx: Se
 
 	const { persistentAgents } = ctx;
 
-	// Figma lock: only one designer (UX OR Visual) can run at a time across all teams
+	// Figma lock: only one designer (UX OR Visual) can run at a time on THIS machine
 	const activeDesigner = persistentAgents.find(
 		p => (p.roleShort === DESIGNER_ROLE_SHORT || p.roleShort === VISUAL_DESIGNER_ROLE_SHORT) && p.currentSessionId,
 	);
 	if (activeDesigner) {
-		return { success: false, error: `Designer "${activeDesigner.name}" (${activeDesigner.roleShort}) is already running on Figma. Wait for it to finish before launching another.` };
+		return { success: false, figmaBusy: true, error: `Local Figma busy: designer "${activeDesigner.name}" (${activeDesigner.roleShort}) is already running.` };
 	}
 
 	// Resolve project description
@@ -1002,6 +1082,61 @@ export function handleJanReviewDesigner(
 	if (!launchAgentSession(newSessionId, cwd, systemPrompt, initialTask, { mcpConfigPath, extraFlags: ['--dangerously-skip-permissions'] })) {
 		console.log(`[Standalone] Failed to launch Jan for review of ticket ${ticketId}`);
 	}
+}
+
+// ── Worker-originated designer session-end hook ────────────
+
+/**
+ * Called on the hub when a remote worker reports that one of its design-role
+ * sessions ended (UX Designer, Visual Designer, or Visual QA). Mirrors the
+ * server-local onSessionStale side-effects so Jan review / Visual QA / revision
+ * pickup still fire even though the session ran on a different machine.
+ */
+export function handleDesignerSessionEnded(
+	msg: Record<string, unknown>,
+	ctx: ServerContext,
+	sourceWs: import('ws').WebSocket,
+): void {
+	const agentRole = msg.agentRole as string | undefined;
+	const ticketId = msg.ticketId as string | undefined;
+	const ticketName = (msg.ticketName as string | undefined) ?? '';
+	const ticketUrl = (msg.ticketUrl as string | undefined) ?? '';
+	const designerName = (msg.designerName as string | undefined) ?? 'unknown';
+	const workspacePath = (msg.workspacePath as string | undefined) ?? '';
+	const updatedMemory = msg.updatedMemory as string | undefined;
+	const agentId = msg.agentId as string | undefined;
+
+	// Free the remote worker slot
+	clearWorkerTicket(sourceWs, ctx);
+
+	// Persist any memory updates the worker captured
+	if (agentId && updatedMemory) {
+		saveAgentMemoryFromWorker(agentId, updatedMemory);
+	}
+
+	if (!ticketId) {
+		console.log(`[Hub] Ignoring designerSessionEnded without ticketId (agentRole=${agentRole})`);
+		return;
+	}
+
+	const completedTicket = { ticketId, ticketName, ticketUrl, designerName, workspacePath };
+
+	if (agentRole === VISUAL_DESIGNER_ROLE_SHORT) {
+		console.log(`[Hub] Remote Visual Designer finished ticket ${ticketId} — triggering Visual QA AI review`);
+		setTimeout(() => handleVisualQaReview(completedTicket, ctx), REVIEW_TRIGGER_DELAY_MS);
+		return;
+	}
+	if (agentRole === DESIGNER_ROLE_SHORT) {
+		console.log(`[Hub] Remote UX Designer finished ticket ${ticketId} — triggering Jan review`);
+		setTimeout(() => handleJanReviewDesigner(completedTicket, ctx), REVIEW_TRIGGER_DELAY_MS);
+		return;
+	}
+	if (agentRole === VISUAL_QA_ROLE_SHORT || agentRole === JAN_ROLE_SHORT) {
+		console.log(`[Hub] Remote ${agentRole} finished ticket ${ticketId} — running revision pickup`);
+		setTimeout(() => autoDesignerRevisionPickup(ctx), REVIEW_TRIGGER_DELAY_MS);
+		return;
+	}
+	console.log(`[Hub] Remote session ended: role=${agentRole} ticket=${ticketId} (no follow-up configured)`);
 }
 
 // ── Visual QA AI Review ─────────────────────────────────────

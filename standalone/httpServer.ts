@@ -103,11 +103,11 @@ export function createHttpServer(ctx: ServerContext): http.Server {
 						req.destroy();
 					}
 				});
-				req.on('end', () => {
+				req.on('end', async () => {
 					if (exceeded) return;
 					try {
 						const json = JSON.parse(body) as Record<string, unknown>;
-						const result = handleLaunchDesigner(json, ctx);
+						const result = await handleLaunchDesigner(json, ctx);
 						res.writeHead(result.success ? 200 : 400);
 						res.end(JSON.stringify(result));
 					} catch {
@@ -132,11 +132,11 @@ export function createHttpServer(ctx: ServerContext): http.Server {
 						req.destroy();
 					}
 				});
-				req.on('end', () => {
+				req.on('end', async () => {
 					if (exceeded) return;
 					try {
 						const json = JSON.parse(body) as Record<string, unknown>;
-						const result = handleLaunchVisualDesigner(json, ctx);
+						const result = await handleLaunchVisualDesigner(json, ctx);
 						res.writeHead(result.success ? 200 : 400);
 						res.end(JSON.stringify(result));
 					} catch {

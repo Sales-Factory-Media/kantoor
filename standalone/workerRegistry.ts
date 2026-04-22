@@ -1,7 +1,13 @@
 import * as fs from 'fs';
 import * as os from 'os';
+import * as crypto from 'crypto';
 import type { WebSocket } from 'ws';
-import { WORKER_HEARTBEAT_TIMEOUT_MS, MEMPALACE_SERVER_PORT } from './constants.js';
+import {
+	WORKER_HEARTBEAT_TIMEOUT_MS,
+	MEMPALACE_SERVER_PORT,
+	WORKER_DISPATCH_TIMEOUT_MS,
+	DEFAULT_WORKER_ROLES,
+} from './constants.js';
 import { WORKER_ASSIGNMENTS_FILE, SETTINGS_DIR } from './serverContext.js';
 import type { ServerContext, WorkerInfo, WorkerAssignment } from './serverContext.js';
 import { loadPersistentAgents, getAgentMemoryPath, ensureAgentMemory } from './agentStore.js';
@@ -33,6 +39,10 @@ export function registerWorker(
 	const name = msg.name as string;
 	const color = msg.color as string;
 	const hostname = msg.hostname as string;
+	const rawRoles = msg.roles;
+	const roles: string[] = Array.isArray(rawRoles) && rawRoles.every(r => typeof r === 'string')
+		? (rawRoles as string[])
+		: [...DEFAULT_WORKER_ROLES];
 
 	if (!name || !color || !hostname) {
 		ws.send(JSON.stringify({ type: 'workerError', error: 'Missing name, color, or hostname' }));
@@ -53,10 +63,11 @@ export function registerWorker(
 		lastHeartbeat: Date.now(),
 		currentTicketId: null,
 		currentTicketName: null,
+		roles,
 	};
 	ctx.workers.set(name, worker);
 
-	console.log(`[Hub] Worker registered: "${name}" (${hostname})`);
+	console.log(`[Hub] Worker registered: "${name}" (${hostname}) roles=[${roles.join(',')}]`);
 
 	// Send registration response with agents and clickup config
 	const agents = loadPersistentAgents();
@@ -137,6 +148,77 @@ export function handleWorkerDisconnect(ws: WebSocket, ctx: ServerContext): void 
 	}
 }
 
+// ── Request/response correlation ────────────────────────────
+// Hub → Worker RPC pattern: send a message with `requestId`, the worker
+// calls back with `{ type: 'workerResponse', requestId, success, error }`.
+// Used to await whether a remote worker actually started a designer/PM.
+
+export function sendWorkerRequest(
+	ctx: ServerContext,
+	worker: WorkerInfo,
+	message: Record<string, unknown>,
+	timeoutMs: number = WORKER_DISPATCH_TIMEOUT_MS,
+): Promise<{ success: boolean; error?: string; workerName?: string }> {
+	return new Promise((resolve) => {
+		if (worker.ws.readyState !== worker.ws.OPEN) {
+			resolve({ success: false, error: `Worker "${worker.name}" WS not open`, workerName: worker.name });
+			return;
+		}
+		const requestId = crypto.randomUUID();
+		const timer = setTimeout(() => {
+			const pending = ctx.pendingWorkerRequests.get(requestId);
+			if (pending) {
+				ctx.pendingWorkerRequests.delete(requestId);
+				resolve({ success: false, error: `Worker "${worker.name}" did not respond within ${timeoutMs}ms`, workerName: worker.name });
+			}
+		}, timeoutMs);
+		ctx.pendingWorkerRequests.set(requestId, { resolve, timer, workerName: worker.name });
+		try {
+			worker.ws.send(JSON.stringify({ ...message, requestId }));
+		} catch (err) {
+			clearTimeout(timer);
+			ctx.pendingWorkerRequests.delete(requestId);
+			resolve({ success: false, error: `Failed to send to worker "${worker.name}": ${String(err)}`, workerName: worker.name });
+		}
+	});
+}
+
+export function handleWorkerResponse(
+	ws: WebSocket,
+	msg: Record<string, unknown>,
+	ctx: ServerContext,
+): void {
+	const requestId = msg.requestId as string | undefined;
+	if (!requestId) return;
+	const pending = ctx.pendingWorkerRequests.get(requestId);
+	if (!pending) return;
+	ctx.pendingWorkerRequests.delete(requestId);
+	clearTimeout(pending.timer);
+	// Confirm the response came from the expected worker's WS
+	let sourceName: string | undefined;
+	for (const worker of ctx.workers.values()) {
+		if (worker.ws === ws) { sourceName = worker.name; break; }
+	}
+	pending.resolve({
+		success: !!msg.success,
+		error: msg.error as string | undefined,
+		workerName: sourceName ?? pending.workerName,
+	});
+}
+
+// ── Role filters ────────────────────────────────────────────
+
+export function getIdleWorkersWithRole(ctx: ServerContext, role: string): WorkerInfo[] {
+	const result: WorkerInfo[] = [];
+	for (const worker of ctx.workers.values()) {
+		if (worker.currentTicketId) continue;
+		if (!worker.roles || worker.roles.length === 0 || worker.roles.includes(role)) {
+			result.push(worker);
+		}
+	}
+	return result;
+}
+
 // ── Ticket completion from worker ───────────────────────────
 
 export function handleTicketStarted(
@@ -199,6 +281,30 @@ export function handleTicketFailed(
 			return;
 		}
 	}
+}
+
+// ── Remote designer session-end hook ────────────────────────
+// A worker tells us one of its designer/QA sessions ended. We clear any
+// ticket tracking and let the caller (clickupHandlers) trigger the
+// appropriate next step (Jan review / Visual QA / revision pickup).
+
+export function clearWorkerTicket(ws: WebSocket, ctx: ServerContext): string | null {
+	for (const worker of ctx.workers.values()) {
+		if (worker.ws === ws) {
+			const previous = worker.currentTicketId;
+			worker.currentTicketId = null;
+			worker.currentTicketName = null;
+			broadcastWorkerStatus(ctx);
+			return previous;
+		}
+	}
+	return null;
+}
+
+/** Write an agent memory file sent back from a worker. */
+export function saveAgentMemoryFromWorker(agentId: string, content: string): void {
+	ensureAgentMemory(agentId);
+	fs.writeFileSync(getAgentMemoryPath(agentId), content, 'utf-8');
 }
 
 // ── Assignment tracking ─────────────────────────────────────
@@ -271,6 +377,7 @@ export function broadcastWorkerStatus(ctx: ServerContext): void {
 			status: hubAssignment ? 'busy' : (hubBusy ? 'busy' : 'idle'),
 			ticketId: hubAssignment?.ticketId ?? null,
 			ticketName: hubAssignment?.ticketName ?? null,
+			roles: ctx.workerIdentity.roles ?? [...DEFAULT_WORKER_ROLES],
 			isHub: true,
 		});
 	}
@@ -284,6 +391,7 @@ export function broadcastWorkerStatus(ctx: ServerContext): void {
 			status: worker.currentTicketId ? 'busy' : 'idle',
 			ticketId: worker.currentTicketId,
 			ticketName: worker.currentTicketName,
+			roles: worker.roles,
 			isHub: false,
 		});
 	}
@@ -293,19 +401,27 @@ export function broadcastWorkerStatus(ctx: ServerContext): void {
 
 // ── Capacity ────────────────────────────────────────────────
 
-/** Get the number of available worker slots (hub + remote workers that are idle) */
-export function getAvailableCapacity(ctx: ServerContext): number {
+function hubHasRole(ctx: ServerContext, role: string): boolean {
+	const hubRoles = ctx.workerIdentity?.roles ?? [...DEFAULT_WORKER_ROLES];
+	return hubRoles.includes(role);
+}
+
+/** Get the number of available dev worker slots (hub + remote workers with 'dev' role that are idle) */
+export function getAvailableCapacity(ctx: ServerContext, role = 'dev'): number {
 	let capacity = 0;
 
-	// Hub is available if Darryl isn't currently running
-	const darryl = ctx.persistentAgents.find(p => p.name === 'Darryl');
-	if (!darryl?.currentSessionId) {
-		capacity++;
+	// Hub is available if it advertises the role and Darryl isn't currently running
+	if (hubHasRole(ctx, role)) {
+		const darryl = ctx.persistentAgents.find(p => p.name === 'Darryl');
+		if (!darryl?.currentSessionId) {
+			capacity++;
+		}
 	}
 
-	// Remote workers that are idle
+	// Remote workers that advertise the role and are idle
 	for (const worker of ctx.workers.values()) {
-		if (!worker.currentTicketId) {
+		if (worker.currentTicketId) continue;
+		if (!worker.roles || worker.roles.includes(role)) {
 			capacity++;
 		}
 	}
@@ -313,11 +429,12 @@ export function getAvailableCapacity(ctx: ServerContext): number {
 	return capacity;
 }
 
-/** Get idle remote workers */
-export function getIdleWorkers(ctx: ServerContext): WorkerInfo[] {
+/** Get idle remote workers that advertise the given role (default: 'dev') */
+export function getIdleWorkers(ctx: ServerContext, role = 'dev'): WorkerInfo[] {
 	const idle: WorkerInfo[] = [];
 	for (const worker of ctx.workers.values()) {
-		if (!worker.currentTicketId) {
+		if (worker.currentTicketId) continue;
+		if (!worker.roles || worker.roles.includes(role)) {
 			idle.push(worker);
 		}
 	}

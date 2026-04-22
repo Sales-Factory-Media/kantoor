@@ -1,10 +1,11 @@
 import * as path from 'path';
 import * as crypto from 'crypto';
+import * as fs from 'fs';
 import { WebSocketServer } from 'ws';
 import type { WebSocket } from 'ws';
 import type { MessageSink } from '../src/types.js';
 import { loadKnownProjects, addKnownProject } from '../src/projectStore.js';
-import { SERVER_PORT, DESIGNER_ROLE_SHORT, VISUAL_DESIGNER_ROLE_SHORT, VISUAL_QA_ROLE_SHORT, JAN_ROLE_SHORT, REVIEW_TRIGGER_DELAY_MS } from './constants.js';
+import { SERVER_PORT, DESIGNER_ROLE_SHORT, VISUAL_DESIGNER_ROLE_SHORT, VISUAL_QA_ROLE_SHORT, JAN_ROLE_SHORT, REVIEW_TRIGGER_DELAY_MS, DEFAULT_WORKER_ROLES } from './constants.js';
 import { ProjectScanner, decodeProjectHash, getLiveSessionIds } from './projectScanner.js';
 import { StandaloneAgentManager } from './standaloneAgentManager.js';
 import {
@@ -14,6 +15,7 @@ import {
 	ensureAgentMemory,
 	seedDesignTeams,
 	buildOrganogram,
+	getAgentMemoryPath,
 } from './agentStore.js';
 import type { PersistentAgent } from './agentStore.js';
 import type { ClickUpConfig } from './clickupClient.js';
@@ -46,6 +48,7 @@ import {
 	handleLaunchVisualDesigner,
 	handleJanReviewDesigner,
 	handleVisualQaReview,
+	handleDesignerSessionEnded,
 	autoVisualQaPickup,
 	autoDesignerRevisionPickup,
 	autoDarrylPickup,
@@ -64,58 +67,57 @@ import {
 	handleTicketStarted,
 	handleTicketComplete,
 	handleTicketFailed,
+	handleWorkerResponse,
 	checkWorkerHeartbeats,
 	broadcastWorkerStatus,
 	loadAssignments,
 } from './workerRegistry.js';
-import { startWorkerMode, stopWorkerMode } from './workerMode.js';
+import { startWorkerMode, stopWorkerMode, reportDesignerSessionEndedToHub } from './workerMode.js';
 
 // ── CLI argument parsing ────────────────────────────────────
 
-function parseCliArgs(): { hubUrl: string | null; name: string | null; color: string | null } {
+function parseCliArgs(): { hubUrl: string | null; name: string | null; color: string | null; roles: string[] | null } {
 	const args = process.argv.slice(2);
 	let hubUrl: string | null = null;
 	let name: string | null = null;
 	let color: string | null = null;
+	let roles: string[] | null = null;
 
 	for (const arg of args) {
 		if (arg.startsWith('--hub=')) hubUrl = arg.slice('--hub='.length);
 		else if (arg.startsWith('--name=')) name = arg.slice('--name='.length);
 		else if (arg.startsWith('--color=')) color = arg.slice('--color='.length);
+		else if (arg.startsWith('--roles=')) {
+			roles = arg.slice('--roles='.length).split(',').map(r => r.trim()).filter(r => r.length > 0);
+		}
 	}
 
 	// Also check env vars as fallback
 	if (!hubUrl && process.env.HUB) hubUrl = process.env.HUB;
+	if (!roles && process.env.WORKER_ROLES) {
+		roles = process.env.WORKER_ROLES.split(',').map(r => r.trim()).filter(r => r.length > 0);
+	}
 
-	return { hubUrl, name, color };
+	return { hubUrl, name, color, roles };
 }
 
-function loadOrCreateWorkerIdentity(cliName: string | null, cliColor: string | null): WorkerIdentity {
-	// CLI flags take precedence
-	if (cliName && cliColor) {
-		const identity: WorkerIdentity = { name: cliName, color: cliColor };
-		writeJson(WORKER_IDENTITY_FILE, identity);
-		return identity;
-	}
-
-	// Try loading from file
+function loadOrCreateWorkerIdentity(
+	cliName: string | null,
+	cliColor: string | null,
+	cliRoles: string[] | null,
+): WorkerIdentity {
 	const saved = readJson(WORKER_IDENTITY_FILE) as WorkerIdentity | null;
-	if (saved?.name && saved?.color) {
-		// Override with any CLI flags provided
-		const identity: WorkerIdentity = {
-			name: cliName || saved.name,
-			color: cliColor || saved.color,
-		};
-		if (cliName || cliColor) writeJson(WORKER_IDENTITY_FILE, identity);
-		return identity;
-	}
+	const defaultRoles = [...DEFAULT_WORKER_ROLES];
 
-	// Default identity
 	const identity: WorkerIdentity = {
-		name: cliName || 'Hub',
-		color: cliColor || '#4CAF50',
+		name: cliName || saved?.name || 'Hub',
+		color: cliColor || saved?.color || '#4CAF50',
+		roles: cliRoles ?? saved?.roles ?? defaultRoles,
 	};
-	writeJson(WORKER_IDENTITY_FILE, identity);
+
+	if (cliName || cliColor || cliRoles || !saved) {
+		writeJson(WORKER_IDENTITY_FILE, identity);
+	}
 	return identity;
 }
 
@@ -124,6 +126,7 @@ function loadOrCreateWorkerIdentity(cliName: string | null, cliColor: string | n
 const WORKER_MESSAGE_TYPES = new Set([
 	'workerRegister', 'workerHeartbeat',
 	'ticketStarted', 'ticketComplete', 'ticketFailed',
+	'workerResponse', 'designerSessionEnded',
 ]);
 
 // ── WebviewReady handler (touches all domains) ───────────────
@@ -267,12 +270,18 @@ const messageHandlers: Record<string, (ws: WebSocket, msg: Record<string, unknow
 		ctx.broadcastSink.postMessage({ type: 'pmLaunched', ...result });
 	},
 	launchDesigner: (_ws, msg, ctx) => {
-		const result = handleLaunchDesigner(msg, ctx);
-		ctx.broadcastSink.postMessage({ type: 'designerLaunched', ...result });
+		handleLaunchDesigner(msg, ctx).then(result => {
+			ctx.broadcastSink.postMessage({ type: 'designerLaunched', ...result });
+		}).catch(err => {
+			ctx.broadcastSink.postMessage({ type: 'designerLaunched', success: false, error: String(err) });
+		});
 	},
 	launchVisualDesigner: (_ws, msg, ctx) => {
-		const result = handleLaunchVisualDesigner(msg, ctx);
-		ctx.broadcastSink.postMessage({ type: 'visualDesignerLaunched', ...result });
+		handleLaunchVisualDesigner(msg, ctx).then(result => {
+			ctx.broadcastSink.postMessage({ type: 'visualDesignerLaunched', ...result });
+		}).catch(err => {
+			ctx.broadcastSink.postMessage({ type: 'visualDesignerLaunched', success: false, error: String(err) });
+		});
 	},
 	getOrganogram: (ws, _msg, ctx) => {
 		ws.send(JSON.stringify({ type: 'organogramSnapshot', organogram: buildOrganogram(ctx.persistentAgents) }));
@@ -308,7 +317,7 @@ async function main(): Promise<void> {
 	// ── CLI args ─────────────────────────────────────────────
 	const cliArgs = parseCliArgs();
 	const isWorkerMode = !!cliArgs.hubUrl;
-	const workerIdentity = loadOrCreateWorkerIdentity(cliArgs.name, cliArgs.color);
+	const workerIdentity = loadOrCreateWorkerIdentity(cliArgs.name, cliArgs.color, cliArgs.roles);
 
 	const assets = await preloadAssets();
 
@@ -380,7 +389,9 @@ async function main(): Promise<void> {
 		workerIdentity,
 		workers: new Map(),
 		workerAssignments: isWorkerMode ? [] : loadAssignments(),
+		pendingWorkerRequests: new Map(),
 		mempalaceServerUrl: null,
+		hubWs: null,
 	};
 
 	// ── Workspace path cache (decoded from project hash) ────
@@ -462,26 +473,47 @@ async function main(): Promise<void> {
 				pa.currentTicketUrl = undefined;
 				savePersistentAgents(persistentAgents);
 
-				// Visual Designer finished → trigger Visual QA AI Review
-				if (pa.roleShort === VISUAL_DESIGNER_ROLE_SHORT && completedTicket && !isWorkerMode) {
-					console.log(`[Standalone] Visual Designer "${pa.name}" finished ticket ${completedTicket.ticketId}, triggering Visual QA AI Review`);
-					setTimeout(() => handleVisualQaReview(completedTicket, ctx), REVIEW_TRIGGER_DELAY_MS);
-				}
+				const isDesignRole = pa.roleShort === VISUAL_DESIGNER_ROLE_SHORT
+					|| pa.roleShort === DESIGNER_ROLE_SHORT
+					|| pa.roleShort === VISUAL_QA_ROLE_SHORT
+					|| pa.roleShort === JAN_ROLE_SHORT;
 
-				// UX Designer finished → trigger Jan's review (existing flow)
-				if (pa.roleShort === DESIGNER_ROLE_SHORT && completedTicket && !isWorkerMode) {
-					console.log(`[Standalone] UX Designer "${pa.name}" finished ticket ${completedTicket.ticketId}, triggering Jan review`);
-					setTimeout(() => handleJanReviewDesigner(completedTicket, ctx), REVIEW_TRIGGER_DELAY_MS);
-				}
-
-				// Visual QA finished → check for revision pickups (in case it sent a ticket back to "to do")
-				if (pa.roleShort === VISUAL_QA_ROLE_SHORT && !isWorkerMode) {
-					setTimeout(() => autoDesignerRevisionPickup(ctx), REVIEW_TRIGGER_DELAY_MS);
-				}
-
-				// Jan finished (review or briefing) → check for revision pickups
-				if (pa.roleShort === JAN_ROLE_SHORT && !isWorkerMode) {
-					setTimeout(() => autoDesignerRevisionPickup(ctx), REVIEW_TRIGGER_DELAY_MS);
+				if (isWorkerMode && isDesignRole) {
+					// On a remote worker: forward the session-end to the hub so Jan
+					// review / Visual QA / revision pickup still trigger centrally.
+					let memoryContent: string | undefined;
+					try {
+						const memPath = getAgentMemoryPath(pa.id);
+						if (fs.existsSync(memPath)) {
+							memoryContent = fs.readFileSync(memPath, 'utf-8');
+						}
+					} catch { /* ignore */ }
+					reportDesignerSessionEndedToHub({
+						agentRole: pa.roleShort ?? '',
+						ticketId: completedTicket?.ticketId ?? '',
+						ticketName: completedTicket?.ticketName ?? '',
+						ticketUrl: completedTicket?.ticketUrl ?? '',
+						designerName: pa.name,
+						workspacePath: pa.workspacePath,
+						updatedMemory: memoryContent,
+						agentId: pa.id,
+					}, ctx);
+				} else {
+					// On the hub: trigger the existing local review pipeline.
+					if (pa.roleShort === VISUAL_DESIGNER_ROLE_SHORT && completedTicket) {
+						console.log(`[Standalone] Visual Designer "${pa.name}" finished ticket ${completedTicket.ticketId}, triggering Visual QA AI Review`);
+						setTimeout(() => handleVisualQaReview(completedTicket, ctx), REVIEW_TRIGGER_DELAY_MS);
+					}
+					if (pa.roleShort === DESIGNER_ROLE_SHORT && completedTicket) {
+						console.log(`[Standalone] UX Designer "${pa.name}" finished ticket ${completedTicket.ticketId}, triggering Jan review`);
+						setTimeout(() => handleJanReviewDesigner(completedTicket, ctx), REVIEW_TRIGGER_DELAY_MS);
+					}
+					if (pa.roleShort === VISUAL_QA_ROLE_SHORT) {
+						setTimeout(() => autoDesignerRevisionPickup(ctx), REVIEW_TRIGGER_DELAY_MS);
+					}
+					if (pa.roleShort === JAN_ROLE_SHORT) {
+						setTimeout(() => autoDesignerRevisionPickup(ctx), REVIEW_TRIGGER_DELAY_MS);
+					}
 				}
 			}
 			agentManager.removeSession(jsonlFile);
@@ -540,6 +572,8 @@ async function main(): Promise<void> {
 					else if (msgType === 'ticketStarted') handleTicketStarted(ws, msg, ctx);
 					else if (msgType === 'ticketComplete') handleTicketComplete(ws, msg, ctx);
 					else if (msgType === 'ticketFailed') handleTicketFailed(ws, msg, ctx);
+					else if (msgType === 'workerResponse') handleWorkerResponse(ws, msg, ctx);
+					else if (msgType === 'designerSessionEnded') handleDesignerSessionEnded(msg, ctx, ws);
 					return;
 				}
 
@@ -585,7 +619,8 @@ async function main(): Promise<void> {
 	// ── Worker mode: connect to hub ─────────────────────────
 	if (isWorkerMode && cliArgs.hubUrl) {
 		const hubUrl = cliArgs.hubUrl.startsWith('http') ? cliArgs.hubUrl : `http://${cliArgs.hubUrl}`;
-		startWorkerMode(hubUrl, workerIdentity.name, workerIdentity.color, ctx);
+		const workerRoles = workerIdentity.roles ?? [...DEFAULT_WORKER_ROLES];
+		startWorkerMode(hubUrl, workerIdentity.name, workerIdentity.color, ctx, workerRoles);
 	}
 
 	// Graceful shutdown

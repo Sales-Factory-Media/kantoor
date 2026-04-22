@@ -22,6 +22,7 @@ export interface WorkerInfo {
 	lastHeartbeat: number;
 	currentTicketId: string | null;
 	currentTicketName: string | null;
+	roles: string[]; // e.g. ['dev', 'designer']
 }
 
 export interface WorkerAssignment {
@@ -36,6 +37,13 @@ export interface WorkerAssignment {
 export interface WorkerIdentity {
 	name: string;
 	color: string;
+	roles?: string[];
+}
+
+export interface PendingWorkerRequest {
+	resolve: (result: { success: boolean; error?: string; workerName?: string }) => void;
+	timer: ReturnType<typeof setTimeout>;
+	workerName: string;
 }
 
 // ── Paths ────────────────────────────────────────────────────
@@ -87,6 +95,9 @@ export interface ServerContext {
 	workerIdentity: WorkerIdentity | null;
 	workers: Map<string, WorkerInfo>; // keyed by worker name
 	workerAssignments: WorkerAssignment[];
+	pendingWorkerRequests: Map<string, PendingWorkerRequest>; // keyed by requestId
 	// MemPalace (worker-only: URL received from hub during registration)
 	mempalaceServerUrl: string | null;
+	// Worker-mode: WS connection back to hub, used to forward session-end events
+	hubWs: WebSocket | null;
 }

@@ -10,8 +10,13 @@ import {
 } from './agentStore.js';
 import type { PersistentAgent } from './agentStore.js';
 import type { ClickUpConfig } from './clickupClient.js';
-import { WORKER_HEARTBEAT_INTERVAL_MS, WORKER_RECONNECT_INTERVAL_MS } from './constants.js';
-import { handleDarrylHandleTicket } from './clickupHandlers.js';
+import { WORKER_HEARTBEAT_INTERVAL_MS, WORKER_RECONNECT_INTERVAL_MS, DEFAULT_WORKER_ROLES } from './constants.js';
+import {
+	handleDarrylHandleTicket,
+	handleLaunchDesigner,
+	handleLaunchVisualDesigner,
+	handleLaunchPM,
+} from './clickupHandlers.js';
 import type { ServerContext } from './serverContext.js';
 
 let hubWs: WebSocket | null = null;
@@ -23,6 +28,7 @@ export function startWorkerMode(
 	name: string,
 	color: string,
 	ctx: ServerContext,
+	roles: string[] = [...DEFAULT_WORKER_ROLES],
 ): void {
 	function connect(): void {
 		const wsUrl = hubUrl.replace(/^http/, 'ws') + '/ws';
@@ -34,6 +40,7 @@ export function startWorkerMode(
 		ws.on('open', () => {
 			console.log(`[Worker] Connected to hub`);
 			hubWs = ws;
+			ctx.hubWs = ws;
 
 			// Register with hub
 			ws.send(JSON.stringify({
@@ -41,6 +48,7 @@ export function startWorkerMode(
 				name,
 				color,
 				hostname: os.hostname(),
+				roles,
 			}));
 
 			// Start heartbeat
@@ -62,8 +70,9 @@ export function startWorkerMode(
 		ws.on('close', () => {
 			console.log(`[Worker] Disconnected from hub, will reconnect...`);
 			hubWs = null;
+			ctx.hubWs = null;
 			if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
-			scheduleReconnect(hubUrl, name, color, ctx);
+			scheduleReconnect(hubUrl, name, color, ctx, roles);
 		});
 
 		ws.on('error', (err) => {
@@ -75,10 +84,10 @@ export function startWorkerMode(
 	connect();
 }
 
-function scheduleReconnect(hubUrl: string, name: string, color: string, ctx: ServerContext): void {
+function scheduleReconnect(hubUrl: string, name: string, color: string, ctx: ServerContext, roles: string[]): void {
 	if (reconnectTimer) clearTimeout(reconnectTimer);
 	reconnectTimer = setTimeout(() => {
-		startWorkerMode(hubUrl, name, color, ctx);
+		startWorkerMode(hubUrl, name, color, ctx, roles);
 	}, WORKER_RECONNECT_INTERVAL_MS);
 }
 
@@ -93,8 +102,88 @@ function handleHubMessage(
 		handleRegistered(msg, ctx);
 	} else if (type === 'handleTicket') {
 		handleTicketFromHub(ws, msg, ctx);
+	} else if (type === 'launchDesigner' || type === 'launchVisualDesigner' || type === 'launchPM') {
+		handleLaunchRpcFromHub(ws, type, msg, ctx).catch(err => {
+			console.error(`[Worker] ${type} RPC error:`, err);
+			const requestId = msg.requestId as string | undefined;
+			if (requestId && ws.readyState === WebSocket.OPEN) {
+				ws.send(JSON.stringify({ type: 'workerResponse', requestId, success: false, error: String(err) }));
+			}
+		});
 	} else if (type === 'workerError') {
 		console.error(`[Worker] Hub error: ${msg.error}`);
+	}
+}
+
+// ── Launch RPC: hub asks us to start a designer / visual designer / PM ─────
+
+async function handleLaunchRpcFromHub(
+	ws: WebSocket,
+	rpcType: 'launchDesigner' | 'launchVisualDesigner' | 'launchPM',
+	msg: Record<string, unknown>,
+	ctx: ServerContext,
+): Promise<void> {
+	const requestId = msg.requestId as string | undefined;
+	const payload = (msg.payload as Record<string, unknown>) ?? {};
+
+	// If the hub shipped agent memories alongside the launch, write them first so
+	// the designer we're about to spawn has up-to-date context.
+	const agentMemories = payload.agentMemories as Record<string, string> | undefined;
+	if (agentMemories) {
+		for (const [agentId, content] of Object.entries(agentMemories)) {
+			ensureAgentMemory(agentId);
+			fs.writeFileSync(getAgentMemoryPath(agentId), content, 'utf-8');
+		}
+		ctx.persistentAgents = loadPersistentAgents();
+	}
+
+	// Strip memories before forwarding — the inner handlers don't expect them
+	const launchMsg: Record<string, unknown> = { ...payload };
+	delete launchMsg.agentMemories;
+
+	let result: { success: boolean; error?: string; worker?: string };
+	if (rpcType === 'launchDesigner') {
+		result = await handleLaunchDesigner(launchMsg, ctx);
+	} else if (rpcType === 'launchVisualDesigner') {
+		result = await handleLaunchVisualDesigner(launchMsg, ctx);
+	} else {
+		result = handleLaunchPM(launchMsg, ctx);
+	}
+
+	console.log(`[Worker] ${rpcType} result: success=${result.success}${result.error ? ` error="${result.error}"` : ''}`);
+
+	if (requestId && ws.readyState === WebSocket.OPEN) {
+		ws.send(JSON.stringify({
+			type: 'workerResponse',
+			requestId,
+			success: result.success,
+			error: result.error,
+			workerName: ctx.workerIdentity?.name,
+		}));
+	}
+}
+
+// ── Session-end reporter: tell the hub when a designer/QA finishes here ───
+
+/** Called from server.ts onSessionStale when a design-role agent session ends on this worker. */
+export function reportDesignerSessionEndedToHub(
+	payload: {
+		agentRole: string;
+		ticketId: string;
+		ticketName: string;
+		ticketUrl: string;
+		designerName: string;
+		workspacePath: string;
+		updatedMemory?: string;
+		agentId?: string;
+	},
+	ctx: ServerContext,
+): void {
+	if (!ctx.hubWs || ctx.hubWs.readyState !== WebSocket.OPEN) return;
+	try {
+		ctx.hubWs.send(JSON.stringify({ type: 'designerSessionEnded', ...payload }));
+	} catch (err) {
+		console.error(`[Worker] Failed to report session end to hub:`, err);
 	}
 }
 

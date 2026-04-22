@@ -48,6 +48,12 @@ export const MAX_REVISION_COUNT = 3;
 export const WORKER_HEARTBEAT_INTERVAL_MS = 30_000;
 export const WORKER_HEARTBEAT_TIMEOUT_MS = 90_000;
 export const WORKER_RECONNECT_INTERVAL_MS = 5_000;
+export const WORKER_DISPATCH_TIMEOUT_MS = 20_000;
+
+// Worker role tags. Workers default to both (back-compat for single-machine hubs).
+export const WORKER_ROLE_DEV = 'dev';
+export const WORKER_ROLE_DESIGNER = 'designer';
+export const DEFAULT_WORKER_ROLES: readonly string[] = [WORKER_ROLE_DEV, WORKER_ROLE_DESIGNER];
 
 // ── MemPalace ─────────────────────────────────────────────
 export const MEMPALACE_SERVER_PORT = 3334;
