@@ -756,12 +756,11 @@ function tryLaunchVisualDesignerLocal(msg: Record<string, unknown>, ctx: ServerC
 
 ${revisionLine}${briefBlock}## Steps
 1. Move ticket to "in progress".
-2. Run \`/figma-component-preflight\`.
-3. Open the component library from ${designConfig.clickupDocUrl}; learn what components exist.
-4. Open the approved UX Figma node (from the Brief). Use \`figma_get_file_data\` / \`figma_take_screenshot\`.
-5. Create page \`${ticketId} — Visual Design\`. For every UI element: use a library component. If one is missing, ADD IT TO THE LIBRARY FIRST, then use it.
-6. Screenshot + post Figma page URL as a ClickUp comment. Note any checklist items you flag N/A.
-7. Move ticket to "ai review".`;
+2. Run the Component discipline protocol from your system prompt: family scan (A) + shopping list (B) from the approved UX Figma node in the Brief. Keep the summary short — do NOT dump the whole library into context.
+3. Create the page \`${ticketId} — Visual Design\`. If the shopping list includes candidates, also create \`__Candidates — ${ticketId}\` in the same file.
+4. Build the screens using just-in-time lookup (C). New components go on the candidates page, NOT the canonical DS.
+5. Final audit (F). Screenshot + post Figma page URL as a ClickUp comment (include a "Candidates for promotion" list if any, and note any checklist items you flag N/A).
+6. Move ticket to "ai review".`;
 
 	// Launch the visual designer
 	const newSessionId = crypto.randomUUID();
