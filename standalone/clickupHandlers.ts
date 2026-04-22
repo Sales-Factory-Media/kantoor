@@ -175,13 +175,34 @@ export function autoDarrylPickup(ctx: ServerContext): void {
 	broadcastWorkerStatus(ctx);
 }
 
+function getDesignerMachineCapacity(ctx: ServerContext): number {
+	const hubRoles = ctx.workerIdentity?.roles ?? [...DEFAULT_WORKER_ROLES];
+	let capacity = hubRoles.includes(WORKER_ROLE_DESIGNER) ? 1 : 0;
+	for (const worker of ctx.workers.values()) {
+		const roles = worker.roles ?? [];
+		if (roles.length === 0 || roles.includes(WORKER_ROLE_DESIGNER)) {
+			capacity++;
+		}
+	}
+	return capacity;
+}
+
 export function autoJanPickup(ctx: ServerContext): void {
 	if (ctx.isWorkerMode) return;
 
 	// Collect tickets assigned to Jan in "to refine" or "to do" status
 	const janTickets: Array<{ id: string; name: string; url: string; status: string }> = [];
+	let inProgressForJan = 0;
 	for (const group of ctx.clickupTickets) {
 		const statusLower = group.name.toLowerCase();
+		if (statusLower === 'in progress') {
+			for (const task of group.tasks) {
+				if (task.assignees.some(a => a.username === JAN_CLICKUP_USERNAME)) {
+					inProgressForJan++;
+				}
+			}
+			continue;
+		}
 		if (statusLower !== 'to do' && statusLower !== 'to refine') continue;
 		for (const task of group.tasks) {
 			if (task.assignees.some(a => a.username === JAN_CLICKUP_USERNAME)) {
@@ -191,6 +212,13 @@ export function autoJanPickup(ctx: ServerContext): void {
 	}
 
 	if (janTickets.length === 0) return;
+
+	// Hard cap: never more tickets in progress than designer-capable machines.
+	const designerCapacity = getDesignerMachineCapacity(ctx);
+	if (inProgressForJan >= designerCapacity) {
+		console.log(`[Standalone] Jan pickup gated: ${inProgressForJan} in-progress ticket(s), designer capacity ${designerCapacity}`);
+		return;
+	}
 
 	// Jan handles one ticket at a time (like Darryl on the hub)
 	const jan = ctx.persistentAgents.find(p => p.name === 'Jan');
