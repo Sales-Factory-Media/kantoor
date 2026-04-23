@@ -68,6 +68,7 @@ import {
 	checkWorkerHeartbeats,
 	broadcastWorkerStatus,
 	loadAssignments,
+	markAssignment,
 } from './workerRegistry.js';
 import { startWorkerMode, stopWorkerMode, reportDesignerSessionEndedToHub, reportTicketCompleteToHub } from './workerMode.js';
 
@@ -551,6 +552,20 @@ async function main(): Promise<void> {
 			}
 			agentManager.removeSession(jsonlFile);
 			broadcastSink.postMessage({ type: 'offlineAgents', agents: getOfflineAgents(agentManager, persistentAgents) });
+
+			// Clear hub worker ticket assignment when no agents are active
+			if (ctx.workerIdentity) {
+				const hasActiveAgent = persistentAgents.some(p => p.currentSessionId);
+				if (!hasActiveAgent) {
+					const hubAssignments = ctx.workerAssignments.filter(
+						a => a.worker === ctx.workerIdentity!.name && a.status === 'in_progress',
+					);
+					for (const assignment of hubAssignments) {
+						markAssignment(ctx, assignment.ticketId, 'completed');
+					}
+				}
+				broadcastWorkerStatus(ctx);
+			}
 		},
 	});
 	scanner.start();

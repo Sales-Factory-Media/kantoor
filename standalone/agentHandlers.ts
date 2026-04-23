@@ -16,6 +16,7 @@ import { buildSystemPrompt } from './systemPrompts.js';
 import { readJson, writeJson, getOfflineAgents } from './serverHelpers.js';
 import { SEATS_FILE, SETTINGS_FILE } from './serverContext.js';
 import type { ServerContext } from './serverContext.js';
+import { markAssignment, broadcastWorkerStatus } from './workerRegistry.js';
 
 // ── Launch helper (shared by agent handlers + clickup handlers) ─
 export function launchPersistentAgent(pa: PersistentAgent, persistentAgents: PersistentAgent[], callInTask?: string, mempalaceHost?: string): boolean {
@@ -139,6 +140,20 @@ export function handleDeleteAgentIdentity(msg: Record<string, unknown>, ctx: Ser
 	setPersistentAgents(updated);
 	deleteAgentData(agentId);
 	broadcastSink.postMessage({ type: 'offlineAgents', agents: getOfflineAgents(agentManager, updated) });
+
+	// Clear hub worker ticket assignment when no agents remain active
+	if (ctx.workerIdentity) {
+		const hasActiveAgent = updated.some(p => p.currentSessionId);
+		if (!hasActiveAgent) {
+			const hubAssignments = ctx.workerAssignments.filter(
+				a => a.worker === ctx.workerIdentity!.name && a.status === 'in_progress',
+			);
+			for (const assignment of hubAssignments) {
+				markAssignment(ctx, assignment.ticketId, 'completed');
+			}
+		}
+		broadcastWorkerStatus(ctx);
+	}
 }
 
 export function handleLaunchAgent(msg: Record<string, unknown>, ctx: ServerContext): void {
