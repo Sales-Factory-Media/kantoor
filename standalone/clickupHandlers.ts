@@ -681,11 +681,11 @@ ${ticketLines}
    \`curl -X POST http://localhost:${SERVER_PORT}/api/launch-visual-designer -d '{"workspacePath":"~/Projects/<project>","ticketId":"<id>","ticketName":"<name>","ticketUrl":"<url>","additionalPrompt":"<Brief>"}'\`
 3. Only \`success:true\` counts. On \`success:false\`, skip this one and move on — it'll be retried on the next pickup cycle.
 
-### If status is **"ai review"** (Delegate — do NOT review yourself)
-1. Dispatch the Visual Quality Reviewer — that agent does the actual review. You are only the dispatcher.
+### If status is **"ai review"** — DELEGATE ONLY. Your sole action is the curl call.
+1. Fire the dispatch:
    \`curl -X POST http://localhost:${SERVER_PORT}/api/launch-visual-qa -d '{"ticketId":"<id>","ticketName":"<name>","ticketUrl":"<url>"}'\`
-2. Do NOT read the ticket, do NOT open Figma, do NOT post a review comment. The QA agent has its own checklist and is the one that posts the verdict.
-3. Only \`success:true\` counts. On \`success:false\`, skip and move on.
+2. FORBIDDEN in this mode: \`clickup_get_task\`, \`clickup_get_task_comments\`, any \`figma_*\` tool, any \`clickup_update_task\` (status), any comment. The Visual Quality Reviewer agent is the one that reads the ticket, opens Figma, counts FRAME vs INSTANCE nodes, writes the verdict, and moves the ticket to \`in progress\` (on start) then \`qa test\`/\`to do\` (on finish). You MUST NOT do any of these steps.
+3. Only \`success:true\` counts. On \`success:false\`, skip and move on to the next ticket in the batch.
 
 ## When you're done
 After dispatching (or skipping) every ticket above, you are DONE. Do not wait for designers or QA to finish — they run in parallel on their own timelines. ${EXIT_REMINDER.trim()}`;
