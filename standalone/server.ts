@@ -5,7 +5,7 @@ import { WebSocketServer } from 'ws';
 import type { WebSocket } from 'ws';
 import type { MessageSink } from '../src/types.js';
 import { loadKnownProjects, addKnownProject } from '../src/projectStore.js';
-import { SERVER_PORT, DESIGNER_ROLE_SHORT, VISUAL_DESIGNER_ROLE_SHORT, VISUAL_QA_ROLE_SHORT, JAN_ROLE_SHORT, REVIEW_TRIGGER_DELAY_MS, DEFAULT_WORKER_ROLES, AI_REVIEW_ENABLED } from './constants.js';
+import { SERVER_PORT, DESIGNER_ROLE_SHORT, VISUAL_DESIGNER_ROLE_SHORT, VISUAL_QA_ROLE_SHORT, JAN_ROLE_SHORT, REVIEW_TRIGGER_DELAY_MS, DEFAULT_WORKER_ROLES, AI_REVIEW_AUTO_ESCALATE } from './constants.js';
 import { ProjectScanner, decodeProjectHash, getLiveSessionIds } from './projectScanner.js';
 import { StandaloneAgentManager } from './standaloneAgentManager.js';
 import {
@@ -495,7 +495,7 @@ async function main(): Promise<void> {
 					}, ctx);
 				} else {
 					// On the hub: trigger the existing local review pipeline.
-					if (AI_REVIEW_ENABLED && pa.roleShort === VISUAL_DESIGNER_ROLE_SHORT && completedTicket) {
+					if (AI_REVIEW_AUTO_ESCALATE && pa.roleShort === VISUAL_DESIGNER_ROLE_SHORT && completedTicket) {
 						console.log(`[Standalone] Visual Designer "${pa.name}" finished ticket ${completedTicket.ticketId}, triggering Visual QA AI Review`);
 						setTimeout(() => handleVisualQaReview(completedTicket, ctx), REVIEW_TRIGGER_DELAY_MS);
 					}
@@ -503,7 +503,7 @@ async function main(): Promise<void> {
 						console.log(`[Standalone] UX Designer "${pa.name}" finished ticket ${completedTicket.ticketId}, triggering Jan review`);
 						setTimeout(() => handleJanReviewDesigner(completedTicket, ctx), REVIEW_TRIGGER_DELAY_MS);
 					}
-					if (AI_REVIEW_ENABLED && pa.roleShort === VISUAL_QA_ROLE_SHORT) {
+					if (AI_REVIEW_AUTO_ESCALATE && pa.roleShort === VISUAL_QA_ROLE_SHORT) {
 						setTimeout(() => autoDesignerRevisionPickup(ctx), REVIEW_TRIGGER_DELAY_MS);
 					}
 					if (pa.roleShort === JAN_ROLE_SHORT) {

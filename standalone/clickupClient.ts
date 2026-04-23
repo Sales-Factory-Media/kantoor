@@ -45,13 +45,38 @@ function fetchJson(url: string, headers: Record<string, string>): Promise<unknow
 	});
 }
 
+// ClickUp's v2 /list/{id}/task endpoint paginates at 100 tasks/page.
+// `last_page` on the response tells us when to stop.
+const CLICKUP_PAGE_SIZE = 100;
+const CLICKUP_MAX_PAGES = 50; // hard safety cap = 5000 tasks
+
+type ClickUpTaskApi = {
+	id: string;
+	name: string;
+	status: { status: string; color: string };
+	assignees: Array<{ username: string }>;
+	url: string;
+	priority: { id: string } | null;
+	parent: string | null;
+};
+
 export async function fetchListTasks(config: ClickUpConfig): Promise<ClickUpStatusGroup[]> {
-	const url = `https://api.clickup.com/api/v2/list/${config.listId}/task?include_closed=false&subtasks=true`;
-	const data = await fetchJson(url, { Authorization: config.apiToken }) as { tasks: Array<{ id: string; name: string; status: { status: string; color: string }; assignees: Array<{ username: string }>; url: string; priority: { id: string } | null; parent: string | null }> };
+	const allTasks: ClickUpTaskApi[] = [];
+	for (let page = 0; page < CLICKUP_MAX_PAGES; page++) {
+		const url = `https://api.clickup.com/api/v2/list/${config.listId}/task?include_closed=false&subtasks=true&page=${page}`;
+		const data = await fetchJson(url, { Authorization: config.apiToken }) as {
+			tasks: ClickUpTaskApi[];
+			last_page?: boolean;
+		};
+		const tasks = data.tasks ?? [];
+		allTasks.push(...tasks);
+		if (data.last_page === true) break;
+		if (tasks.length < CLICKUP_PAGE_SIZE) break;
+	}
 
 	// Group tasks by status
 	const statusMap = new Map<string, ClickUpStatusGroup>();
-	for (const task of data.tasks) {
+	for (const task of allTasks) {
 		const key = task.status.status;
 		if (!statusMap.has(key)) {
 			statusMap.set(key, { name: key, color: task.status.color, tasks: [] });

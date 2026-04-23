@@ -1,5 +1,6 @@
 import {
-	AI_REVIEW_ENABLED,
+	AI_REVIEW_AUTO_ESCALATE,
+	AI_REVIEW_PICKUP_ENABLED,
 	VISUAL_DESIGN_DARK_MODE_REQUIRED,
 } from './constants.js';
 import type { PersistentAgent, DesignConfig } from './agentStore.js';
@@ -133,7 +134,7 @@ export function buildSystemPrompt(agent: PersistentAgent, projectDescription?: s
 		'',
 		'## Ticket Status on Completion',
 		'',
-		...(AI_REVIEW_ENABLED
+		...(AI_REVIEW_AUTO_ESCALATE
 			? [
 				'When your PR is open, move the ticket to **"ai review"** using `mcp__clickup__clickup_update_task` (status: "ai review"). GitHub Copilot will review the PR; Darryl will later reassign someone (possibly you) with `aiReviewMode:true` to process Copilot\'s feedback. Do NOT move directly to "qa test".',
 			]
@@ -154,15 +155,17 @@ export function buildDarrylSystemPrompt(agent: PersistentAgent, roster: RosterEn
 		'3. When you dispatch, ALWAYS include a **Brief** in `additionalPrompt` (2–6 bullets: goal, key constraints, pointers to the exact artifacts needed). This stops the worker from re-reading every comment.',
 		'4. If the ticket is unclear, comment with questions, unassign yourself, assign the escalation user, move back to "to do". Do NOT dispatch a worker to a half-baked ticket.',
 	];
-	if (AI_REVIEW_ENABLED) {
+	if (AI_REVIEW_PICKUP_ENABLED) {
 		rules.push('5. AI Review: 3-round cap. After 3 cycles, tell the worker (in `additionalPrompt`) to be conservative and forward to `qa test` unless there\'s a real bug.');
 	}
-	const dispatchApiExtras = AI_REVIEW_ENABLED
+	const dispatchApiExtras = AI_REVIEW_PICKUP_ENABLED
 		? 'Add `"useTeam":true` for complex multi-part work. Add `"aiReviewMode":true` for tickets in the `ai review` state.'
 		: 'Add `"useTeam":true` for complex multi-part work.';
-	const lifecycleLine = AI_REVIEW_ENABLED
+	const lifecycleLine = AI_REVIEW_AUTO_ESCALATE
 		? '`to do` → you dispatch → worker does the work, opens a PR, moves the ticket to `ai review` → Copilot reviews → you see it in `ai review` on next poll and reassign with `aiReviewMode:true` (prefer the original implementer — find them in the "Assigned to worker: ..." comment).'
-		: '`to do` → you dispatch → worker does the work, opens a PR, moves the ticket to `qa test` → human reviews from there. The AI Review (Copilot) loop is currently paused — workers go directly to `qa test`.';
+		: AI_REVIEW_PICKUP_ENABLED
+			? '`to do` → you dispatch → worker does the work, opens a PR, moves the ticket to `qa test` → human reviews from there. Workers do NOT auto-escalate to `ai review`. BUT if a human manually moves a ticket to `ai review`, you\'ll see it on the next poll and must reassign with `aiReviewMode:true` (prefer the original implementer — find them in the "Assigned to worker: ..." comment).'
+			: '`to do` → you dispatch → worker does the work, opens a PR, moves the ticket to `qa test` → human reviews from there. The AI Review (Copilot) loop is currently paused — workers go directly to `qa test`.';
 
 	const lines = [
 		'You are Darryl, the Foreman. You ASSESS and DISPATCH — you never implement tickets yourself.',
@@ -338,14 +341,14 @@ export function buildVisualDesignerSystemPrompt(agent: PersistentAgent, projectD
 		'',
 		'**E. Running tally.** While building, keep a mental count: elements built vs library instances used. If you ever find yourself about to draw a rectangle that resembles a library component, stop — that\'s a `figma_search_components` trigger.',
 		'',
-		`**F. Final check (one call).** Before flipping the ticket to \`${AI_REVIEW_ENABLED ? 'ai review' : 'qa test'}\`, run \`figma_execute\` on the page to count node types. If the ratio of plain \`FRAME\` nodes to \`INSTANCE\` nodes at the element level looks wrong (many raw frames that should have been instances), fix before posting — don't ship and let the ${AI_REVIEW_ENABLED ? 'Visual QA' : 'human QA'} catch it.`,
+		`**F. Final check (one call).** Before flipping the ticket to \`${AI_REVIEW_AUTO_ESCALATE ? 'ai review' : 'qa test'}\`, run \`figma_execute\` on the page to count node types. If the ratio of plain \`FRAME\` nodes to \`INSTANCE\` nodes at the element level looks wrong (many raw frames that should have been instances), fix before posting — don't ship and let the ${AI_REVIEW_AUTO_ESCALATE ? 'Visual QA' : 'human QA'} catch it.`,
 		'',
 		'## Workflow',
 		'1. Read Jan\'s Brief. Don\'t re-fetch the parent ticket unless the Brief is missing something specific.',
 		'2. Do the **family scan** (A) + **shopping list** (B).',
 		'3. Create the page `{ticket_id} — Visual Design — {short descriptor}` (the descriptor is 2–4 words describing the page contents) and, if needed, `__Candidates — {ticket_id}`.',
 		'4. Build screens — just-in-time lookup (C), candidate protocol (D), running tally (E).',
-		`5. Final check (F). Screenshot + post Figma URL as a ClickUp comment (include the Candidates-for-promotion list if any). Move ticket to \`${AI_REVIEW_ENABLED ? 'ai review' : 'qa test'}\`.`,
+		`5. Final check (F). Screenshot + post Figma URL as a ClickUp comment (include the Candidates-for-promotion list if any). Move ticket to \`${AI_REVIEW_AUTO_ESCALATE ? 'ai review' : 'qa test'}\`.`,
 		'',
 		'## Quality checklist — the QA will grade against this exact list',
 		...VISUAL_DESIGN_CHECKLIST.map(item => `- ${item}`),

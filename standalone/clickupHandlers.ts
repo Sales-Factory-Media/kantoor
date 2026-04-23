@@ -2,7 +2,7 @@ import * as path from 'path';
 import * as os from 'os';
 import * as crypto from 'crypto';
 import { loadKnownProjects } from '../src/projectStore.js';
-import { CLICKUP_POLL_INTERVAL_MS, DARRYL_ROLE_SHORT, DARRYL_CLICKUP_USERNAME, DARRYL_ESCALATION_USERNAME, DARRYL_WORKSPACE, JAN_ROLE_SHORT, JAN_CLICKUP_USERNAME, JAN_WORKSPACE, DESIGNER_ROLE_SHORT, VISUAL_DESIGNER_ROLE_SHORT, VISUAL_QA_ROLE_SHORT, TEAM_UX_ID, TEAM_VISUAL_ID, SERVER_PORT, WORKER_ROLE_DEV, WORKER_ROLE_DESIGNER, DEFAULT_WORKER_ROLES, AI_REVIEW_ENABLED } from './constants.js';
+import { CLICKUP_POLL_INTERVAL_MS, DARRYL_ROLE_SHORT, DARRYL_CLICKUP_USERNAME, DARRYL_ESCALATION_USERNAME, DARRYL_WORKSPACE, JAN_ROLE_SHORT, JAN_CLICKUP_USERNAME, JAN_WORKSPACE, DESIGNER_ROLE_SHORT, VISUAL_DESIGNER_ROLE_SHORT, VISUAL_QA_ROLE_SHORT, TEAM_UX_ID, TEAM_VISUAL_ID, SERVER_PORT, WORKER_ROLE_DEV, WORKER_ROLE_DESIGNER, DEFAULT_WORKER_ROLES, AI_REVIEW_AUTO_ESCALATE, AI_REVIEW_PICKUP_ENABLED } from './constants.js';
 import { launchAgentSession } from './itermFocus.js';
 import {
 	savePersistentAgents,
@@ -13,7 +13,7 @@ import {
 	mergeMcpConfigs,
 	pickRandomName,
 } from './agentStore.js';
-import type { DesignConfig } from './agentStore.js';
+import type { DesignConfig, PersistentAgent } from './agentStore.js';
 import {
 	buildDarrylSystemPrompt,
 	buildJanSystemPrompt,
@@ -91,7 +91,7 @@ export function autoDarrylPickup(ctx: ServerContext): void {
 	const todoTickets: Array<{ id: string; name: string; url: string; status: string }> = [];
 	for (const group of ctx.clickupTickets) {
 		const statusLower = group.name.toLowerCase();
-		if (statusLower !== 'to do' && !(AI_REVIEW_ENABLED && statusLower === 'ai review')) continue;
+		if (statusLower !== 'to do' && !(AI_REVIEW_PICKUP_ENABLED && statusLower === 'ai review')) continue;
 		for (const task of group.tasks) {
 			if (task.assignees.some(a => a.username === DARRYL_CLICKUP_USERNAME)) {
 				todoTickets.push({ id: task.id, name: task.name, url: task.url, status: statusLower });
@@ -101,8 +101,8 @@ export function autoDarrylPickup(ctx: ServerContext): void {
 
 	if (todoTickets.length === 0) return;
 
-	// When AI Review is enabled, prioritize ai-review tickets over to-do so Copilot feedback gets processed first
-	if (AI_REVIEW_ENABLED) {
+	// When AI Review pickup is enabled, prioritize ai-review tickets over to-do so Copilot feedback gets processed first
+	if (AI_REVIEW_PICKUP_ENABLED) {
 		todoTickets.sort((a, b) => {
 			if (a.status === 'ai review' && b.status !== 'ai review') return -1;
 			if (a.status !== 'ai review' && b.status === 'ai review') return 1;
@@ -286,7 +286,7 @@ ${briefBlock}## Steps
 
 Rules: commit+push BEFORE flipping back to "ai review". 3-round cap — if this is round 3+, forward to "qa test" unless there's a real bug.`;
 	} else {
-		const finalStep = AI_REVIEW_ENABLED
+		const finalStep = AI_REVIEW_AUTO_ESCALATE
 			? 'Move ticket to **"ai review"** (not "qa test") — Copilot reviews, then you may be reassigned to process its feedback.'
 			: 'Move ticket to **"qa test"**. A human reviews from there.';
 		callInTask = `Ticket ${ticketId}: "${ticketName}" (${ticketUrl}).
@@ -552,7 +552,7 @@ export function handleJanDesignBriefing(msg: Record<string, unknown>, ctx: Serve
    \`curl -X POST http://localhost:${SERVER_PORT}/api/launch-visual-designer -d '{"workspacePath":"<project>","ticketId":"${ticketId}","ticketName":"${ticketName}","ticketUrl":"${ticketUrl}","additionalPrompt":"<Brief>"}'\`
    Brief template is in your system prompt — fill what you have, flag what's missing.
 3. Only \`success:true\` counts. On \`success:false\`, leave ticket alone, wait ~60s, retry.
-4. ${AI_REVIEW_ENABLED
+4. ${AI_REVIEW_AUTO_ESCALATE
 	? 'That\'s it for you — Visual QA AI Review runs automatically when the designer finishes. PASS → "qa test", FAIL → revision auto-pickup.'
 	: 'That\'s it for you — the designer will move the ticket to "qa test" when finished, and a human reviews from there.'}`;
 
@@ -585,6 +585,20 @@ export function handleJanDesignBriefing(msg: Record<string, unknown>, ctx: Serve
 // ── Designer launch (sequential, one at a time per device) ─────────────────
 // Fleet semantics: the Figma lock is PER DEVICE. Jan can have one designer
 // running on the hub AND one on each remote worker laptop simultaneously.
+
+// The Figma lock covers every agent that touches the local Figma instance:
+// UX Designer, Visual Designer, and Visual QA (which evaluates designer output
+// in the same Figma). At most one of these roles may hold the lock on a given
+// machine at a time. This function returns the agent currently holding the
+// lock, or undefined if free.
+function findFigmaLockHolder(persistentAgents: PersistentAgent[]): PersistentAgent | undefined {
+	return persistentAgents.find(
+		p => (p.roleShort === DESIGNER_ROLE_SHORT
+			|| p.roleShort === VISUAL_DESIGNER_ROLE_SHORT
+			|| p.roleShort === VISUAL_QA_ROLE_SHORT)
+			&& p.currentSessionId,
+	);
+}
 
 async function dispatchDesignerToFleet(
 	msg: Record<string, unknown>,
@@ -665,12 +679,10 @@ function tryLaunchDesignerLocal(msg: Record<string, unknown>, ctx: ServerContext
 
 	const { persistentAgents } = ctx;
 
-	// Figma lock: only one designer (UX OR Visual) can run at a time on THIS machine
-	const activeDesigner = persistentAgents.find(
-		p => (p.roleShort === DESIGNER_ROLE_SHORT || p.roleShort === VISUAL_DESIGNER_ROLE_SHORT) && p.currentSessionId,
-	);
-	if (activeDesigner) {
-		return { success: false, figmaBusy: true, error: `Local Figma busy: designer "${activeDesigner.name}" (${activeDesigner.roleShort}) is already running.` };
+	// Figma lock: only one designer/QA can run at a time on THIS machine
+	const activeFigma = findFigmaLockHolder(persistentAgents);
+	if (activeFigma) {
+		return { success: false, figmaBusy: true, error: `Local Figma busy: "${activeFigma.name}" (${activeFigma.roleShort}) is already running.` };
 	}
 
 	// Resolve project description
@@ -777,12 +789,10 @@ function tryLaunchVisualDesignerLocal(msg: Record<string, unknown>, ctx: ServerC
 
 	const { persistentAgents } = ctx;
 
-	// Figma lock: only one designer (UX OR Visual) can run at a time on THIS machine
-	const activeDesigner = persistentAgents.find(
-		p => (p.roleShort === DESIGNER_ROLE_SHORT || p.roleShort === VISUAL_DESIGNER_ROLE_SHORT) && p.currentSessionId,
-	);
-	if (activeDesigner) {
-		return { success: false, figmaBusy: true, error: `Local Figma busy: designer "${activeDesigner.name}" (${activeDesigner.roleShort}) is already running.` };
+	// Figma lock: only one designer/QA can run at a time on THIS machine
+	const activeFigma = findFigmaLockHolder(persistentAgents);
+	if (activeFigma) {
+		return { success: false, figmaBusy: true, error: `Local Figma busy: "${activeFigma.name}" (${activeFigma.roleShort}) is already running.` };
 	}
 
 	// Resolve project description
@@ -824,7 +834,7 @@ ${revisionLine}${briefBlock}## Steps
 3. Create the page \`${ticketId} — Visual Design — {short descriptor}\` — the descriptor is 2–4 words you pick to describe what's on the page (e.g. \`Dashboard Overview\`, \`Onboarding Flow\`), so humans can tell pages apart. If the shopping list includes candidates, also create \`__Candidates — ${ticketId}\` in the same file.
 4. Build the screens using just-in-time lookup (C). New components go on the candidates page, NOT the canonical DS.
 5. Final audit (F). Screenshot + post Figma page URL as a ClickUp comment (include a "Candidates for promotion" list if any, and note any checklist items you flag N/A).
-6. ${AI_REVIEW_ENABLED ? 'Move ticket to "ai review" — the Visual Quality Reviewer will auto-pick it up.' : 'Move ticket to "qa test". A human reviews from there.'}${EXIT_REMINDER}`;
+6. ${AI_REVIEW_AUTO_ESCALATE ? 'Move ticket to "ai review" — the Visual Quality Reviewer will auto-pick it up.' : 'Move ticket to "qa test". A human reviews from there.'}${EXIT_REMINDER}`;
 
 	// Launch the visual designer
 	const newSessionId = crypto.randomUUID();
@@ -973,11 +983,11 @@ export function handleDesignerSessionEnded(
 	const completedTicket = { ticketId, ticketName, ticketUrl, designerName, workspacePath };
 
 	if (agentRole === VISUAL_DESIGNER_ROLE_SHORT) {
-		if (AI_REVIEW_ENABLED) {
+		if (AI_REVIEW_AUTO_ESCALATE) {
 			console.log(`[Hub] Remote Visual Designer finished ticket ${ticketId} — triggering Visual QA AI review`);
 			setTimeout(() => handleVisualQaReview(completedTicket, ctx), REVIEW_TRIGGER_DELAY_MS);
 		} else {
-			console.log(`[Hub] Remote Visual Designer finished ticket ${ticketId} — AI review paused, no auto-QA`);
+			console.log(`[Hub] Remote Visual Designer finished ticket ${ticketId} — auto-escalation paused, no auto-QA`);
 		}
 		return;
 	}
@@ -987,7 +997,7 @@ export function handleDesignerSessionEnded(
 		return;
 	}
 	if (agentRole === VISUAL_QA_ROLE_SHORT) {
-		if (AI_REVIEW_ENABLED) {
+		if (AI_REVIEW_AUTO_ESCALATE) {
 			console.log(`[Hub] Remote Visual QA finished ticket ${ticketId} — running revision pickup`);
 			setTimeout(() => autoDesignerRevisionPickup(ctx), REVIEW_TRIGGER_DELAY_MS);
 		}
@@ -1025,6 +1035,13 @@ export function handleVisualQaReview(
 	}
 	if (qa.currentSessionId) {
 		console.log(`[Standalone] Visual QA "${qa.name}" is already busy, deferring review of ticket ${ticketId}`);
+		return;
+	}
+	// Figma lock: defer if a designer is already running on this machine so we
+	// don't fight them for Figma. autoVisualQaPickup will retry on the next poll.
+	const activeFigma = findFigmaLockHolder(persistentAgents);
+	if (activeFigma) {
+		console.log(`[Standalone] Local Figma busy: "${activeFigma.name}" (${activeFigma.roleShort}) is running — deferring Visual QA for ticket ${ticketId}`);
 		return;
 	}
 
@@ -1070,7 +1087,7 @@ export function handleVisualQaReview(
  */
 export function autoVisualQaPickup(ctx: ServerContext): void {
 	if (ctx.isWorkerMode) return;
-	if (!AI_REVIEW_ENABLED) return; // AI Review pipeline paused — QA doesn't auto-pickup ai-review tickets
+	if (!AI_REVIEW_PICKUP_ENABLED) return; // Pickup disabled — QA doesn't scan for "ai review" tickets
 
 	const qa = ctx.persistentAgents.find(
 		p => p.roleShort === VISUAL_QA_ROLE_SHORT && p.teamId === TEAM_VISUAL_ID,

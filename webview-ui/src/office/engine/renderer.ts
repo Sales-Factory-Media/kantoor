@@ -7,7 +7,7 @@ import { getCachedSprite, getOutlineSprite } from '../sprites/spriteCache.js'
 import { getCharacterSprites, BUBBLE_PERMISSION_SPRITE, BUBBLE_WAITING_SPRITE } from '../sprites/spriteData.js'
 import { getCharacterSprite } from './characters.js'
 import { renderMatrixEffect } from './matrixEffect.js'
-import { getColorizedFloorSprite, hasFloorSprites, WALL_COLOR } from '../floorTiles.js'
+import { getColorizedFloorSprite, getColorizedHerringboneSprite, hasFloorSprites, usesGeneratedFloor, WALL_COLOR } from '../floorTiles.js'
 import { hasWallSprites, getWallInstances, wallColorToHex } from '../wallTiles.js'
 import {
   CHARACTER_SITTING_OFFSET_PX,
@@ -33,6 +33,13 @@ import {
 
 // ── Render functions ────────────────────────────────────────────
 
+/** A tile is "non-floor" for border detection if it's wall, void, or out-of-grid. */
+function isNonFloor(tileMap: TileTypeVal[][], r: number, c: number, rows: number, cols: number): boolean {
+  if (r < 0 || c < 0 || r >= rows || c >= cols) return true
+  const t = tileMap[r][c]
+  return t === TileType.WALL || t === TileType.VOID
+}
+
 export function renderTileGrid(
   ctx: CanvasRenderingContext2D,
   tileMap: TileTypeVal[][],
@@ -44,6 +51,7 @@ export function renderTileGrid(
 ): void {
   const s = TILE_SIZE * zoom
   const useSpriteFloors = hasFloorSprites()
+  const useHerringbone = usesGeneratedFloor()
   const tmRows = tileMap.length
   const tmCols = tmRows > 0 ? tileMap[0].length : 0
   const layoutCols = cols ?? tmCols
@@ -72,7 +80,20 @@ export function renderTileGrid(
       // Floor tile: get colorized sprite
       const colorIdx = r * layoutCols + c
       const color = tileColors?.[colorIdx] ?? { h: 0, s: 0, b: 0, c: 0 }
-      const sprite = getColorizedFloorSprite(tile, color)
+
+      let sprite
+      if (useHerringbone) {
+        // Procedural herringbone: compute adjacency bitmask so tiles adjacent
+        // to walls/void get a straight-plank border along that edge.
+        let mask = 0
+        if (isNonFloor(tileMap, r - 1, c, tmRows, tmCols)) mask |= 1  // N
+        if (isNonFloor(tileMap, r, c + 1, tmRows, tmCols)) mask |= 2  // E
+        if (isNonFloor(tileMap, r + 1, c, tmRows, tmCols)) mask |= 4  // S
+        if (isNonFloor(tileMap, r, c - 1, tmRows, tmCols)) mask |= 8  // W
+        sprite = getColorizedHerringboneSprite(r, c, mask, color)
+      } else {
+        sprite = getColorizedFloorSprite(tile, color)
+      }
       const cached = getCachedSprite(sprite, zoom)
       ctx.drawImage(cached, offsetX + c * s, offsetY + r * s)
     }

@@ -9,6 +9,7 @@
 import type { SpriteData, FloorColor } from './types.js'
 import { getColorizedSprite, clearColorizeCache } from './colorize.js'
 import { TILE_SIZE, FALLBACK_FLOOR_COLOR } from '../constants.js'
+import { getHerringboneSprite } from './herringboneFloor.js'
 
 /** Default solid gray 16×16 tile used when floors.png is not loaded */
 const DEFAULT_FLOOR_SPRITE: SpriteData = Array.from(
@@ -71,4 +72,32 @@ export function getColorizedFloorSprite(patternIndex: number, color: FloorColor)
 
   // Floor tiles are always colorized (grayscale patterns need Photoshop-style Colorize)
   return getColorizedSprite(key, base, { ...color, colorize: true })
+}
+
+/**
+ * Get a colorized herringbone (hongaars visgraat) floor sprite for the given
+ * tile position and adjacency bitmask. The (row, col) selects A/B zigzag
+ * variant; the bitmask (N=1, E=2, S=4, W=8) marks which neighbors are
+ * non-floor (wall / void / out-of-grid) so edge tiles render with a
+ * straight-plank border along the wall-adjacent sides.
+ *
+ * Used as the default floor pattern when no floors.png is loaded.
+ */
+export function getColorizedHerringboneSprite(row: number, col: number, bitmask: number, color: FloorColor): SpriteData {
+  const mask = bitmask & 0b1111
+  const variant = ((row + col) & 1) === 0 ? 'a' : 'b'
+  const key = `herringbone-${variant}-${mask}-${color.h}-${color.s}-${color.b}-${color.c}`
+  const base = getHerringboneSprite(row, col, mask)
+  return getColorizedSprite(key, base, { ...color, colorize: true })
+}
+
+/**
+ * Whether procedural herringbone is in use.
+ *
+ * Currently pinned to `true` — the herringbone replaces the legacy
+ * floor_N.png tiles. Flip back to `floorSprites.length === 0` if you ever
+ * want PNG tiles to override the generator again.
+ */
+export function usesGeneratedFloor(): boolean {
+  return true
 }

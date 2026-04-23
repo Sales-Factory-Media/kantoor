@@ -3,7 +3,7 @@ export const SERVER_PORT = 3333;
 export const PROJECT_DIR_SCAN_INTERVAL_MS = 2000;
 export const JSONL_SCAN_INTERVAL_MS = 1000;
 export const STALE_CHECK_INTERVAL_MS = 5000; // check for dead sessions every 5s
-export const CLICKUP_POLL_INTERVAL_MS = 300000; // poll ClickUp every 5 minutes
+export const CLICKUP_POLL_INTERVAL_MS = 180000; // poll ClickUp every 3 minutes
 
 // ── Peers / Conference ──────────────────────────────────────
 export const PEERS_BROKER_PORT = 7899;
@@ -48,11 +48,21 @@ export const DEFAULT_DESIGN_CLICKUP_DOC_URL = 'https://app.clickup.com/901524149
 export const REVIEW_TRIGGER_DELAY_MS = 5000;
 export const MAX_REVISION_COUNT = 3;
 
-// ── AI Review pipeline (PAUSED 2026-04-22) ─────────────────
-// When false, workers always move tickets directly to "qa test" — no ai-review
-// intermediate step, no auto Visual QA, no Darryl AI Review dispatch. Flip to
-// true to re-enable the Copilot + Visual QA review loops.
-export const AI_REVIEW_ENABLED = false;
+// ── AI Review pipeline ────────────────────────────────────
+// Two flags split from the old single AI_REVIEW_ENABLED:
+//
+// - AI_REVIEW_AUTO_ESCALATE: do agents automatically move finished work to
+//   "ai review"? When false, workers/designers always move to "qa test" and
+//   session-end does NOT auto-trigger Visual QA or revision pickup. This was
+//   paused 2026-04-22 because auto-escalation + Copilot feedback was creating
+//   messy cycles.
+//
+// - AI_REVIEW_PICKUP_ENABLED: if a ticket ends up in "ai review" (e.g. a
+//   human placed it there manually), should the system auto-pick-it-up and
+//   dispatch a QA / AI-review agent? This is independent of auto-escalation
+//   and is normally true — we want manual ai-review requests to still work.
+export const AI_REVIEW_AUTO_ESCALATE = false;
+export const AI_REVIEW_PICKUP_ENABLED = true;
 
 // ── Visual Design: Dark Mode ───────────────────────────────
 // When false (default 2026-04-22), Visual Designers are explicitly told NOT to
