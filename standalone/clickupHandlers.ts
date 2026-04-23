@@ -1,19 +1,38 @@
+/**
+ * ClickUp integration: polling, ticket pickup, and dispatch for Darryl / Jan /
+ * the design fleet. The giant prompt strings live in ./initialTasks.ts, the
+ * launch boilerplate lives in ./launchHelpers.ts, and capacity accounting
+ * lives in ./capacity.ts — this file is orchestration only.
+ */
+
 import * as path from 'path';
-import * as os from 'os';
-import * as crypto from 'crypto';
-import { loadKnownProjects } from '../src/projectStore.js';
-import { CLICKUP_POLL_INTERVAL_MS, DARRYL_ROLE_SHORT, DARRYL_CLICKUP_USERNAME, DARRYL_ESCALATION_USERNAME, DARRYL_WORKSPACE, JAN_ROLE_SHORT, JAN_CLICKUP_USERNAME, JAN_WORKSPACE, DESIGNER_ROLE_SHORT, VISUAL_DESIGNER_ROLE_SHORT, VISUAL_QA_ROLE_SHORT, TEAM_UX_ID, TEAM_VISUAL_ID, SERVER_PORT, WORKER_ROLE_DEV, WORKER_ROLE_DESIGNER, DEFAULT_WORKER_ROLES, AI_REVIEW_AUTO_ESCALATE, AI_REVIEW_PICKUP_ENABLED } from './constants.js';
-import { launchAgentSession } from './itermFocus.js';
+import {
+	CLICKUP_POLL_INTERVAL_MS,
+	DARRYL_ROLE_SHORT,
+	DARRYL_CLICKUP_USERNAME,
+	DARRYL_WORKSPACE,
+	JAN_ROLE_SHORT,
+	JAN_CLICKUP_USERNAME,
+	JAN_WORKSPACE,
+	DESIGNER_ROLE_SHORT,
+	VISUAL_DESIGNER_ROLE_SHORT,
+	VISUAL_QA_ROLE_SHORT,
+	TEAM_UX_ID,
+	TEAM_VISUAL_ID,
+	SERVER_PORT,
+	WORKER_ROLE_DEV,
+	WORKER_ROLE_DESIGNER,
+	DEFAULT_WORKER_ROLES,
+	AI_REVIEW_AUTO_ESCALATE,
+	AI_REVIEW_PICKUP_ENABLED,
+	REVIEW_TRIGGER_DELAY_MS,
+} from './constants.js';
 import {
 	savePersistentAgents,
 	ensureAgentMemory,
 	generateAgentId,
-	expandHome,
-	ensureMempalaceMcpConfig,
-	mergeMcpConfigs,
-	pickRandomName,
 } from './agentStore.js';
-import type { DesignConfig, PersistentAgent } from './agentStore.js';
+import type { PersistentAgent } from './agentStore.js';
 import {
 	buildDarrylSystemPrompt,
 	buildJanSystemPrompt,
@@ -25,13 +44,12 @@ import {
 } from './systemPrompts.js';
 import type { RosterEntry } from './systemPrompts.js';
 import { getJanDesignConfig } from './agentHandlers.js';
-import { ensureMcpConfig as ensurePeersMcpConfig } from './conferenceManager.js';
+import { launchPersistentAgent } from './agentHandlers.js';
 import { fetchListTasks, addTaskComment } from './clickupClient.js';
 import type { ClickUpConfig } from './clickupClient.js';
 import { readJson, writeJson } from './serverHelpers.js';
 import { SETTINGS_FILE } from './serverContext.js';
 import type { ServerContext } from './serverContext.js';
-import { launchPersistentAgent } from './agentHandlers.js';
 import {
 	getAvailableCapacity,
 	getIdleWorkers,
@@ -43,17 +61,75 @@ import {
 	clearWorkerTicket,
 	saveAgentMemoryFromWorker,
 } from './workerRegistry.js';
-import { REVIEW_TRIGGER_DELAY_MS } from './constants.js';
+import { loadKnownProjects } from '../src/projectStore.js';
 
-// Append this to every initial task so the agent remembers to close its iTerm
-// tab when the work is done. The exact bash block is in the agent's system
-// prompt under "## Self-Exit" (see buildSelfExitBlock in agentStore.ts).
-const EXIT_REMINDER = '\n\nWhen you have finished this work (PR open, ticket status flipped, memory updated), run the `## Self-Exit` bash block from your system prompt to close your iTerm tab. Don\'t run it until everything is saved — there is no coming back.';
+import {
+	findFigmaLockHolder,
+	getDesignerMachineCapacity,
+	computeDesignFleetCapacity,
+} from './capacity.js';
+import {
+	EXIT_REMINDER,
+	launchPersistentAgentSession,
+	type TicketInfo,
+} from './launchHelpers.js';
+import {
+	buildWorkerAiReviewInitialTask,
+	buildWorkerStandardInitialTask,
+	buildDarrylAiReviewInitialTask,
+	buildDarrylStandardInitialTask,
+	buildJanRefineInitialTask,
+	buildJanSingleTodoInitialTask,
+	buildJanBatchInitialTask,
+	buildUxDesignerInitialTask,
+	buildVisualDesignerInitialTask,
+} from './initialTasks.js';
+
+// ── Small utilities ──────────────────────────────────────────
+
+/** Build the roster passed into system prompts — every persistent agent except
+ *  the one being launched, enriched with known-project metadata. */
+function buildRoster(persistentAgents: PersistentAgent[], excludeAgentId: string): RosterEntry[] {
+	const knownProjects = loadKnownProjects();
+	return persistentAgents
+		.filter(p => p.id !== excludeAgentId)
+		.map(p => {
+			const projName = path.basename(p.workspacePath);
+			const proj = knownProjects.find(k => k.name === projName);
+			return {
+				id: p.id,
+				name: p.name,
+				roleShort: p.roleShort,
+				roleFull: p.roleFull,
+				workspacePath: p.workspacePath,
+				projectName: proj?.name ?? projName,
+				projectDescription: proj?.description,
+				isOnline: !!p.currentSessionId,
+			};
+		});
+}
+
+/** Idempotent find-or-create for a well-known agent (Jan / Darryl). */
+function findOrCreatePersistentAgent(
+	persistentAgents: PersistentAgent[],
+	name: string,
+	roleShort: string,
+	roleFull: string,
+	workspacePath: string,
+): PersistentAgent {
+	let agent = persistentAgents.find(p => p.name === name);
+	if (!agent) {
+		agent = { id: generateAgentId(), name, roleShort, roleFull, workspacePath };
+		persistentAgents.push(agent);
+		savePersistentAgents(persistentAgents);
+	}
+	return agent;
+}
 
 // ── Polling ──────────────────────────────────────────────────
 
 export function startClickupPolling(ctx: ServerContext): void {
-	if (ctx.clickupTimer) return; // already polling
+	if (ctx.clickupTimer) return;
 	if (!ctx.clickupConfig) return;
 	console.log('[Standalone] Starting ClickUp polling...');
 	ctx.clickupTimer = setInterval(() => { handleClickupRefresh(ctx).catch(() => {}); }, CLICKUP_POLL_INTERVAL_MS);
@@ -101,7 +177,7 @@ export function autoDarrylPickup(ctx: ServerContext): void {
 
 	if (todoTickets.length === 0) return;
 
-	// When AI Review pickup is enabled, prioritize ai-review tickets over to-do so Copilot feedback gets processed first
+	// When AI Review pickup is enabled, prioritize ai-review tickets over to-do
 	if (AI_REVIEW_PICKUP_ENABLED) {
 		todoTickets.sort((a, b) => {
 			if (a.status === 'ai review' && b.status !== 'ai review') return -1;
@@ -110,25 +186,20 @@ export function autoDarrylPickup(ctx: ServerContext): void {
 		});
 	}
 
-	// Check available dev-capable capacity (hub + idle remote dev workers)
 	const capacity = getAvailableCapacity(ctx, WORKER_ROLE_DEV);
 	if (capacity === 0) return;
 
-	// Distribute tickets up to available capacity
 	const ticketsToAssign = todoTickets.slice(0, capacity);
 	const idleWorkers = getIdleWorkers(ctx, WORKER_ROLE_DEV);
 
-	// Hub is available if it has the dev role AND Darryl isn't currently running
 	const hubHasDevRole = (ctx.workerIdentity?.roles ?? [...DEFAULT_WORKER_ROLES]).includes(WORKER_ROLE_DEV);
 	const darryl = ctx.persistentAgents.find(p => p.name === 'Darryl');
 	const hubAvailable = hubHasDevRole && !darryl?.currentSessionId;
 
-	// Build a queue of available slots: hub first, then remote workers
 	const slots: Array<{ type: 'hub' } | { type: 'worker'; worker: typeof idleWorkers[0] }> = [];
 	if (hubAvailable) slots.push({ type: 'hub' });
 	for (const w of idleWorkers) slots.push({ type: 'worker', worker: w });
 
-	// Collect agent memories once (shared across all worker assignments)
 	const hasRemoteAssignment = ticketsToAssign.length > (hubAvailable ? 1 : 0);
 	const memories = hasRemoteAssignment ? collectAgentMemories(ctx.persistentAgents) : {};
 
@@ -178,23 +249,11 @@ export function autoDarrylPickup(ctx: ServerContext): void {
 	broadcastWorkerStatus(ctx);
 }
 
-function getDesignerMachineCapacity(ctx: ServerContext): number {
-	const hubRoles = ctx.workerIdentity?.roles ?? [...DEFAULT_WORKER_ROLES];
-	let capacity = hubRoles.includes(WORKER_ROLE_DESIGNER) ? 1 : 0;
-	for (const worker of ctx.workers.values()) {
-		const roles = worker.roles ?? [];
-		if (roles.length === 0 || roles.includes(WORKER_ROLE_DESIGNER)) {
-			capacity++;
-		}
-	}
-	return capacity;
-}
-
 export function autoJanPickup(ctx: ServerContext): void {
 	if (ctx.isWorkerMode) return;
 
-	// IDs of every ticket Jan is an assignee on, across all statuses.
-	// Used to recognise sub-tickets of Jan's work even if they're unassigned.
+	// IDs of every ticket Jan is an assignee on (used to recognise sub-tickets
+	// even when they're unassigned).
 	const janTicketIds = new Set<string>();
 	for (const group of ctx.clickupTickets) {
 		for (const task of group.tasks) {
@@ -204,116 +263,60 @@ export function autoJanPickup(ctx: ServerContext): void {
 		}
 	}
 
-	// Collect tickets Jan can act on, split by status, and count in-progress
-	// tickets (each potentially holds a Figma slot on some machine).
-	const refineTickets: Array<{ id: string; name: string; url: string }> = [];
-	const todoTickets: Array<{ id: string; name: string; url: string }> = [];
-	const aiReviewTickets: Array<{ id: string; name: string; url: string }> = [];
-	let inProgressCount = 0;
+	// Split Jan's pending tickets by status.
+	const refineTickets: TicketInfo[] = [];
+	const todoTickets: TicketInfo[] = [];
+	const aiReviewTickets: TicketInfo[] = [];
 	for (const group of ctx.clickupTickets) {
 		const statusLower = group.name.toLowerCase();
-		if (statusLower === 'in progress') {
-			for (const task of group.tasks) {
-				if (janTicketIds.has(task.id) || (task.parent && janTicketIds.has(task.parent))) {
-					inProgressCount++;
-				}
-			}
-			continue;
-		}
+		if (statusLower !== 'to refine' && statusLower !== 'to do' && statusLower !== 'ai review') continue;
+		if (statusLower === 'ai review' && !AI_REVIEW_PICKUP_ENABLED) continue;
 		for (const task of group.tasks) {
 			if (!janTicketIds.has(task.id)) continue;
-			if (statusLower === 'to refine') {
-				refineTickets.push({ id: task.id, name: task.name, url: task.url });
-			} else if (statusLower === 'to do') {
-				todoTickets.push({ id: task.id, name: task.name, url: task.url });
-			} else if (statusLower === 'ai review' && AI_REVIEW_PICKUP_ENABLED) {
-				aiReviewTickets.push({ id: task.id, name: task.name, url: task.url });
-			}
+			const ticket: TicketInfo = { ticketId: task.id, ticketName: task.name, ticketUrl: task.url };
+			if (statusLower === 'to refine') refineTickets.push(ticket);
+			else if (statusLower === 'to do') todoTickets.push(ticket);
+			else aiReviewTickets.push(ticket);
 		}
 	}
 
 	if (refineTickets.length === 0 && todoTickets.length === 0 && aiReviewTickets.length === 0) return;
 
-	// Jan is a single agent; can only run one session at a time
+	// Jan is a single agent — one session at a time.
 	const jan = ctx.persistentAgents.find(p => p.name === 'Jan');
 	if (jan?.currentSessionId) return;
 
-	// "to refine" is still single-ticket: one refine ticket spawns 5 UX designers,
-	// which already saturates the UX team — batching multiple refine tickets is
-	// pointless.
+	// Refine tickets are still single-ticket: one refine ticket spawns 5 UX
+	// designers, already saturating the UX team.
 	if (refineTickets.length > 0) {
 		const ticket = refineTickets[0];
-		console.log(`[Standalone] Auto-pickup: Jan taking refine ticket ${ticket.id}`);
+		console.log(`[Standalone] Auto-pickup: Jan taking refine ticket ${ticket.ticketId}`);
 		handleJanDesignBriefing(
-			{ ticketId: ticket.id, ticketName: ticket.name, ticketUrl: ticket.url, ticketStatus: 'to refine' },
+			{ ...ticket, ticketStatus: 'to refine' },
 			ctx,
 		);
 		return;
 	}
 
-	// Unified capacity model: every machine (hub or worker) with the 'designer'
-	// role can perform ONE visual task at a time — either a Visual Designer, a
-	// UX Designer, or a Visual QA review. So `availableSlots` is a single
-	// number shared across all three, and Jan's batch is one pool of tickets
-	// picked up to that limit.
-	//
-	// `inProgressCount` (from ClickUp "in progress" scan above) is the primary
-	// signal. We also count any visual-role persistent agent with a
-	// currentSessionId that isn't already reflected in in-progress tickets
-	// yet — this catches the ~15-30s window between Jan dispatching and the
-	// dispatched agent actually moving the ticket to "in progress".
-	const totalMachines = getDesignerMachineCapacity(ctx);
-	const inProgressTicketIds = new Set<string>();
-	for (const group of ctx.clickupTickets) {
-		if (group.name.toLowerCase() !== 'in progress') continue;
-		for (const task of group.tasks) {
-			if (janTicketIds.has(task.id) || (task.parent && janTicketIds.has(task.parent))) {
-				inProgressTicketIds.add(task.id);
-			}
-		}
-	}
+	// Unified machine-slot capacity: every machine can run one visual task.
+	const cap = computeDesignFleetCapacity(ctx, janTicketIds);
 
-	// Persistent-agent sessions on the hub running a visual task that isn't
-	// already counted in `inProgressCount`.
-	let pendingDispatches = 0;
-	for (const pa of ctx.persistentAgents) {
-		if (!pa.currentSessionId) continue;
-		if (pa.roleShort !== DESIGNER_ROLE_SHORT
-			&& pa.roleShort !== VISUAL_DESIGNER_ROLE_SHORT
-			&& pa.roleShort !== VISUAL_QA_ROLE_SHORT) continue;
-		// If the current ticket is already counted in inProgressTicketIds,
-		// don't double-count — ClickUp already reflects this session.
-		if (pa.currentTicketId && inProgressTicketIds.has(pa.currentTicketId)) continue;
-		pendingDispatches++;
-	}
-	// Remote workers that have a ticket assigned but whose ClickUp status
-	// hasn't caught up yet (same race window).
-	for (const worker of ctx.workers.values()) {
-		if (!worker.currentTicketId) continue;
-		if (inProgressTicketIds.has(worker.currentTicketId)) continue;
-		pendingDispatches++;
-	}
-
-	const activeSlots = inProgressCount + pendingDispatches;
-	const availableSlots = Math.max(0, totalMachines - activeSlots);
-
-	// Combined batch: fill available slots with whatever's waiting. Put
-	// ai-review tickets first — they're quicker (reviews don't write code),
-	// so draining the review queue keeps the board moving.
-	const combined = [
+	// Combined batch: fill available slots with whatever's waiting.
+	// ai-review first (reviews are quick and drain the queue faster).
+	const combined: Array<TicketInfo & { status: 'to do' | 'ai review' }> = [
 		...aiReviewTickets.map(t => ({ ...t, status: 'ai review' as const })),
 		...todoTickets.map(t => ({ ...t, status: 'to do' as const })),
 	];
-	const batch = combined.slice(0, availableSlots);
+	const batch = combined.slice(0, cap.available);
 
 	if (batch.length === 0) {
-		console.log(`[Standalone] Jan pickup gated: ${activeSlots}/${totalMachines} machines active (${inProgressCount} in-progress + ${pendingDispatches} pending-dispatch); ${todoTickets.length} todo + ${aiReviewTickets.length} ai-review waiting`);
+		console.log(`[Standalone] Jan pickup gated: ${cap.active}/${cap.total} machines active (${cap.inProgressCount} in-progress + ${cap.pendingDispatches} pending-dispatch); ${todoTickets.length} todo + ${aiReviewTickets.length} ai-review waiting`);
 		return;
 	}
 
 	const todoInBatch = batch.filter(b => b.status === 'to do').length;
 	const reviewInBatch = batch.filter(b => b.status === 'ai review').length;
-	console.log(`[Standalone] Auto-pickup: Jan batch of ${batch.length} (${todoInBatch} to-do, ${reviewInBatch} ai-review) — ${activeSlots}/${totalMachines} machines already active`);
+	console.log(`[Standalone] Auto-pickup: Jan batch of ${batch.length} (${todoInBatch} to-do, ${reviewInBatch} ai-review) — ${cap.active}/${cap.total} machines already active`);
 	handleJanBatchDispatch(batch, ctx);
 }
 
@@ -332,34 +335,13 @@ export function launchAgentOnTicket(
 	if (!pa) return { success: false, error: `Agent not found: ${agentId}` };
 
 	const brief = options?.additionalPrompt?.trim();
-	const briefBlock = brief ? `${brief}\n\n` : `⚠ No Brief was passed by Darryl — you'll need to read the ticket yourself.\n\n`;
+	const briefBlock = brief
+		? `${brief}\n\n`
+		: `⚠ No Brief was passed by Darryl — you'll need to read the ticket yourself.\n\n`;
 
-	let callInTask: string;
-	if (options?.aiReviewMode) {
-		callInTask = `Ticket ${ticketId}: "${ticketName}" is in **AI Review**. Copilot reviewed the PR — you process the feedback.
-Ticket URL: ${ticketUrl}
-
-${briefBlock}## Steps
-1. Move ticket to "in progress".
-2. Find the PR (branch \`feature/CU-${ticketId}-*\`). Read Copilot's review + inline comments via \`mcp__github__pull_request_read\`.
-3. Triage: actionable (real bug / security / broken convention) vs not (style opinions you disagree with, already-addressed).
-4a. Actionable: check out the branch, fix, commit with \`CU-${ticketId}\` ref, push, comment what you addressed + what you deliberately skipped (and why), move ticket back to "ai review".
-4b. Nothing actionable: comment confirming review, move ticket to "qa test".
-
-Rules: commit+push BEFORE flipping back to "ai review". 3-round cap — if this is round 3+, forward to "qa test" unless there's a real bug.`;
-	} else {
-		const finalStep = AI_REVIEW_AUTO_ESCALATE
-			? 'Move ticket to **"ai review"** (not "qa test") — Copilot reviews, then you may be reassigned to process its feedback.'
-			: 'Move ticket to **"qa test"**. A human reviews from there.';
-		callInTask = `Ticket ${ticketId}: "${ticketName}" (${ticketUrl}).
-
-${briefBlock}## Steps
-1. Move ticket to "in progress".
-2. Check out or create branch \`feature/CU-${ticketId}-<short-desc>\` from develop.
-3. Do the work. Rely on the Brief above — only re-read the ticket if the Brief is missing something specific.
-4. Open a PR. Commit messages must include \`CU-${ticketId}\`.
-5. ${finalStep}`;
-	}
+	let callInTask = options?.aiReviewMode
+		? buildWorkerAiReviewInitialTask(ticketId, ticketName, ticketUrl, briefBlock)
+		: buildWorkerStandardInitialTask(ticketId, ticketName, ticketUrl, briefBlock);
 
 	const knownProjects = loadKnownProjects();
 	const project = knownProjects.find(p => p.workspacePath === pa.workspacePath);
@@ -395,47 +377,37 @@ export function handleClickupStartWork(msg: Record<string, unknown>, ctx: Server
 	const ticketUrl = msg.ticketUrl as string;
 	const useTeam = msg.useTeam as boolean | undefined;
 	const additionalPrompt = msg.additionalPrompt as string | undefined;
-	const aiReviewMode = msg.aiReviewMode as boolean | undefined;
 
-	const result = launchAgentOnTicket(agentId, ticketId, ticketName, ticketUrl, ctx, { useTeam, additionalPrompt, aiReviewMode });
+	const result = launchAgentOnTicket(agentId, ticketId, ticketName, ticketUrl, ctx, { useTeam, additionalPrompt });
 	if (!result.success) {
-		console.log(`[Standalone] Failed to launch agent for ClickUp task ${ticketId}: ${result.error}`);
-		ctx.broadcastSink.postMessage({ type: 'clickupError', error: result.error || 'Unknown error' });
+		ctx.broadcastSink.postMessage({ type: 'clickupStartWorkError', error: result.error });
 	}
 }
 
 // ── Configure ────────────────────────────────────────────────
 
 export function handleClickupConfigure(msg: Record<string, unknown>, ctx: ServerContext): void {
-	const rawListId = msg.listId;
-	const rawApiToken = msg.apiToken;
+	const settings = (readJson(SETTINGS_FILE) ?? {}) as { apiToken?: string; listId?: string };
 
-	if (typeof rawListId !== 'string' || rawListId.trim().length === 0) {
-		ctx.broadcastSink.postMessage({ type: 'clickupError', error: 'Invalid ClickUp configuration: listId must be a non-empty string.' });
+	const apiToken = msg.apiToken as string | undefined;
+	const listId = msg.listId as string | undefined;
+
+	if (apiToken !== undefined) settings.apiToken = apiToken;
+	if (listId !== undefined) settings.listId = listId;
+
+	writeJson(SETTINGS_FILE, settings);
+
+	if (!settings.apiToken || !settings.listId) {
+		ctx.clickupConfig = null;
+		ctx.broadcastSink.postMessage({ type: 'clickupConfigured', configured: false });
 		return;
 	}
 
-	const incomingApiToken = typeof rawApiToken === 'string' ? rawApiToken.trim() : '';
-	const effectiveApiToken = incomingApiToken || ctx.clickupConfig?.apiToken || '';
-
-	if (!effectiveApiToken) {
-		ctx.broadcastSink.postMessage({ type: 'clickupError', error: 'Invalid ClickUp configuration: apiToken must be a non-empty string.' });
-		return;
-	}
-
-	const settings = readJson(SETTINGS_FILE) ?? {};
-	const config: ClickUpConfig = {
-		apiToken: effectiveApiToken,
-		listId: rawListId.trim(),
-	};
-	writeJson(SETTINGS_FILE, { ...settings, clickup: config });
+	const config: ClickUpConfig = { apiToken: settings.apiToken, listId: settings.listId };
 	ctx.clickupConfig = config;
 	ctx.broadcastSink.postMessage({ type: 'clickupConfigured', configured: true, listId: config.listId });
 
-	// Start polling if not already running
 	startClickupPolling(ctx);
-
-	// Immediately fetch
 	handleClickupRefresh(ctx).catch(() => {});
 }
 
@@ -449,96 +421,50 @@ export function handleDarrylHandleTicket(msg: Record<string, unknown>, ctx: Serv
 	const isAiReviewMode = ticketStatus === 'ai review';
 	const { persistentAgents } = ctx;
 
-	// Find or create Darryl
-	let darryl = persistentAgents.find(p => p.name === 'Darryl');
-	if (!darryl) {
-		darryl = {
-			id: generateAgentId(),
-			name: 'Darryl',
-			roleShort: DARRYL_ROLE_SHORT,
-			roleFull: 'The Foreman. Assesses tickets, decides which agents should work on them, and launches them.',
-			workspacePath: DARRYL_WORKSPACE, // Store with ~ prefix for portability
-		};
-		persistentAgents.push(darryl);
-		savePersistentAgents(persistentAgents);
-	}
+	const darryl = findOrCreatePersistentAgent(
+		persistentAgents,
+		'Darryl',
+		DARRYL_ROLE_SHORT,
+		'The Foreman. Assesses tickets, decides which agents should work on them, and launches them.',
+		DARRYL_WORKSPACE,
+	);
 
-	// If Darryl already has an active session, reuse it
 	if (darryl.currentSessionId) {
 		console.log(`[Standalone] Darryl already has an active session ${darryl.currentSessionId}, skipping relaunch for ticket ${ticketId}`);
 		return;
 	}
 
-	// Build roster
-	const knownProjects = loadKnownProjects();
-	const roster: RosterEntry[] = persistentAgents
-		.filter(p => p.id !== darryl!.id)
-		.map(p => {
-			const projName = path.basename(p.workspacePath);
-			const proj = knownProjects.find(k => k.name === projName);
-			return {
-				id: p.id,
-				name: p.name,
-				roleShort: p.roleShort,
-				roleFull: p.roleFull,
-				workspacePath: p.workspacePath,
-				projectName: proj?.name ?? projName,
-				projectDescription: proj?.description,
-				isOnline: !!p.currentSessionId,
-			};
-		});
-
-	// Build prompts
+	const roster = buildRoster(persistentAgents, darryl.id);
 	const systemPrompt = buildDarrylSystemPrompt(darryl, roster, SERVER_PORT);
+	const initialTask = (isAiReviewMode
+		? buildDarrylAiReviewInitialTask(ticketId, ticketName, ticketUrl)
+		: buildDarrylStandardInitialTask(ticketId, ticketName, ticketUrl)
+	) + EXIT_REMINDER;
 
-	let initialTask = isAiReviewMode
-		? `Ticket ${ticketId}: "${ticketName}" is in **AI Review**. Dispatch an agent to process Copilot's feedback.
-URL: ${ticketUrl}
-
-## Steps
-1. \`clickup_get_task\` + \`clickup_get_task_comments\` once. Find: the original implementer (comment "Assigned to worker: <name>"), the project workspace, how many prior AI Review rounds (count "ai review" → "in progress" cycles).
-2. Pick an agent: prefer the original implementer (best context). Fallback = free agent in same workspace.
-3. Dispatch with \`aiReviewMode:true\` and a short Brief summarizing what Copilot flagged:
-\`curl -X POST http://localhost:${SERVER_PORT}/api/launch-agent -d '{"agentId":"...","ticketId":"${ticketId}","ticketName":"${ticketName}","ticketUrl":"${ticketUrl}","aiReviewMode":true,"additionalPrompt":"<Brief>"}'\`
-4. Comment on the ticket naming who you reassigned.
-
-Rules: do NOT change the ticket status yourself (the reassigned agent will). 3+ prior rounds → tell them in the Brief to be conservative and forward to "qa test" unless there's a real bug.`
-		: `Ticket ${ticketId}: "${ticketName}" (${ticketUrl}).
-
-## Steps
-1. \`clickup_get_task\` + \`clickup_get_task_comments\` once.
-2. Is the ticket complete enough to dispatch?
-   - **No** → comment with specific questions, unassign yourself, assign "${DARRYL_ESCALATION_USERNAME}", move ticket to "to do". Stop.
-   - **Yes** → pick the right free agent from your roster, then dispatch them with a Brief:
-     \`curl -X POST http://localhost:${SERVER_PORT}/api/launch-agent -d '{"agentId":"...","ticketId":"${ticketId}","ticketName":"${ticketName}","ticketUrl":"${ticketUrl}","additionalPrompt":"<Brief>","useTeam":<bool>}'\`
-3. Move the ticket to "in progress" yourself ONLY if dispatch succeeded. Otherwise leave it.
-
-The Brief should summarize the ticket in 2–6 bullets so the worker doesn't re-read everything. Use the template from your system prompt.`;
-
-	initialTask += EXIT_REMINDER;
-
-	// Launch Darryl
-	const newSessionId = crypto.randomUUID();
-	darryl.currentSessionId = newSessionId;
-	savePersistentAgents(persistentAgents);
-	ensureAgentMemory(darryl.id);
-
-	const cwd = expandHome(darryl.workspacePath || '~');
-	let mempalaceHost: string | undefined;
-	if (ctx.mempalaceServerUrl) {
-		try {
-			mempalaceHost = new URL(ctx.mempalaceServerUrl).hostname;
-		} catch {
-			mempalaceHost = undefined;
-		}
-	}
-	const mcpConfigPath = ensureMempalaceMcpConfig(mempalaceHost);
-	if (!launchAgentSession(newSessionId, cwd, systemPrompt, initialTask, { mcpConfigPath, extraFlags: ['--permission-mode', 'auto'] })) {
+	const result = launchPersistentAgentSession(
+		darryl,
+		systemPrompt,
+		initialTask,
+		{ ticketId, ticketName, ticketUrl },
+		ctx,
+		persistentAgents,
+	);
+	if (!result.success) {
 		console.log(`[Standalone] Failed to launch Darryl for ticket ${ticketId}`);
 	}
 }
 
 // ── Jan (Art Director) orchestration ────────────────────────
+
+function ensureJan(persistentAgents: PersistentAgent[]): PersistentAgent {
+	return findOrCreatePersistentAgent(
+		persistentAgents,
+		'Jan',
+		JAN_ROLE_SHORT,
+		'The Art Director. Receives design briefings, delegates to PM and designers, reviews output, and maintains design quality standards.',
+		JAN_WORKSPACE,
+	);
+}
 
 export function handleJanDesignBriefing(msg: Record<string, unknown>, ctx: ServerContext): void {
 	const ticketId = msg.ticketId as string;
@@ -547,232 +473,112 @@ export function handleJanDesignBriefing(msg: Record<string, unknown>, ctx: Serve
 	const ticketStatus = (msg.ticketStatus as string | undefined) ?? 'to do';
 	const { persistentAgents } = ctx;
 
-	// Find or create Jan
-	let jan = persistentAgents.find(p => p.name === 'Jan');
-	if (!jan) {
-		jan = {
-			id: generateAgentId(),
-			name: 'Jan',
-			roleShort: JAN_ROLE_SHORT,
-			roleFull: 'The Art Director. Receives design briefings, delegates to PM and designers, reviews output, and maintains design quality standards.',
-			workspacePath: JAN_WORKSPACE,
-		};
-		persistentAgents.push(jan);
-		savePersistentAgents(persistentAgents);
-	}
-
-	// If Jan already has an active session, skip relaunch
+	const jan = ensureJan(persistentAgents);
 	if (jan.currentSessionId) {
 		console.log(`[Standalone] Jan already has an active session ${jan.currentSessionId}, skipping relaunch for ticket ${ticketId}`);
 		return;
 	}
 
-	// Build roster (excluding Jan)
-	const knownProjects = loadKnownProjects();
-	const roster: RosterEntry[] = persistentAgents
-		.filter(p => p.id !== jan!.id)
-		.map(p => {
-			const projName = path.basename(p.workspacePath);
-			const proj = knownProjects.find(k => k.name === projName);
-			return {
-				id: p.id,
-				name: p.name,
-				roleShort: p.roleShort,
-				roleFull: p.roleFull,
-				workspacePath: p.workspacePath,
-				projectName: proj?.name ?? projName,
-				projectDescription: proj?.description,
-				isOnline: !!p.currentSessionId,
-			};
-		});
-
-	// Build prompts
+	const roster = buildRoster(persistentAgents, jan.id);
 	const systemPrompt = buildJanSystemPrompt(jan, roster, SERVER_PORT);
+	const initialTask = (ticketStatus === 'to refine'
+		? buildJanRefineInitialTask(ticketId, ticketName, ticketUrl)
+		: buildJanSingleTodoInitialTask(ticketId, ticketName, ticketUrl)
+	) + EXIT_REMINDER;
 
-	// Build initial task based on ticket status — two distinct modes
-	const isRefineMode = ticketStatus === 'to refine';
-
-	let initialTask = isRefineMode
-		? `Ticket ${ticketId}: "${ticketName}" (${ticketUrl}) — status **"to refine"** → Phase 1 UX Exploration.
-
-## Steps
-1. \`clickup_get_task\` + \`clickup_get_task_comments\` once. If the brief is unclear, comment with questions and leave the status as "to refine". Stop.
-2. Move ticket to "in progress". Capture: the parent list id, the project workspace (e.g. \`~/Projects/brightmind\`).
-3. **Write 5 UX briefing sub-tickets** (follow the "UX briefing creation" section of your system prompt — one direction per sub-ticket, FULL scope each, different axes).
-4. **Dispatch one designer per sub-ticket** in quick succession (fleet runs them in parallel). For EACH sub-ticket:
-   \`curl -X POST http://localhost:${SERVER_PORT}/api/launch-designer -d '{"workspacePath":"<project>","ticketId":"<sub-id>","ticketName":"UX Direction N: ...","ticketUrl":"<sub-url>","additionalPrompt":"<Brief>"}'\`
-   The Brief (template in your system prompt) tells the designer what to build without needing to re-read everything.
-5. Only \`success:true\` counts as dispatched. On \`success:false\`, leave sub-ticket status alone, wait ~60s, retry.
-6. Poll ticket statuses instead of blocking. When all 5 are in "qa test", review them and comment with art-direction feedback.`
-		: `Ticket ${ticketId}: "${ticketName}" (${ticketUrl}) — status **"to do"** → Phase 2 Visual Design.
-
-## Steps
-1. \`clickup_get_task\` + \`clickup_get_task_comments\` once. Try to find an approved UX direction (a sub-ticket tagged \`UX-prototype-briefing\`, or a Figma node URL posted as a comment, or an explicit "approved UX:" line).
-   - **If you find approved UX** → your Brief cites that Figma node URL + any DS notes.
-   - **If there is NO UX sub-ticket and NO UX Figma URL in the comments** → treat this as a greenfield visual task. Do NOT go hunting for UX, do NOT stall, do NOT ask questions. Write a Brief from the ticket description alone and dispatch. Mention in the Brief that there is no prior UX so the designer knows they're defining the layout themselves.
-2. Dispatch ONE Visual Designer with the Brief:
-   \`curl -X POST http://localhost:${SERVER_PORT}/api/launch-visual-designer -d '{"workspacePath":"<project>","ticketId":"${ticketId}","ticketName":"${ticketName}","ticketUrl":"${ticketUrl}","additionalPrompt":"<Brief>"}'\`
-   Brief template is in your system prompt — fill what you have, flag what's missing.
-3. Only \`success:true\` counts. On \`success:false\`, leave ticket alone, wait ~60s, retry.
-4. ${AI_REVIEW_AUTO_ESCALATE
-	? 'That\'s it for you — Visual QA AI Review runs automatically when the designer finishes. PASS → "qa test", FAIL → revision auto-pickup.'
-	: 'That\'s it for you — the designer will move the ticket to "qa test" when finished, and a human reviews from there.'}`;
-
-	initialTask += EXIT_REMINDER;
-
-	// Launch Jan
-	const newSessionId = crypto.randomUUID();
-	jan.currentSessionId = newSessionId;
-	jan.currentTicketId = ticketId;
-	jan.currentTicketName = ticketName;
-	jan.currentTicketUrl = ticketUrl;
-	savePersistentAgents(persistentAgents);
-	ensureAgentMemory(jan.id);
-
-	const cwd = expandHome(jan.workspacePath || '~');
-	let mempalaceHost: string | undefined;
-	if (ctx.mempalaceServerUrl) {
-		try {
-			mempalaceHost = new URL(ctx.mempalaceServerUrl).hostname;
-		} catch {
-			mempalaceHost = undefined;
-		}
-	}
-	const mcpConfigPath = ensureMempalaceMcpConfig(mempalaceHost);
-	if (!launchAgentSession(newSessionId, cwd, systemPrompt, initialTask, { mcpConfigPath, extraFlags: ['--permission-mode', 'auto'] })) {
+	const result = launchPersistentAgentSession(
+		jan,
+		systemPrompt,
+		initialTask,
+		{ ticketId, ticketName, ticketUrl },
+		ctx,
+		persistentAgents,
+	);
+	if (!result.success) {
 		console.log(`[Standalone] Failed to launch Jan for ticket ${ticketId}`);
 	}
 }
 
 /**
- * Launch Jan with a batch of tickets — up to N "to do" (each dispatches one
- * Visual Designer) plus up to 1 "ai review" (dispatches Visual QA). All
- * dispatches fire from the same Jan session so she doesn't need to be
- * relaunched per ticket.
+ * Launch Jan with a batch of tickets. She processes them sequentially in one
+ * session, firing a curl per ticket; the dispatched agents then run in parallel
+ * on their own machines.
  */
 export function handleJanBatchDispatch(
-	batch: Array<{ id: string; name: string; url: string; status: 'to do' | 'ai review' }>,
+	batch: Array<TicketInfo & { status: 'to do' | 'ai review' }>,
 	ctx: ServerContext,
 ): void {
 	if (batch.length === 0) return;
 	const { persistentAgents } = ctx;
 
-	// Find or create Jan
-	let jan = persistentAgents.find(p => p.name === 'Jan');
-	if (!jan) {
-		jan = {
-			id: generateAgentId(),
-			name: 'Jan',
-			roleShort: JAN_ROLE_SHORT,
-			roleFull: 'The Art Director. Receives design briefings, delegates to PM and designers, reviews output, and maintains design quality standards.',
-			workspacePath: JAN_WORKSPACE,
-		};
-		persistentAgents.push(jan);
-		savePersistentAgents(persistentAgents);
-	}
-
+	const jan = ensureJan(persistentAgents);
 	if (jan.currentSessionId) {
 		console.log(`[Standalone] Jan already has an active session ${jan.currentSessionId}, skipping batch dispatch`);
 		return;
 	}
 
-	// Build roster (excluding Jan)
-	const knownProjects = loadKnownProjects();
-	const roster: RosterEntry[] = persistentAgents
-		.filter(p => p.id !== jan!.id)
-		.map(p => {
-			const projName = path.basename(p.workspacePath);
-			const proj = knownProjects.find(k => k.name === projName);
-			return {
-				id: p.id,
-				name: p.name,
-				roleShort: p.roleShort,
-				roleFull: p.roleFull,
-				workspacePath: p.workspacePath,
-				projectName: proj?.name ?? projName,
-				projectDescription: proj?.description,
-				isOnline: !!p.currentSessionId,
-			};
-		});
-
+	const roster = buildRoster(persistentAgents, jan.id);
 	const systemPrompt = buildJanSystemPrompt(jan, roster, SERVER_PORT);
+	// Map to the shape buildJanBatchInitialTask expects.
+	const initialTask = buildJanBatchInitialTask(
+		batch.map(t => ({ id: t.ticketId, name: t.ticketName, url: t.ticketUrl, status: t.status })),
+	) + EXIT_REMINDER;
 
-	// Build the multi-ticket initial task. Jan processes each in sequence but
-	// the dispatched agents all run in parallel once fired.
-	const ticketLines = batch.map((t, i) =>
-		`${i + 1}. **[${t.status.toUpperCase()}]** ${t.id}: "${t.name}" (${t.url})`,
-	).join('\n');
-
-	const initialTask = `You have ${batch.length} ticket${batch.length === 1 ? '' : 's'} to dispatch. Work through them in order — do NOT stop after the first one.
-
-${ticketLines}
-
-## For each ticket above:
-
-### If status is **"to do"** (Phase 2 Visual Design)
-1. \`clickup_get_task\` + \`clickup_get_task_comments\` once. Find an approved UX direction (sub-ticket tagged \`UX-prototype-briefing\`, a Figma node URL in comments, or an explicit "approved UX:" line).
-   - If found → cite that Figma node URL + any DS notes in your Brief.
-   - If none → greenfield. Do NOT stall or ask questions. Write a Brief from the ticket description alone and note the missing UX.
-2. Dispatch ONE Visual Designer:
-   \`curl -X POST http://localhost:${SERVER_PORT}/api/launch-visual-designer -d '{"workspacePath":"~/Projects/<project>","ticketId":"<id>","ticketName":"<name>","ticketUrl":"<url>","additionalPrompt":"<Brief>"}'\`
-3. Only \`success:true\` counts. On \`success:false\`, skip this one and move on — it'll be retried on the next pickup cycle.
-
-### If status is **"ai review"** — DELEGATE ONLY. Your sole action is the curl call.
-1. Fire the dispatch:
-   \`curl -X POST http://localhost:${SERVER_PORT}/api/launch-visual-qa -d '{"ticketId":"<id>","ticketName":"<name>","ticketUrl":"<url>"}'\`
-2. FORBIDDEN in this mode: \`clickup_get_task\`, \`clickup_get_task_comments\`, any \`figma_*\` tool, any \`clickup_update_task\` (status), any comment. The Visual Quality Reviewer agent is the one that reads the ticket, opens Figma, counts FRAME vs INSTANCE nodes, writes the verdict, and moves the ticket to \`in progress\` (on start) then \`qa test\`/\`to do\` (on finish). You MUST NOT do any of these steps.
-3. Only \`success:true\` counts. On \`success:false\`, skip and move on to the next ticket in the batch.
-
-## When you're done
-After dispatching (or skipping) every ticket above, you are DONE. Do not wait for designers or QA to finish — they run in parallel on their own timelines. ${EXIT_REMINDER.trim()}`;
-
-	// Launch Jan. Track only the first ticket on the persistent-agent record
-	// (used for UI labels); the rest are recorded in the initial task.
+	// Track only the first ticket on the persistent-agent record (used for UI
+	// labels); the rest are listed in the initial task.
 	const first = batch[0];
-	const newSessionId = crypto.randomUUID();
-	jan.currentSessionId = newSessionId;
-	jan.currentTicketId = first.id;
-	jan.currentTicketName = first.name;
-	jan.currentTicketUrl = first.url;
-	savePersistentAgents(persistentAgents);
-	ensureAgentMemory(jan.id);
-
-	const cwd = expandHome(jan.workspacePath || '~');
-	let mempalaceHost: string | undefined;
-	if (ctx.mempalaceServerUrl) {
-		try {
-			mempalaceHost = new URL(ctx.mempalaceServerUrl).hostname;
-		} catch {
-			mempalaceHost = undefined;
-		}
-	}
-	const mcpConfigPath = ensureMempalaceMcpConfig(mempalaceHost);
-	if (!launchAgentSession(newSessionId, cwd, systemPrompt, initialTask, { mcpConfigPath, extraFlags: ['--permission-mode', 'auto'] })) {
-		console.log(`[Standalone] Failed to launch Jan batch of ${batch.length}`);
-		jan.currentSessionId = undefined;
-		savePersistentAgents(persistentAgents);
-	}
-}
-
-// ── Designer launch (sequential, one at a time per device) ─────────────────
-// Fleet semantics: the Figma lock is PER DEVICE. Jan can have one designer
-// running on the hub AND one on each remote worker laptop simultaneously.
-
-// The Figma lock covers every agent that touches the local Figma instance:
-// UX Designer, Visual Designer, and Visual QA (which evaluates designer output
-// in the same Figma). At most one of these roles may hold the lock on a given
-// machine at a time. This function returns the agent currently holding the
-// lock, or undefined if free.
-function findFigmaLockHolder(persistentAgents: PersistentAgent[]): PersistentAgent | undefined {
-	return persistentAgents.find(
-		p => (p.roleShort === DESIGNER_ROLE_SHORT
-			|| p.roleShort === VISUAL_DESIGNER_ROLE_SHORT
-			|| p.roleShort === VISUAL_QA_ROLE_SHORT)
-			&& p.currentSessionId,
+	const result = launchPersistentAgentSession(
+		jan,
+		systemPrompt,
+		initialTask,
+		first,
+		ctx,
+		persistentAgents,
 	);
+	if (!result.success) {
+		console.log(`[Standalone] Failed to launch Jan batch of ${batch.length}`);
+	}
 }
 
-async function dispatchDesignerToFleet(
+// ── Jan review of designer output ───────────────────────────
+
+export function handleJanReviewDesigner(
+	completedTicket: { ticketId: string; ticketName: string; ticketUrl: string; designerName: string; workspacePath: string },
+	ctx: ServerContext,
+): void {
+	const { ticketId, ticketName, ticketUrl, designerName } = completedTicket;
+	const { persistentAgents } = ctx;
+
+	const jan = ensureJan(persistentAgents);
+	if (jan.currentSessionId) {
+		console.log(`[Standalone] Jan already has an active session ${jan.currentSessionId}, skipping review for ticket ${ticketId}`);
+		return;
+	}
+
+	const roster = buildRoster(persistentAgents, jan.id);
+	const systemPrompt = buildJanSystemPrompt(jan, roster, SERVER_PORT);
+	const initialTask = buildJanReviewPrompt({ ticketId, ticketName, ticketUrl, designerName }) + EXIT_REMINDER;
+
+	const result = launchPersistentAgentSession(
+		jan,
+		systemPrompt,
+		initialTask,
+		{ ticketId, ticketName, ticketUrl },
+		ctx,
+		persistentAgents,
+		{ withPeers: true },
+	);
+	if (!result.success) {
+		console.log(`[Standalone] Failed to launch Jan for review of ticket ${ticketId}`);
+	}
+}
+
+// ── Fleet dispatch (hub-only) ───────────────────────────────
+// Figma lock is PER DEVICE. Jan can have one designer or QA running on the hub
+// AND one on each remote worker simultaneously — this dispatcher cascades a
+// dispatch request to a free remote worker when the local Figma is busy.
+
+async function dispatchToFleet(
 	msg: Record<string, unknown>,
 	ctx: ServerContext,
 	rpcType: 'launchDesigner' | 'launchVisualDesigner' | 'launchVisualQa',
@@ -787,7 +593,7 @@ async function dispatchDesignerToFleet(
 			: 'Local Figma busy and no remote designer workers connected — wait and retry.' };
 	}
 
-	// Ship agent memories so the designer on the worker has up-to-date context
+	// Ship agent memories so the agent spawned on the worker has up-to-date context
 	const agentMemories = collectAgentMemories(ctx.persistentAgents);
 	const rpcPayload = { ...msg, agentMemories };
 
@@ -812,24 +618,17 @@ async function dispatchDesignerToFleet(
 		: `All ${failures.length} remote designer worker(s) busy or unreachable (${failures.join('; ')}).` };
 }
 
-
+// ── UX Designer ─────────────────────────────────────────────
 
 /**
- * Launch a single designer agent on a briefing ticket.
- * Designers run in the specified project workspace directory (not centralized).
- *
- * On the hub: tries to launch locally first (one designer per machine — shared Figma).
- * If the local Figma is busy, cascades to any idle remote worker that advertises the
- * 'designer' role. Returns `{ success, worker }` so callers (Jan, humans) can confirm
- * that the job actually started on some device before assuming progress.
- *
- * On a worker: launches locally (this path is triggered by a hub RPC).
+ * Launch a UX designer on a briefing ticket. Tries the local Figma slot first,
+ * cascades to any idle remote designer worker when busy.
  */
 export async function handleLaunchDesigner(msg: Record<string, unknown>, ctx: ServerContext): Promise<{ success: boolean; error?: string; worker?: string }> {
 	const local = tryLaunchDesignerLocal(msg, ctx);
 	if (local.success) return { ...local, worker: ctx.workerIdentity?.name };
 	if (!ctx.isWorkerMode && local.figmaBusy) {
-		return dispatchDesignerToFleet(msg, ctx, 'launchDesigner', local.error);
+		return dispatchToFleet(msg, ctx, 'launchDesigner', local.error);
 	}
 	return local;
 }
@@ -842,104 +641,63 @@ function tryLaunchDesignerLocal(msg: Record<string, unknown>, ctx: ServerContext
 	const revisionMode = msg.revisionMode as boolean | undefined;
 	const brief = typeof msg.additionalPrompt === 'string' ? msg.additionalPrompt.trim() : '';
 
-	if (!workspacePath) {
-		return { success: false, error: 'Missing required field: workspacePath' };
-	}
+	if (!workspacePath) return { success: false, error: 'Missing required field: workspacePath' };
 	if (!ticketId || !ticketName || !ticketUrl) {
 		return { success: false, error: 'Missing required fields: ticketId, ticketName, ticketUrl' };
 	}
 
 	const { persistentAgents } = ctx;
 
-	// Figma lock: only one designer/QA can run at a time on THIS machine
 	const activeFigma = findFigmaLockHolder(persistentAgents);
 	if (activeFigma) {
 		return { success: false, figmaBusy: true, error: `Local Figma busy: "${activeFigma.name}" (${activeFigma.roleShort}) is already running.` };
 	}
 
-	// Resolve project description
 	const knownProjects = loadKnownProjects();
 	const projName = path.basename(workspacePath);
 	const project = knownProjects.find(k => k.name === projName);
 	const projectDescription = project?.description;
 
-	// Pick a free worker from the UX team (any team member, not workspace-specific)
 	const designer = persistentAgents.find(
 		p => p.roleShort === DESIGNER_ROLE_SHORT
 			&& p.teamId === TEAM_UX_ID
 			&& !p.currentSessionId
 			&& !p.retired,
 	);
+	if (!designer) return { success: false, error: 'No free UX Designers available — all team members are busy.' };
 
-	if (!designer) {
-		return { success: false, error: 'No free UX Designers available — all team members are busy.' };
-	}
-
-	// Reassign workspace to the target project for this session
 	designer.workspacePath = workspacePath;
-
 	const systemPrompt = buildDesignerSystemPrompt(designer, projectDescription);
 
 	const briefBlock = brief
 		? `${brief}\n\n`
 		: `⚠ No Brief was passed by Jan — you will need to read the ticket description yourself.\n\n`;
-	const revisionLine = revisionMode
-		? 'REVISION: read the LATEST Jan review comment on the ticket for required changes. Preserve what was approved.\n\n'
-		: '';
 
-	const initialTask = `Ticket ${ticketId}: "${ticketName}" (${ticketUrl})
+	const initialTask = buildUxDesignerInitialTask(ticketId, ticketName, ticketUrl, briefBlock, !!revisionMode) + EXIT_REMINDER;
 
-${revisionLine}${briefBlock}## Steps
-1. Move ticket to "in progress".
-2. Open a new Figma page: \`${ticketId} — ${ticketName}\`.
-3. Design based on the Brief above. Only pull the sub-ticket if you need a detail the Brief doesn't cover.
-4. Screenshot + post Figma page URL as a ClickUp comment.
-5. Move ticket to "qa test".${EXIT_REMINDER}`;
-
-	// Launch the designer
-	const newSessionId = crypto.randomUUID();
-	designer.currentSessionId = newSessionId;
-	designer.currentTicketId = ticketId;
-	designer.currentTicketName = ticketName;
-	designer.currentTicketUrl = ticketUrl;
-	ensureAgentMemory(designer.id);
-
-	let mempalaceHost: string | undefined;
-	if (ctx.mempalaceServerUrl) {
-		try {
-			mempalaceHost = new URL(ctx.mempalaceServerUrl).hostname;
-		} catch {
-			mempalaceHost = undefined;
-		}
+	const result = launchPersistentAgentSession(
+		designer,
+		systemPrompt,
+		initialTask,
+		{ ticketId, ticketName, ticketUrl },
+		ctx,
+		persistentAgents,
+	);
+	if (result.success) {
+		console.log(`[Standalone] Launched designer "${designer.name}" for ticket ${ticketId}`);
+	} else {
+		console.log(`[Standalone] Failed to launch designer "${designer.name}" for ticket ${ticketId}`);
 	}
-
-	const cwd = expandHome(designer.workspacePath || '~');
-	const mcpConfigPath = ensureMempalaceMcpConfig(mempalaceHost);
-	if (launchAgentSession(newSessionId, cwd, systemPrompt, initialTask, { mcpConfigPath, extraFlags: ['--permission-mode', 'auto'] })) {
-		savePersistentAgents(persistentAgents);
-		console.log(`[Standalone] Launched designer "${designer.name}" for ticket ${ticketId} in ${cwd}`);
-		return { success: true };
-	}
-
-	designer.currentSessionId = undefined;
-	savePersistentAgents(persistentAgents);
-	console.log(`[Standalone] Failed to launch designer "${designer.name}" for ticket ${ticketId}`);
-	return { success: false, error: 'Failed to launch designer session' };
+	return result;
 }
 
-// ── Visual Designer (Phase 2) ─────────────────────────────
+// ── Visual Designer (Phase 2) ───────────────────────────────
 
-/**
- * Launch a visual designer agent on an approved ticket for polished implementation.
- * Similar to handleLaunchDesigner but uses the Visual Designer role and system prompt.
- * On the hub: launches locally if Figma is free, else cascades to any idle 'designer'
- * worker on the fleet so Jan can have a visual designer running on each device.
- */
 export async function handleLaunchVisualDesigner(msg: Record<string, unknown>, ctx: ServerContext): Promise<{ success: boolean; error?: string; worker?: string }> {
 	const local = tryLaunchVisualDesignerLocal(msg, ctx);
 	if (local.success) return { ...local, worker: ctx.workerIdentity?.name };
 	if (!ctx.isWorkerMode && local.figmaBusy) {
-		return dispatchDesignerToFleet(msg, ctx, 'launchVisualDesigner', local.error);
+		return dispatchToFleet(msg, ctx, 'launchVisualDesigner', local.error);
 	}
 	return local;
 }
@@ -952,169 +710,198 @@ function tryLaunchVisualDesignerLocal(msg: Record<string, unknown>, ctx: ServerC
 	const revisionMode = msg.revisionMode as boolean | undefined;
 	const brief = typeof msg.additionalPrompt === 'string' ? msg.additionalPrompt.trim() : '';
 
-	if (!workspacePath) {
-		return { success: false, error: 'Missing required field: workspacePath' };
-	}
+	if (!workspacePath) return { success: false, error: 'Missing required field: workspacePath' };
 	if (!ticketId || !ticketName || !ticketUrl) {
 		return { success: false, error: 'Missing required fields: ticketId, ticketName, ticketUrl' };
 	}
 
 	const { persistentAgents } = ctx;
 
-	// Figma lock: only one designer/QA can run at a time on THIS machine
 	const activeFigma = findFigmaLockHolder(persistentAgents);
 	if (activeFigma) {
 		return { success: false, figmaBusy: true, error: `Local Figma busy: "${activeFigma.name}" (${activeFigma.roleShort}) is already running.` };
 	}
 
-	// Resolve project description
 	const knownProjects = loadKnownProjects();
 	const projName = path.basename(workspacePath);
 	const project = knownProjects.find(k => k.name === projName);
 	const projectDescription = project?.description;
 
-	// Pick a free worker from the Visual team
 	const designer = persistentAgents.find(
 		p => p.roleShort === VISUAL_DESIGNER_ROLE_SHORT
 			&& p.teamId === TEAM_VISUAL_ID
 			&& !p.currentSessionId
 			&& !p.retired,
 	);
+	if (!designer) return { success: false, error: 'No free Visual Designers available — all team members are busy.' };
 
-	if (!designer) {
-		return { success: false, error: 'No free Visual Designers available — all team members are busy.' };
-	}
-
-	// Reassign workspace to the target project for this session
 	designer.workspacePath = workspacePath;
-
 	const designConfig = getJanDesignConfig();
 	const systemPrompt = buildVisualDesignerSystemPrompt(designer, projectDescription, designConfig);
 
 	const briefBlock = brief
 		? `${brief}\n\n`
 		: `⚠ No Brief was passed by Jan — look at the ticket to find the approved UX Figma node.\n\n`;
-	const revisionLine = revisionMode
-		? 'REVISION: read the LATEST Jan/QA review comment on the ticket and address it. Preserve what was approved.\n\n'
-		: '';
 
-	const initialTask = `Ticket ${ticketId}: "${ticketName}" (${ticketUrl})
+	const initialTask = buildVisualDesignerInitialTask(ticketId, ticketName, ticketUrl, briefBlock, !!revisionMode) + EXIT_REMINDER;
 
-${revisionLine}${briefBlock}## Steps
-1. Move ticket to "in progress".
-2. Run the Component discipline protocol from your system prompt: family scan (A) + shopping list (B) from the approved UX Figma node in the Brief. Keep the summary short — do NOT dump the whole library into context.
-3. Create the page \`${ticketId} — Visual Design — {short descriptor}\` — the descriptor is 2–4 words you pick to describe what's on the page (e.g. \`Dashboard Overview\`, \`Onboarding Flow\`), so humans can tell pages apart. If the shopping list includes candidates, also create \`__Candidates — ${ticketId}\` in the same file.
-4. Build the screens using just-in-time lookup (C). New components go on the candidates page, NOT the canonical DS.
-5. Final audit (F). Screenshot + post Figma page URL as a ClickUp comment (include a "Candidates for promotion" list if any, and note any checklist items you flag N/A).
-6. ${AI_REVIEW_AUTO_ESCALATE ? 'Move ticket to "ai review" — the Visual Quality Reviewer will auto-pick it up.' : 'Move ticket to "qa test". A human reviews from there.'}${EXIT_REMINDER}`;
-
-	// Launch the visual designer
-	const newSessionId = crypto.randomUUID();
-	designer.currentSessionId = newSessionId;
-	designer.currentTicketId = ticketId;
-	designer.currentTicketName = ticketName;
-	designer.currentTicketUrl = ticketUrl;
-	ensureAgentMemory(designer.id);
-
-	let mempalaceHost: string | undefined;
-	if (ctx.mempalaceServerUrl) {
-		try {
-			mempalaceHost = new URL(ctx.mempalaceServerUrl).hostname;
-		} catch {
-			mempalaceHost = undefined;
-		}
+	const result = launchPersistentAgentSession(
+		designer,
+		systemPrompt,
+		initialTask,
+		{ ticketId, ticketName, ticketUrl },
+		ctx,
+		persistentAgents,
+	);
+	if (result.success) {
+		console.log(`[Standalone] Launched visual designer "${designer.name}" for ticket ${ticketId}`);
+	} else {
+		console.log(`[Standalone] Failed to launch visual designer "${designer.name}" for ticket ${ticketId}`);
 	}
-
-	const cwd = expandHome(designer.workspacePath || '~');
-	const mcpConfigPath = ensureMempalaceMcpConfig(mempalaceHost);
-	if (launchAgentSession(newSessionId, cwd, systemPrompt, initialTask, { mcpConfigPath, extraFlags: ['--permission-mode', 'auto'] })) {
-		savePersistentAgents(persistentAgents);
-		console.log(`[Standalone] Launched visual designer "${designer.name}" for ticket ${ticketId} in ${cwd}`);
-		return { success: true };
-	}
-
-	designer.currentSessionId = undefined;
-	savePersistentAgents(persistentAgents);
-	console.log(`[Standalone] Failed to launch visual designer "${designer.name}" for ticket ${ticketId}`);
-	return { success: false, error: 'Failed to launch visual designer session' };
+	return result;
 }
 
-// ── Jan review of designer output ───────────────────────────
+// ── Visual QA AI Review ─────────────────────────────────────
 
-export function handleJanReviewDesigner(
+/**
+ * Dispatch the Visual Quality Reviewer on an "ai review" ticket. Tries the
+ * local machine's Figma slot first, cascades to a free remote worker if busy.
+ */
+export async function handleVisualQaReview(
 	completedTicket: { ticketId: string; ticketName: string; ticketUrl: string; designerName: string; workspacePath: string },
 	ctx: ServerContext,
-): void {
+): Promise<{ success: boolean; error?: string; worker?: string }> {
+	const local = tryLaunchVisualQaLocal(completedTicket, ctx);
+	if (local.success) return { ...local, worker: ctx.workerIdentity?.name };
+	if (!ctx.isWorkerMode && local.figmaBusy) {
+		const msg: Record<string, unknown> = {
+			ticketId: completedTicket.ticketId,
+			ticketName: completedTicket.ticketName,
+			ticketUrl: completedTicket.ticketUrl,
+			designerName: completedTicket.designerName,
+			workspacePath: completedTicket.workspacePath,
+		};
+		return dispatchToFleet(msg, ctx, 'launchVisualQa', local.error);
+	}
+	return local;
+}
+
+function tryLaunchVisualQaLocal(
+	completedTicket: { ticketId: string; ticketName: string; ticketUrl: string; designerName: string; workspacePath: string },
+	ctx: ServerContext,
+): { success: boolean; error?: string; figmaBusy?: boolean } {
 	const { ticketId, ticketName, ticketUrl, designerName } = completedTicket;
 	const { persistentAgents } = ctx;
 
-	// Find or create Jan (same as handleJanDesignBriefing)
-	let jan = persistentAgents.find(p => p.name === 'Jan');
-	if (!jan) {
-		jan = {
-			id: generateAgentId(),
-			name: 'Jan',
-			roleShort: JAN_ROLE_SHORT,
-			roleFull: 'The Art Director. Receives design briefings, delegates to PM and designers, reviews output, and maintains design quality standards.',
-			workspacePath: JAN_WORKSPACE,
-		};
-		persistentAgents.push(jan);
-		savePersistentAgents(persistentAgents);
+	const activeFigma = findFigmaLockHolder(persistentAgents);
+	if (activeFigma) {
+		return { success: false, figmaBusy: true, error: `Local Figma busy: "${activeFigma.name}" (${activeFigma.roleShort}) is already running.` };
 	}
 
-	if (jan.currentSessionId) {
-		console.log(`[Standalone] Jan already has an active session ${jan.currentSessionId}, skipping review for ticket ${ticketId}`);
+	const qa = persistentAgents.find(
+		p => p.roleShort === VISUAL_QA_ROLE_SHORT && p.teamId === TEAM_VISUAL_ID,
+	);
+	if (!qa) return { success: false, error: 'No Visual QA agent seeded on this machine' };
+
+	const qaDesignConfig = getJanDesignConfig();
+	const systemPrompt = buildVisualQaSystemPrompt(qa, qaDesignConfig);
+	const initialTask = buildVisualQaInitialTask({ ticketId, ticketName, ticketUrl, designerName }) + EXIT_REMINDER;
+
+	const result = launchPersistentAgentSession(
+		qa,
+		systemPrompt,
+		initialTask,
+		{ ticketId, ticketName, ticketUrl },
+		ctx,
+		persistentAgents,
+		{ withPeers: true },
+	);
+	if (result.success) {
+		console.log(`[Standalone] Launched Visual QA "${qa.name}" for AI review of ticket ${ticketId}`);
+	}
+	return result;
+}
+
+/**
+ * Safety net: scan ClickUp for ai-review tickets assigned to Jan that nobody
+ * picked up (e.g. after a server restart). Jan's normal batch pickup handles
+ * these on every poll — this exists as a belt-and-braces catch.
+ */
+export function autoVisualQaPickup(ctx: ServerContext): void {
+	if (ctx.isWorkerMode) return;
+	if (!AI_REVIEW_PICKUP_ENABLED) return;
+
+	const qa = ctx.persistentAgents.find(
+		p => p.roleShort === VISUAL_QA_ROLE_SHORT && p.teamId === TEAM_VISUAL_ID,
+	);
+	if (!qa || qa.currentSessionId) return;
+
+	for (const group of ctx.clickupTickets) {
+		if (group.name.toLowerCase() !== 'ai review') continue;
+		// Only Jan's tickets — Darryl's ai review tickets go through autoDarrylPickup.
+		const ticket = group.tasks.find(t =>
+			t.assignees.some(a => a.username === JAN_CLICKUP_USERNAME),
+		);
+		if (!ticket) continue;
+		console.log(`[Standalone] Auto-pickup: Visual QA taking stranded ai-review ticket ${ticket.id}`);
+		handleVisualQaReview({
+			ticketId: ticket.id,
+			ticketName: ticket.name,
+			ticketUrl: ticket.url,
+			designerName: 'unknown',
+			workspacePath: qa.workspacePath,
+		}, ctx).catch(err => console.error('[Standalone] Visual QA pickup dispatch failed:', err));
 		return;
 	}
+}
 
-	// Build roster (excluding Jan)
-	const knownProjects = loadKnownProjects();
-	const roster: RosterEntry[] = persistentAgents
-		.filter(p => p.id !== jan!.id)
-		.map(p => {
-			const projName = path.basename(p.workspacePath);
-			const proj = knownProjects.find(k => k.name === projName);
-			return {
-				id: p.id,
-				name: p.name,
-				roleShort: p.roleShort,
-				roleFull: p.roleFull,
-				workspacePath: p.workspacePath,
-				projectName: proj?.name ?? projName,
-				projectDescription: proj?.description,
-				isOnline: !!p.currentSessionId,
-			};
-		});
+// ── Auto-revision pickup ────────────────────────────────────
 
-	const systemPrompt = buildJanSystemPrompt(jan, roster, SERVER_PORT);
-	const initialTask = buildJanReviewPrompt({ ticketId, ticketName, ticketUrl, designerName }) + EXIT_REMINDER;
+export function autoDesignerRevisionPickup(ctx: ServerContext): void {
+	if (ctx.isWorkerMode) return;
 
-	const newSessionId = crypto.randomUUID();
-	jan.currentSessionId = newSessionId;
-	jan.currentTicketId = ticketId;
-	jan.currentTicketName = ticketName;
-	jan.currentTicketUrl = ticketUrl;
-	savePersistentAgents(persistentAgents);
-	ensureAgentMemory(jan.id);
+	// Figma lock covers revision relaunches too.
+	const activeDesigner = ctx.persistentAgents.find(
+		p => (p.roleShort === DESIGNER_ROLE_SHORT || p.roleShort === VISUAL_DESIGNER_ROLE_SHORT) && p.currentSessionId,
+	);
+	if (activeDesigner) return;
 
-	const cwd = expandHome(jan.workspacePath || '~');
-	let mempalaceHost: string | undefined;
-	if (ctx.mempalaceServerUrl) {
-		try {
-			mempalaceHost = new URL(ctx.mempalaceServerUrl).hostname;
-		} catch {
-			mempalaceHost = undefined;
+	const revisionTickets: Array<{ id: string; name: string; url: string }> = [];
+	for (const group of ctx.clickupTickets) {
+		if (group.name.toLowerCase() !== 'revision needed') continue;
+		for (const task of group.tasks) {
+			revisionTickets.push({ id: task.id, name: task.name, url: task.url });
 		}
 	}
 
-	// Merge peers + mempalace MCP configs for review session
-	const peersMcpConfigPath = ensurePeersMcpConfig();
-	const mempalaceMcpConfigPath = ensureMempalaceMcpConfig(mempalaceHost);
-	const mcpConfigPath = mergeMcpConfigs(peersMcpConfigPath, mempalaceMcpConfigPath);
+	if (revisionTickets.length === 0) return;
 
-	if (!launchAgentSession(newSessionId, cwd, systemPrompt, initialTask, { mcpConfigPath, extraFlags: ['--permission-mode', 'auto'] })) {
-		console.log(`[Standalone] Failed to launch Jan for review of ticket ${ticketId}`);
+	const ticket = revisionTickets[0];
+	const previousDesigner = ctx.persistentAgents.find(
+		p => (p.roleShort === DESIGNER_ROLE_SHORT || p.roleShort === VISUAL_DESIGNER_ROLE_SHORT)
+			&& !p.currentSessionId
+			&& p.lastTicketId === ticket.id,
+	);
+	if (!previousDesigner) {
+		console.log(`[Standalone] No idle designer found for revision ticket ${ticket.id}`);
+		return;
 	}
+
+	const launchHandler = previousDesigner.roleShort === VISUAL_DESIGNER_ROLE_SHORT
+		? handleLaunchVisualDesigner
+		: handleLaunchDesigner;
+
+	console.log(`[Standalone] Auto-revision: relaunching ${previousDesigner.roleShort.toLowerCase()} "${previousDesigner.name}" for ticket ${ticket.id}`);
+	launchHandler(
+		{
+			workspacePath: previousDesigner.workspacePath,
+			ticketId: ticket.id,
+			ticketName: ticket.name,
+			ticketUrl: ticket.url,
+			revisionMode: true,
+		},
+		ctx,
+	);
 }
 
 // ── Worker-originated designer session-end hook ────────────
@@ -1139,10 +926,8 @@ export function handleDesignerSessionEnded(
 	const updatedMemory = msg.updatedMemory as string | undefined;
 	const agentId = msg.agentId as string | undefined;
 
-	// Free the remote worker slot
 	clearWorkerTicket(sourceWs, ctx);
 
-	// Persist any memory updates the worker captured
 	if (agentId && updatedMemory) {
 		saveAgentMemoryFromWorker(agentId, updatedMemory);
 	}
@@ -1183,177 +968,5 @@ export function handleDesignerSessionEnded(
 	console.log(`[Hub] Remote session ended: role=${agentRole} ticket=${ticketId} (no follow-up configured)`);
 }
 
-// ── Visual QA AI Review ─────────────────────────────────────
-
-/**
- * Pick up a ticket that a Visual Designer just moved to "ai review".
- * Launches the team's Visual Quality Reviewer to evaluate the work.
- * The QA agent decides Pass (→ "qa test") or Fail (→ "to do" for revision).
- */
-export async function handleVisualQaReview(
-	completedTicket: { ticketId: string; ticketName: string; ticketUrl: string; designerName: string; workspacePath: string },
-	ctx: ServerContext,
-): Promise<{ success: boolean; error?: string; worker?: string }> {
-	// Same pattern as Visual Designer fleet dispatch: try local first, cascade
-	// to a remote worker if this machine's Figma is busy.
-	const local = tryLaunchVisualQaLocal(completedTicket, ctx);
-	if (local.success) return { ...local, worker: ctx.workerIdentity?.name };
-	if (!ctx.isWorkerMode && local.figmaBusy) {
-		// Reuse the generic fleet dispatcher with a launchVisualQa RPC.
-		const msg: Record<string, unknown> = {
-			ticketId: completedTicket.ticketId,
-			ticketName: completedTicket.ticketName,
-			ticketUrl: completedTicket.ticketUrl,
-			designerName: completedTicket.designerName,
-			workspacePath: completedTicket.workspacePath,
-		};
-		return dispatchDesignerToFleet(msg, ctx, 'launchVisualQa', local.error);
-	}
-	return local;
-}
-
-function tryLaunchVisualQaLocal(
-	completedTicket: { ticketId: string; ticketName: string; ticketUrl: string; designerName: string; workspacePath: string },
-	ctx: ServerContext,
-): { success: boolean; error?: string; figmaBusy?: boolean } {
-	const { ticketId, ticketName, ticketUrl, designerName } = completedTicket;
-	const { persistentAgents } = ctx;
-
-	// Figma lock is the single source of truth: one designer / QA per machine.
-	// If something already holds the lock on THIS machine, defer. The cascade
-	// above will try a remote worker instead.
-	const activeFigma = findFigmaLockHolder(persistentAgents);
-	if (activeFigma) {
-		return { success: false, figmaBusy: true, error: `Local Figma busy: "${activeFigma.name}" (${activeFigma.roleShort}) is already running.` };
-	}
-
-	// Find the Visual QA agent for this machine.
-	const qa = persistentAgents.find(
-		p => p.roleShort === VISUAL_QA_ROLE_SHORT && p.teamId === TEAM_VISUAL_ID,
-	);
-	if (!qa) {
-		return { success: false, error: 'No Visual QA agent seeded on this machine' };
-	}
-
-	const qaDesignConfig = getJanDesignConfig();
-	const systemPrompt = buildVisualQaSystemPrompt(qa, qaDesignConfig);
-	const initialTask = buildVisualQaInitialTask({ ticketId, ticketName, ticketUrl, designerName }) + EXIT_REMINDER;
-
-	const newSessionId = crypto.randomUUID();
-	qa.currentSessionId = newSessionId;
-	qa.currentTicketId = ticketId;
-	qa.currentTicketName = ticketName;
-	qa.currentTicketUrl = ticketUrl;
-	savePersistentAgents(persistentAgents);
-	ensureAgentMemory(qa.id);
-
-	let mempalaceHost: string | undefined;
-	if (ctx.mempalaceServerUrl) {
-		try {
-			mempalaceHost = new URL(ctx.mempalaceServerUrl).hostname;
-		} catch {
-			mempalaceHost = undefined;
-		}
-	}
-
-	// Visual QA needs peers (to ping the designer) + mempalace
-	const peersMcpConfigPath = ensurePeersMcpConfig();
-	const mempalaceMcpConfigPath = ensureMempalaceMcpConfig(mempalaceHost);
-	const mcpConfigPath = mergeMcpConfigs(peersMcpConfigPath, mempalaceMcpConfigPath);
-
-	const cwd = expandHome(qa.workspacePath || '~');
-	if (launchAgentSession(newSessionId, cwd, systemPrompt, initialTask, { mcpConfigPath, extraFlags: ['--permission-mode', 'auto'] })) {
-		console.log(`[Standalone] Launched Visual QA "${qa.name}" for AI review of ticket ${ticketId}`);
-		return { success: true };
-	}
-	qa.currentSessionId = undefined;
-	savePersistentAgents(persistentAgents);
-	return { success: false, error: 'Failed to launch Visual QA session' };
-}
-
-/**
- * Scan ClickUp for any tickets sitting in "ai review" with no QA agent assigned
- * (e.g. after a server restart while a QA review was pending). Picks them up.
- */
-export function autoVisualQaPickup(ctx: ServerContext): void {
-	if (ctx.isWorkerMode) return;
-	if (!AI_REVIEW_PICKUP_ENABLED) return; // Pickup disabled — QA doesn't scan for "ai review" tickets
-
-	const qa = ctx.persistentAgents.find(
-		p => p.roleShort === VISUAL_QA_ROLE_SHORT && p.teamId === TEAM_VISUAL_ID,
-	);
-	if (!qa || qa.currentSessionId) return;
-
-	for (const group of ctx.clickupTickets) {
-		if (group.name.toLowerCase() !== 'ai review') continue;
-		// Only pick up tickets assigned to Jan — Darryl's ai review tickets
-		// go through autoDarrylPickup → handleDarrylHandleTicket instead
-		const ticket = group.tasks.find(t =>
-			t.assignees.some(a => a.username === JAN_CLICKUP_USERNAME),
-		);
-		if (!ticket) continue;
-		console.log(`[Standalone] Auto-pickup: Visual QA taking stranded ai-review ticket ${ticket.id}`);
-		handleVisualQaReview({
-			ticketId: ticket.id,
-			ticketName: ticket.name,
-			ticketUrl: ticket.url,
-			designerName: 'unknown',
-			workspacePath: qa.workspacePath,
-		}, ctx).catch(err => console.error('[Standalone] Visual QA pickup dispatch failed:', err));
-		return;
-	}
-}
-
-// ── Auto-revision pickup ────────────────────────────────────
-
-export function autoDesignerRevisionPickup(ctx: ServerContext): void {
-	if (ctx.isWorkerMode) return;
-
-	// Check if any designer (UX or Visual) is already running
-	const activeDesigner = ctx.persistentAgents.find(
-		p => (p.roleShort === DESIGNER_ROLE_SHORT || p.roleShort === VISUAL_DESIGNER_ROLE_SHORT) && p.currentSessionId,
-	);
-	if (activeDesigner) return;
-
-	// Find tickets in "revision needed" status
-	const revisionTickets: Array<{ id: string; name: string; url: string }> = [];
-	for (const group of ctx.clickupTickets) {
-		if (group.name.toLowerCase() !== 'revision needed') continue;
-		for (const task of group.tasks) {
-			revisionTickets.push({ id: task.id, name: task.name, url: task.url });
-		}
-	}
-
-	if (revisionTickets.length === 0) return;
-
-	const ticket = revisionTickets[0];
-
-	// Find the designer (UX or Visual) who previously worked on this ticket
-	const previousDesigner = ctx.persistentAgents.find(
-		p => (p.roleShort === DESIGNER_ROLE_SHORT || p.roleShort === VISUAL_DESIGNER_ROLE_SHORT)
-			&& !p.currentSessionId
-			&& p.lastTicketId === ticket.id,
-	);
-
-	if (!previousDesigner) {
-		console.log(`[Standalone] No idle designer found for revision ticket ${ticket.id}`);
-		return;
-	}
-
-	// Use the appropriate launch handler based on the designer's role
-	const launchHandler = previousDesigner.roleShort === VISUAL_DESIGNER_ROLE_SHORT
-		? handleLaunchVisualDesigner
-		: handleLaunchDesigner;
-
-	console.log(`[Standalone] Auto-revision: relaunching ${previousDesigner.roleShort.toLowerCase()} "${previousDesigner.name}" for ticket ${ticket.id}`);
-	launchHandler(
-		{
-			workspacePath: previousDesigner.workspacePath,
-			ticketId: ticket.id,
-			ticketName: ticket.name,
-			ticketUrl: ticket.url,
-			revisionMode: true,
-		},
-		ctx,
-	);
-}
+// Re-export capacity helper — several tests/handlers call it from this module.
+export { getDesignerMachineCapacity };
