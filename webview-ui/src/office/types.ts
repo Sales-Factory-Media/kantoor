@@ -17,6 +17,10 @@ export const TileType = {
   FLOOR_6: 6,
   FLOOR_7: 7,
   VOID: 8,
+  /** Floor-to-ceiling window — behaves like a wall for routing and the wall
+   *  auto-tile bitmask (neighbors see it as "wall-like"), but renders a
+   *  semi-transparent window sprite so the outdoor layer shows through. */
+  WINDOW: 9,
 } as const
 export type TileType = (typeof TileType)[keyof typeof TileType]
 

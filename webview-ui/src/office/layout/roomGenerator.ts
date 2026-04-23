@@ -241,6 +241,12 @@ export function generateRoomLayout(
     placeFillers(ctx, bottomEnd, maxEnd, bottomRowStart, maxBottomHeight, 'top')
   }
 
+  // ── Exterior windows ───────────────────────────────────────
+  // Floor-to-ceiling windows on the outside walls of every room that has
+  // an "outside" edge — top wall for top-row rooms, bottom wall for
+  // bottom-row rooms. Keeps the offices less sad by letting daylight in.
+  placeExteriorWindows(tiles, totalCols, rooms, topRowStart)
+
   return {
     layout: {
       version: 1,
@@ -251,5 +257,55 @@ export function generateRoomLayout(
       tileColors,
     },
     rooms,
+  }
+}
+
+/**
+ * Convert a selection of exterior-wall tiles to WINDOW tiles so each room
+ * with an outside wall gets daylight.
+ *
+ * - Top-row rooms (row === topRowStart): use the top wall (row = room.row).
+ * - Bottom-row rooms: use the bottom wall (row = room.row + room.height - 1).
+ * - Garage gets windows on its top wall (exterior) so the parked cars aren't
+ *   in a dungeon. Its bottom is the building's south exterior too, covered
+ *   by the same top-row rule since it lives on row === topRowStart.
+ *
+ * Spacing: skip the outermost 2 tiles at each end of the wall (corners +
+ * shared walls with neighbors), then repeat a "pair of windows + short gap"
+ * pattern across the remaining stretch. Only overwrites solid WALL tiles —
+ * doors and corners are left alone.
+ */
+function placeExteriorWindows(
+  tiles: TileTypeVal[],
+  totalCols: number,
+  rooms: RoomInfo[],
+  topRowStart: number,
+): void {
+  const PAIR_SIZE = 2         // windows per group — always at least two together
+  const GAP = 2               // wall tiles between groups
+  const STEP = PAIR_SIZE + GAP
+  const INSET = 2             // skip two tiles at each end of the wall
+
+  for (const room of rooms) {
+    if (room.isFiller) continue // fillers are interior accents, skip
+    const isTopRow = room.row === topRowStart
+    const exteriorRow = isTopRow
+      ? room.row                        // top wall
+      : room.row + room.height - 1      // bottom wall
+
+    const firstCol = room.col + INSET
+    const lastCol = room.col + room.width - 1 - INSET
+    // Per-room phase so adjacent rooms don't always start the pattern at the
+    // same column — a tiny bit of variation prevents a ruler-straight facade.
+    const phase = ((room.col * 7) % STEP + STEP) % STEP
+
+    for (let startC = firstCol + phase; startC + PAIR_SIZE - 1 <= lastCol; startC += STEP) {
+      for (let i = 0; i < PAIR_SIZE; i++) {
+        const idx = exteriorRow * totalCols + (startC + i)
+        if (tiles[idx] === TileType.WALL) {
+          tiles[idx] = TileType.WINDOW
+        }
+      }
+    }
   }
 }

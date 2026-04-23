@@ -36,29 +36,44 @@ export async function loadCatSprites(imageUrl: string): Promise<CatSprites[]> {
 }
 
 /** Parse cat.png sprite sheet (512×256, 32×32 cells).
- *  4 cat colors across columns (0-2, 4-6, 8-10, 12-14).
- *  4 direction rows: 0=down, 1=left, 2=right, 3=up.
+ *
+ *  4 cat colors across columns (starts at col 0, 4, 8, 12 — each color
+ *  occupies 3 frame columns + 1 gap column).
+ *
+ *  PNG row layout (verified by eye against the asset):
+ *    row 0 → side view, cat faces RIGHT  (horizontal silhouette)
+ *    row 1 → back view, cat faces UP     (vertical silhouette, tail/back visible)
+ *    row 2 → front view, cat faces DOWN  (vertical silhouette, face visible)
+ *    row 3 → side view, cat faces LEFT   (horizontal silhouette, mirrored)
+ *
+ *  We remap into walk[Direction] so `walk[cat.dir]` returns the correct view
+ *  regardless of the PNG's row order.
+ *
  *  Returns sprites for all 4 cat colors. */
 export function parseCatSpriteSheet(
   pngData: { width: number; height: number; data: Uint8Array },
 ): CatSprites[] {
   const CELL = 32
   const cats: CatSprites[] = []
-  // Check if each cat takes 3 or 4 columns
-  // From the layout: row 0 has 16 filled cells, rows 1-2 have 12 (3 per cat × 4 gaps)
-  // So in rows with gaps: 3 frames per cat, 4 cats = 12, with gaps at 3,7,11,15
-  // In row 0 and 3 (no gaps): 4 frames per cat? Or 3 frames + 1 extra?
-  // Let's use 3 frames per cat, 4 columns per color section (3 frames + 1 gap in some rows)
-  const catStarts = [0, 4, 8, 12] // column start for each cat color (4th col is gap/extra)
+  const catStarts = [0, 4, 8, 12] // column start for each cat color
+
+  // Which Direction lives on each PNG row.
+  // Direction enum: DOWN=0, LEFT=1, RIGHT=2, UP=3.
+  const DIR_FOR_ROW: Direction[] = [
+    Direction.RIGHT, // row 0
+    Direction.UP,    // row 1
+    Direction.DOWN,  // row 2
+    Direction.LEFT,  // row 3
+  ]
 
   for (const startCol of catStarts) {
-    const walk: SpriteData[][] = [[], [], [], []] // down, left, right, up
+    const walk: SpriteData[][] = [[], [], [], []] // indexed by Direction
 
-    for (let dir = 0; dir < 4; dir++) {
+    for (let row = 0; row < 4; row++) {
+      const dir = DIR_FOR_ROW[row]
       for (let frame = 0; frame < 3; frame++) {
         const cellX = startCol + frame
-        const cellY = dir
-        walk[dir].push(extractAndScaleCell(pngData, cellX, cellY, CELL))
+        walk[dir].push(extractAndScaleCell(pngData, cellX, row, CELL))
       }
     }
 

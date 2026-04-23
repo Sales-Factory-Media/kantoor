@@ -11,7 +11,7 @@ export function isWalkable(
   const cols = rows > 0 ? tileMap[0].length : 0
   if (row < 0 || row >= rows || col < 0 || col >= cols) return false
   const t = tileMap[row][col]
-  if (t === TileType.WALL || t === TileType.VOID) return false
+  if (t === TileType.WALL || t === TileType.VOID || t === TileType.WINDOW) return false
   if (blockedTiles.has(`${col},${row}`)) return false
   return true
 }

@@ -12,6 +12,12 @@
 import type { SpriteData, TileType as TileTypeVal, FloorColor, FurnitureInstance } from './types.js'
 import { TileType, TILE_SIZE } from './types.js'
 import { getColorizedSprite } from './colorize.js'
+import { getWindowSprite } from './windowWall.js'
+
+/** WALL and WINDOW both count as "wall-like" for bitmask / blocking purposes. */
+function isWallLike(t: TileTypeVal): boolean {
+  return t === TileType.WALL || t === TileType.WINDOW
+}
 
 /** 16 wall sprites indexed by bitmask (0-15) */
 let wallSprites: SpriteData[] | null = null
@@ -40,12 +46,14 @@ export function getWallSprite(
   const tmRows = tileMap.length
   const tmCols = tmRows > 0 ? tileMap[0].length : 0
 
-  // Build 4-bit neighbor bitmask
+  // Build 4-bit neighbor bitmask. WINDOW tiles count as "wall-like" so a
+  // regular wall rendered next to a window still gets the correct corner/edge
+  // sprite (otherwise walls abutting windows would look like loose ends).
   let mask = 0
-  if (row > 0 && tileMap[row - 1][col] === TileType.WALL) mask |= 1            // N
-  if (col < tmCols - 1 && tileMap[row][col + 1] === TileType.WALL) mask |= 2   // E
-  if (row < tmRows - 1 && tileMap[row + 1][col] === TileType.WALL) mask |= 4   // S
-  if (col > 0 && tileMap[row][col - 1] === TileType.WALL) mask |= 8            // W
+  if (row > 0 && isWallLike(tileMap[row - 1][col])) mask |= 1            // N
+  if (col < tmCols - 1 && isWallLike(tileMap[row][col + 1])) mask |= 2   // E
+  if (row < tmRows - 1 && isWallLike(tileMap[row + 1][col])) mask |= 4   // S
+  if (col > 0 && isWallLike(tileMap[row][col - 1])) mask |= 8            // W
 
   const sprite = wallSprites[mask]
   if (!sprite) return null
@@ -100,9 +108,24 @@ export function getWallInstances(
   const tmCols = tmRows > 0 ? tileMap[0].length : 0
   const layoutCols = cols ?? tmCols
   const instances: FurnitureInstance[] = []
+  const windowSprite = getWindowSprite()
   for (let r = 0; r < tmRows; r++) {
     for (let c = 0; c < tmCols; c++) {
-      if (tileMap[r][c] !== TileType.WALL) continue
+      const tile = tileMap[r][c]
+      if (tile === TileType.WINDOW) {
+        // Windows render their own semi-transparent sprite (same 16×32 shape
+        // as the wall auto-tile pieces). The outdoor render layer sits below
+        // walls in the draw order, so the transparent glass pixels show the
+        // grass / office floor behind.
+        instances.push({
+          sprite: windowSprite,
+          x: c * TILE_SIZE,
+          y: r * TILE_SIZE + (TILE_SIZE - windowSprite.length),
+          zY: (r + 1) * TILE_SIZE,
+        })
+        continue
+      }
+      if (tile !== TileType.WALL) continue
       const colorIdx = r * layoutCols + c
       const wallColor = tileColors?.[colorIdx]
       const wallInfo = wallColor

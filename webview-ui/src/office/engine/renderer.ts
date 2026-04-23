@@ -33,11 +33,11 @@ import {
 
 // ── Render functions ────────────────────────────────────────────
 
-/** A tile is "non-floor" for border detection if it's wall, void, or out-of-grid. */
+/** A tile is "non-floor" for border detection if it's wall, window, void, or out-of-grid. */
 function isNonFloor(tileMap: TileTypeVal[][], r: number, c: number, rows: number, cols: number): boolean {
   if (r < 0 || c < 0 || r >= rows || c >= cols) return true
   const t = tileMap[r][c]
-  return t === TileType.WALL || t === TileType.VOID
+  return t === TileType.WALL || t === TileType.WINDOW || t === TileType.VOID
 }
 
 export function renderTileGrid(
@@ -61,8 +61,10 @@ export function renderTileGrid(
     for (let c = 0; c < tmCols; c++) {
       const tile = tileMap[r][c]
 
-      // Skip VOID tiles entirely (transparent)
-      if (tile === TileType.VOID) continue
+      // Skip VOID and WINDOW tiles entirely (transparent at the tile pass —
+      // WINDOW renders its own sprite later via getWallInstances, on top of
+      // the outdoor layer which has already been drawn).
+      if (tile === TileType.VOID || tile === TileType.WINDOW) continue
 
       if (tile === TileType.WALL || !useSpriteFloors) {
         // Wall tiles or fallback: solid color
