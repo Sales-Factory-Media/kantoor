@@ -471,7 +471,7 @@ The Brief should summarize the ticket in 2–6 bullets so the worker doesn't re-
 		}
 	}
 	const mcpConfigPath = ensureMempalaceMcpConfig(mempalaceHost);
-	if (!launchAgentSession(newSessionId, cwd, systemPrompt, initialTask, { mcpConfigPath, extraFlags: ['--dangerously-skip-permissions'] })) {
+	if (!launchAgentSession(newSessionId, cwd, systemPrompt, initialTask, { mcpConfigPath, extraFlags: ['--permission-mode', 'auto'] })) {
 		console.log(`[Standalone] Failed to launch Darryl for ticket ${ticketId}`);
 	}
 }
@@ -577,7 +577,7 @@ export function handleJanDesignBriefing(msg: Record<string, unknown>, ctx: Serve
 		}
 	}
 	const mcpConfigPath = ensureMempalaceMcpConfig(mempalaceHost);
-	if (!launchAgentSession(newSessionId, cwd, systemPrompt, initialTask, { mcpConfigPath, extraFlags: ['--dangerously-skip-permissions'] })) {
+	if (!launchAgentSession(newSessionId, cwd, systemPrompt, initialTask, { mcpConfigPath, extraFlags: ['--permission-mode', 'auto'] })) {
 		console.log(`[Standalone] Failed to launch Jan for ticket ${ticketId}`);
 	}
 }
@@ -731,7 +731,7 @@ ${revisionLine}${briefBlock}## Steps
 
 	const cwd = expandHome(designer.workspacePath || '~');
 	const mcpConfigPath = ensureMempalaceMcpConfig(mempalaceHost);
-	if (launchAgentSession(newSessionId, cwd, systemPrompt, initialTask, { mcpConfigPath, extraFlags: ['--dangerously-skip-permissions'] })) {
+	if (launchAgentSession(newSessionId, cwd, systemPrompt, initialTask, { mcpConfigPath, extraFlags: ['--permission-mode', 'auto'] })) {
 		savePersistentAgents(persistentAgents);
 		console.log(`[Standalone] Launched designer "${designer.name}" for ticket ${ticketId} in ${cwd}`);
 		return { success: true };
@@ -845,7 +845,7 @@ ${revisionLine}${briefBlock}## Steps
 
 	const cwd = expandHome(designer.workspacePath || '~');
 	const mcpConfigPath = ensureMempalaceMcpConfig(mempalaceHost);
-	if (launchAgentSession(newSessionId, cwd, systemPrompt, initialTask, { mcpConfigPath, extraFlags: ['--dangerously-skip-permissions'] })) {
+	if (launchAgentSession(newSessionId, cwd, systemPrompt, initialTask, { mcpConfigPath, extraFlags: ['--permission-mode', 'auto'] })) {
 		savePersistentAgents(persistentAgents);
 		console.log(`[Standalone] Launched visual designer "${designer.name}" for ticket ${ticketId} in ${cwd}`);
 		return { success: true };
@@ -930,7 +930,7 @@ export function handleJanReviewDesigner(
 	const mempalaceMcpConfigPath = ensureMempalaceMcpConfig(mempalaceHost);
 	const mcpConfigPath = mergeMcpConfigs(peersMcpConfigPath, mempalaceMcpConfigPath);
 
-	if (!launchAgentSession(newSessionId, cwd, systemPrompt, initialTask, { mcpConfigPath, extraFlags: ['--dangerously-skip-permissions'] })) {
+	if (!launchAgentSession(newSessionId, cwd, systemPrompt, initialTask, { mcpConfigPath, extraFlags: ['--permission-mode', 'auto'] })) {
 		console.log(`[Standalone] Failed to launch Jan for review of ticket ${ticketId}`);
 	}
 }
@@ -1055,7 +1055,7 @@ export function handleVisualQaReview(
 	const mcpConfigPath = mergeMcpConfigs(peersMcpConfigPath, mempalaceMcpConfigPath);
 
 	const cwd = expandHome(qa.workspacePath || '~');
-	if (launchAgentSession(newSessionId, cwd, systemPrompt, initialTask, { mcpConfigPath, extraFlags: ['--dangerously-skip-permissions'] })) {
+	if (launchAgentSession(newSessionId, cwd, systemPrompt, initialTask, { mcpConfigPath, extraFlags: ['--permission-mode', 'auto'] })) {
 		console.log(`[Standalone] Launched Visual QA "${qa.name}" for AI review of ticket ${ticketId}`);
 	} else {
 		qa.currentSessionId = undefined;

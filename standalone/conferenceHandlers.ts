@@ -5,12 +5,11 @@ import { CONFERENCE_AGENT_DELAY_MS, PEERS_BROKER_URL } from './constants.js';
 import { launchAgentSession } from './itermFocus.js';
 import {
 	savePersistentAgents,
-	buildSystemPrompt,
-	buildConferencePrompt,
 	expandHome,
 	ensureMempalaceMcpConfig,
 	mergeMcpConfigs,
 } from './agentStore.js';
+import { buildSystemPrompt, buildConferencePrompt } from './systemPrompts.js';
 import { ensureMcpConfig, startConference, endConference } from './conferenceManager.js';
 import type { ConferenceState } from './conferenceManager.js';
 import type { ServerContext } from './serverContext.js';
