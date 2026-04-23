@@ -116,6 +116,7 @@ export interface ClickUpStatusGroup {
 export interface JanDesignConfig {
   figmaUrl: string
   clickupDocUrl: string
+  examplesUrl: string
 }
 
 export interface ExtensionMessageState {

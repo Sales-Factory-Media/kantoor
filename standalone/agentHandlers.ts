@@ -221,16 +221,19 @@ export function getJanDesignConfig(): DesignConfig {
 	return {
 		figmaUrl: saved?.figmaUrl || DEFAULT_DESIGN_CONFIG.figmaUrl,
 		clickupDocUrl: saved?.clickupDocUrl || DEFAULT_DESIGN_CONFIG.clickupDocUrl,
+		examplesUrl: saved?.examplesUrl || DEFAULT_DESIGN_CONFIG.examplesUrl,
 	};
 }
 
 export function handleSetJanDesignConfig(msg: Record<string, unknown>, ctx: ServerContext): void {
 	const figmaUrl = typeof msg.figmaUrl === 'string' ? msg.figmaUrl.trim() : '';
 	const clickupDocUrl = typeof msg.clickupDocUrl === 'string' ? msg.clickupDocUrl.trim() : '';
+	const examplesUrl = typeof msg.examplesUrl === 'string' ? msg.examplesUrl.trim() : '';
 
 	const config: DesignConfig = {
 		figmaUrl: figmaUrl || DEFAULT_DESIGN_CONFIG.figmaUrl,
 		clickupDocUrl: clickupDocUrl || DEFAULT_DESIGN_CONFIG.clickupDocUrl,
+		examplesUrl: examplesUrl || DEFAULT_DESIGN_CONFIG.examplesUrl,
 	};
 
 	const settings = readJson(SETTINGS_FILE) ?? {};

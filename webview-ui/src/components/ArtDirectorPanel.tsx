@@ -420,23 +420,29 @@ function TicketList({
 function DesignConfigSection({ config }: { config: JanDesignConfig | null }) {
   const [figmaUrl, setFigmaUrl] = useState('')
   const [clickupDocUrl, setClickupDocUrl] = useState('')
+  const [examplesUrl, setExamplesUrl] = useState('')
   const [saved, setSaved] = useState(false)
 
   useEffect(() => {
     if (config) {
       setFigmaUrl(config.figmaUrl)
       setClickupDocUrl(config.clickupDocUrl)
+      setExamplesUrl(config.examplesUrl)
       setSaved(false)
     }
   }, [config])
 
   const handleSave = () => {
-    vscode.postMessage({ type: 'setJanDesignConfig', figmaUrl, clickupDocUrl })
+    vscode.postMessage({ type: 'setJanDesignConfig', figmaUrl, clickupDocUrl, examplesUrl })
     setSaved(true)
     setTimeout(() => setSaved(false), 2000)
   }
 
-  const hasChanges = config && (figmaUrl !== config.figmaUrl || clickupDocUrl !== config.clickupDocUrl)
+  const hasChanges = config && (
+    figmaUrl !== config.figmaUrl
+    || clickupDocUrl !== config.clickupDocUrl
+    || examplesUrl !== config.examplesUrl
+  )
 
   const inputStyle: React.CSSProperties = {
     width: '100%',
@@ -477,6 +483,18 @@ function DesignConfigSection({ config }: { config: JanDesignConfig | null }) {
           value={clickupDocUrl}
           onChange={(e) => setClickupDocUrl(e.target.value)}
           placeholder="https://app.clickup.com/..."
+        />
+      </div>
+      <div>
+        <div style={{ fontSize: '18px', color: 'var(--pixel-text-dim)', marginBottom: 2 }}>
+          Example Screens URL
+        </div>
+        <input
+          type="text"
+          style={inputStyle}
+          value={examplesUrl}
+          onChange={(e) => setExamplesUrl(e.target.value)}
+          placeholder="https://www.figma.com/design/..."
         />
       </div>
       <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>

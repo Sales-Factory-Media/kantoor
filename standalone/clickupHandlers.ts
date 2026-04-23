@@ -498,7 +498,7 @@ export function handleJanDesignBriefing(msg: Record<string, unknown>, ctx: Serve
 	}
 
 	const roster = buildRoster(persistentAgents, jan.id);
-	const systemPrompt = buildJanSystemPrompt(jan, roster, SERVER_PORT);
+	const systemPrompt = buildJanSystemPrompt(jan, roster, SERVER_PORT, getJanDesignConfig());
 	const initialTask = (ticketStatus === 'to refine'
 		? buildJanRefineInitialTask(ticketId, ticketName, ticketUrl)
 		: buildJanSingleTodoInitialTask(ticketId, ticketName, ticketUrl)
@@ -536,7 +536,7 @@ export function handleJanBatchDispatch(
 	}
 
 	const roster = buildRoster(persistentAgents, jan.id);
-	const systemPrompt = buildJanSystemPrompt(jan, roster, SERVER_PORT);
+	const systemPrompt = buildJanSystemPrompt(jan, roster, SERVER_PORT, getJanDesignConfig());
 	// Map to the shape buildJanBatchInitialTask expects.
 	const initialTask = buildJanBatchInitialTask(
 		batch.map(t => ({ id: t.ticketId, name: t.ticketName, url: t.ticketUrl, status: t.status })),
@@ -574,7 +574,7 @@ export function handleJanReviewDesigner(
 	}
 
 	const roster = buildRoster(persistentAgents, jan.id);
-	const systemPrompt = buildJanSystemPrompt(jan, roster, SERVER_PORT);
+	const systemPrompt = buildJanSystemPrompt(jan, roster, SERVER_PORT, getJanDesignConfig());
 	const initialTask = buildJanReviewPrompt({ ticketId, ticketName, ticketUrl, designerName }) + EXIT_REMINDER;
 
 	const result = launchPersistentAgentSession(
@@ -685,7 +685,8 @@ function tryLaunchDesignerLocal(msg: Record<string, unknown>, ctx: ServerContext
 	if (!designer) return { success: false, error: 'No free UX Designers available — all team members are busy.' };
 
 	designer.workspacePath = workspacePath;
-	const systemPrompt = buildDesignerSystemPrompt(designer, projectDescription);
+	const designConfig = getJanDesignConfig();
+	const systemPrompt = buildDesignerSystemPrompt(designer, projectDescription, designConfig);
 
 	const briefBlock = brief
 		? `${brief}\n\n`

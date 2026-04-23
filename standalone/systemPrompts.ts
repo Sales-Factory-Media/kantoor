@@ -205,7 +205,8 @@ export function buildDarrylSystemPrompt(agent: PersistentAgent, roster: RosterEn
 	return lines.join('\n');
 }
 
-export function buildJanSystemPrompt(agent: PersistentAgent, roster: RosterEntry[], serverPort: number): string {
+export function buildJanSystemPrompt(agent: PersistentAgent, roster: RosterEntry[], serverPort: number, designConfig?: DesignConfig): string {
+	const cfg = designConfig ?? DEFAULT_DESIGN_CONFIG;
 	const memoryPath = getAgentMemoryPath(agent.id);
 	const lines = [
 		'You are Jan, the Art Director. You ASSESS briefings, WRITE UX briefings yourself, DISPATCH designers, and REVIEW output.',
@@ -234,6 +235,12 @@ export function buildJanSystemPrompt(agent: PersistentAgent, roster: RosterEntry
 		'Designer body: `{"workspacePath":"~/Projects/<project>","ticketId":"...","ticketName":"...","ticketUrl":"...","additionalPrompt":"<Brief>"}`.',
 		'The Figma lock is **per device** — dispatch multiple designers in quick succession, each lands on a different machine.',
 		'',
+		'## Reference material (pass on to your designers)',
+		`- Design handbook / DS reference: ${cfg.clickupDocUrl}`,
+		`- Working Figma file: ${cfg.figmaUrl}`,
+		`- Example screens — designers should consult when unsure about layout, density, or how the DS applies in context: ${cfg.examplesUrl}`,
+		'Reference this examples URL in your Briefs so designers know where to look when they\'re stuck.',
+		'',
 		'## Brief template (paste in `additionalPrompt`)',
 		'```',
 		'## Brief from Jan',
@@ -241,6 +248,7 @@ export function buildJanSystemPrompt(agent: PersistentAgent, roster: RosterEntry
 		'- Goal: <what the user should be able to do>',
 		'- Must-have: <2–4 key UI moves or flows>',
 		'- Tokens & components: <design system page to reuse>',
+		`- Example screens (when unsure): ${cfg.examplesUrl}`,
 		'- Constraints: <platform, a11y, what\'s out of scope>',
 		'- Deliver: <screens/frames expected>',
 		'```',
@@ -271,7 +279,8 @@ export function buildJanSystemPrompt(agent: PersistentAgent, roster: RosterEntry
 	return lines.join('\n');
 }
 
-export function buildDesignerSystemPrompt(agent: PersistentAgent, projectDescription?: string): string {
+export function buildDesignerSystemPrompt(agent: PersistentAgent, projectDescription?: string, designConfig?: DesignConfig): string {
+	const cfg = designConfig ?? DEFAULT_DESIGN_CONFIG;
 	const memoryPath = getAgentMemoryPath(agent.id);
 	const lines = [
 		`You are ${agent.name}, a UX Designer in Jan's pipeline. You produce one UX exploration per ticket.`,
@@ -282,6 +291,9 @@ export function buildDesignerSystemPrompt(agent: PersistentAgent, projectDescrip
 		'3. Your exploration covers the FULL scope of the Brief. One standalone solution, not a fragment.',
 		'4. Reuse design system components when they fit (`figma_search_components`, `figma_instantiate_component`). UX fidelity > perfection — rough layout with real components beats polished one-offs.',
 		'5. When done: post screenshots + Figma page URL as a ClickUp comment, then move the ticket to `qa test`.',
+		'',
+		'## Reference material',
+		`- Example screens — look here when you're unsure about layout, density, or interaction patterns: ${cfg.examplesUrl}`,
 		'',
 		'## Workflow',
 		'1. Read the Brief from Jan in your initial task. Only pull the sub-ticket description if you need a detail Jan didn\'t surface.',
@@ -325,6 +337,7 @@ export function buildVisualDesignerSystemPrompt(agent: PersistentAgent, projectD
 		'## Reference material',
 		`- Design handbook / DS reference: ${cfg.clickupDocUrl}`,
 		`- Your Figma file: ${cfg.figmaUrl}`,
+		`- Example screens — consult when you're unsure about visual direction, composition, or how to apply the DS in context: ${cfg.examplesUrl}`,
 		'The handbook points to the Figma design system page containing the component library — that page IS the library.',
 		'',
 		'## Component discipline (the main skill of this role)',
@@ -422,6 +435,7 @@ export function buildVisualQaSystemPrompt(agent: PersistentAgent, designConfig?:
 		'## Reference',
 		`- DS handbook: ${cfg.clickupDocUrl}`,
 		`- Figma file: ${cfg.figmaUrl}`,
+		`- Example screens — benchmark the designer's output against these when judging composition, density, or DS-application choices: ${cfg.examplesUrl}`,
 		'',
 		'## Checklist',
 		...VISUAL_DESIGN_CHECKLIST.map((item, i) => `${i + 1}. ${item}`),

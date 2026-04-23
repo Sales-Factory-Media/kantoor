@@ -258,14 +258,24 @@ const messageHandlers: Record<string, (ws: WebSocket, msg: Record<string, unknow
 	setSoundEnabled: (_ws, msg) => handleSetSoundEnabled(msg),
 	setJanDesignConfig: (_ws, msg, ctx) => handleSetJanDesignConfig(msg, ctx),
 	clickupRefresh: (_ws, _msg, ctx) => { handleClickupRefresh(ctx).catch(() => {}); },
-	clickupStartWork: (_ws, msg, ctx) => handleClickupStartWork(msg, ctx),
+	clickupStartWork: (_ws, msg, ctx) => {
+		if (rejectIfWorker(ctx, 'clickupStartWork')) return;
+		handleClickupStartWork(msg, ctx);
+	},
 	clickupConfigure: (_ws, msg, ctx) => handleClickupConfigure(msg, ctx),
 	startConference: (_ws, msg, ctx) => handleStartConference(msg, ctx),
 	endConference: (_ws, msg, ctx) => handleEndConference(msg, ctx),
 	updateProjectDescription: (_ws, msg, ctx) => handleUpdateProjectDescription(msg, ctx),
-	darrylHandleTicket: (_ws, msg, ctx) => handleDarrylHandleTicket(msg, ctx),
-	janDesignBriefing: (_ws, msg, ctx) => handleJanDesignBriefing(msg, ctx),
+	darrylHandleTicket: (_ws, msg, ctx) => {
+		if (rejectIfWorker(ctx, 'darrylHandleTicket')) return;
+		handleDarrylHandleTicket(msg, ctx);
+	},
+	janDesignBriefing: (_ws, msg, ctx) => {
+		if (rejectIfWorker(ctx, 'janDesignBriefing')) return;
+		handleJanDesignBriefing(msg, ctx);
+	},
 	launchDesigner: (_ws, msg, ctx) => {
+		if (rejectIfWorker(ctx, 'launchDesigner')) return;
 		handleLaunchDesigner(msg, ctx).then(result => {
 			ctx.broadcastSink.postMessage({ type: 'designerLaunched', ...result });
 		}).catch(err => {
@@ -273,6 +283,7 @@ const messageHandlers: Record<string, (ws: WebSocket, msg: Record<string, unknow
 		});
 	},
 	launchVisualDesigner: (_ws, msg, ctx) => {
+		if (rejectIfWorker(ctx, 'launchVisualDesigner')) return;
 		handleLaunchVisualDesigner(msg, ctx).then(result => {
 			ctx.broadcastSink.postMessage({ type: 'visualDesignerLaunched', ...result });
 		}).catch(err => {
@@ -282,14 +293,31 @@ const messageHandlers: Record<string, (ws: WebSocket, msg: Record<string, unknow
 	getOrganogram: (ws, _msg, ctx) => {
 		ws.send(JSON.stringify({ type: 'organogramSnapshot', organogram: buildOrganogram(ctx.persistentAgents) }));
 	},
-	janReviewDesigner: (_ws, msg, ctx) => handleJanReviewDesigner({
-		ticketId: msg.ticketId as string,
-		ticketName: (msg.ticketName as string) || '',
-		ticketUrl: (msg.ticketUrl as string) || '',
-		designerName: (msg.designerName as string) || 'unknown',
-		workspacePath: (msg.workspacePath as string) || '',
-	}, ctx),
+	janReviewDesigner: (_ws, msg, ctx) => {
+		if (rejectIfWorker(ctx, 'janReviewDesigner')) return;
+		handleJanReviewDesigner({
+			ticketId: msg.ticketId as string,
+			ticketName: (msg.ticketName as string) || '',
+			ticketUrl: (msg.ticketUrl as string) || '',
+			designerName: (msg.designerName as string) || 'unknown',
+			workspacePath: (msg.workspacePath as string) || '',
+		}, ctx);
+	},
 };
+
+/**
+ * All pickup / dispatch orchestration should originate on the hub. If a
+ * worker's webview triggers one of these actions (user clicked something,
+ * stray handler), log and short-circuit so the worker doesn't start a
+ * session autonomously.
+ */
+function rejectIfWorker(ctx: ServerContext, action: string): boolean {
+	if (ctx.isWorkerMode) {
+		console.warn(`[Worker] Ignoring webview action "${action}" — pickup/dispatch orchestration is hub-only.`);
+		return true;
+	}
+	return false;
+}
 
 // Not supported in standalone mode
 for (const type of ['openClaude', 'closeAgent', 'openSessionsFolder']) {

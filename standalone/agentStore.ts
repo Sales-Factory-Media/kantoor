@@ -18,6 +18,7 @@ import {
 	JAN_WORKSPACE,
 	DEFAULT_DESIGN_FIGMA_URL,
 	DEFAULT_DESIGN_CLICKUP_DOC_URL,
+	DEFAULT_DESIGN_EXAMPLES_URL,
 } from './constants.js';
 import { writeJson } from './serverHelpers.js';
 
@@ -28,11 +29,13 @@ const AGENTS_DIR = path.join(SETTINGS_DIR, 'agents');
 export interface DesignConfig {
 	figmaUrl: string;
 	clickupDocUrl: string;
+	examplesUrl: string;
 }
 
 export const DEFAULT_DESIGN_CONFIG: DesignConfig = {
 	figmaUrl: DEFAULT_DESIGN_FIGMA_URL,
 	clickupDocUrl: DEFAULT_DESIGN_CLICKUP_DOC_URL,
+	examplesUrl: DEFAULT_DESIGN_EXAMPLES_URL,
 };
 
 export interface PersistentAgent {

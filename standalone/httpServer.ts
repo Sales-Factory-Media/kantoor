@@ -70,6 +70,21 @@ function handleApiLaunchAgent(json: Record<string, unknown>, res: http.ServerRes
 	}
 }
 
+// Endpoints that dispatch design-role agents (UX Designer, Visual Designer,
+// Visual QA) or kick off Jan-review cycles. These are hub-only orchestration
+// actions — hub-to-worker design dispatch uses WebSocket RPC
+// (handleLaunchRpcFromHub in workerMode.ts), NOT these HTTP endpoints. If a
+// worker receives one of these HTTP calls, something on the worker (Jan
+// running locally, a leftover agent, a user clicking a button in the worker's
+// webview) is trying to pick up work autonomously — reject it so the hub is
+// the only orchestrator.
+const HUB_ONLY_API_PATHS = new Set([
+	'/api/launch-designer',
+	'/api/launch-visual-designer',
+	'/api/launch-visual-qa',
+	'/api/review-designer',
+]);
+
 // ── HTTP server factory ──────────────────────────────────────
 
 export function createHttpServer(ctx: ServerContext): http.Server {
@@ -83,6 +98,13 @@ export function createHttpServer(ctx: ServerContext): http.Server {
 		// API routes
 		if (urlPath.startsWith('/api/')) {
 			res.setHeader('Content-Type', 'application/json');
+
+			if (ctx.isWorkerMode && req.method === 'POST' && HUB_ONLY_API_PATHS.has(urlPath)) {
+				console.warn(`[Worker] Rejecting hub-only API call ${urlPath} — workers receive design dispatches via WebSocket RPC, not HTTP.`);
+				res.writeHead(403);
+				res.end(JSON.stringify({ success: false, error: 'Hub-only endpoint. Workers receive dispatches via WebSocket RPC from the hub.' }));
+				return;
+			}
 
 			if (req.method === 'GET' && urlPath === '/api/roster') {
 				handleApiRoster(res, ctx);

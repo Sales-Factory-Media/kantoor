@@ -43,6 +43,9 @@ export const TEAM_WORKER_COUNT = 5;
 // ── Jan Design Config Defaults ────────────────────────────
 export const DEFAULT_DESIGN_FIGMA_URL = 'https://www.figma.com/design/aFC3igAq9P5iHtm2Gie8ta/Agent-workspace---Isolated-App-2.0?node-id=174-12168&p=f&t=u5tEjuD66B5WPC1Z-0';
 export const DEFAULT_DESIGN_CLICKUP_DOC_URL = 'https://app.clickup.com/90152414906/v/dc/2kyr1bnu-2595/2kyr1bnu-2795';
+// Reference page with example screens that designers/QA should consult when
+// unsure about visual direction, layout, or component usage.
+export const DEFAULT_DESIGN_EXAMPLES_URL = 'https://www.figma.com/design/aFC3igAq9P5iHtm2Gie8ta/Agent-workspace---Isolated-App-2.0?node-id=2121-3569';
 
 // ── Review / Feedback Loop ────────────────────────────────
 export const REVIEW_TRIGGER_DELAY_MS = 5000;
