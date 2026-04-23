@@ -650,15 +650,12 @@ export function ForemanPanel({
       )}
       <div
         style={{
-          position: 'absolute',
-          top: 10,
-          left: 10,
-          zIndex: 'var(--pixel-controls-z)',
           width: 340,
-          maxHeight: 'calc(100% - 20px)',
+          maxHeight: '100%',
           display: 'flex',
           flexDirection: 'column',
           alignItems: 'center',
+          pointerEvents: 'auto',
         }}
       >
         {/* Darryl avatar floating above the panel */}

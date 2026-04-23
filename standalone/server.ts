@@ -52,6 +52,7 @@ import {
 	autoDesignerRevisionPickup,
 	autoDarrylPickup,
 	autoJanPickup,
+	autoPickupAfterWorkerFree,
 } from './clickupHandlers.js';
 import {
 	handleStartConference,
@@ -71,7 +72,7 @@ import {
 	broadcastWorkerStatus,
 	loadAssignments,
 } from './workerRegistry.js';
-import { startWorkerMode, stopWorkerMode, reportDesignerSessionEndedToHub } from './workerMode.js';
+import { startWorkerMode, stopWorkerMode, reportDesignerSessionEndedToHub, reportTicketCompleteToHub } from './workerMode.js';
 
 // ── CLI argument parsing ────────────────────────────────────
 
@@ -497,6 +498,11 @@ async function main(): Promise<void> {
 						updatedMemory: memoryContent,
 						agentId: pa.id,
 					}, ctx);
+				} else if (isWorkerMode && pa.name === 'Darryl' && completedTicket) {
+					// On a remote worker: Darryl's session for a hub-dispatched ticket
+					// just ended. Report back immediately (event-driven) instead of the
+					// old 5s poll in watchForCompletion.
+					reportTicketCompleteToHub(completedTicket.ticketId, ctx);
 				} else {
 					// On the hub: trigger the existing local review pipeline.
 					if (AI_REVIEW_AUTO_ESCALATE && pa.roleShort === VISUAL_DESIGNER_ROLE_SHORT && completedTicket) {
@@ -513,6 +519,9 @@ async function main(): Promise<void> {
 					if (pa.roleShort === JAN_ROLE_SHORT) {
 						setTimeout(() => autoDesignerRevisionPickup(ctx), REVIEW_TRIGGER_DELAY_MS);
 					}
+					// Capacity opened up locally — re-run pickup so waiting tickets don't
+					// sit for up to CLICKUP_POLL_INTERVAL_MS before being dispatched.
+					autoPickupAfterWorkerFree(ctx);
 				}
 			}
 			agentManager.removeSession(jsonlFile);
@@ -569,10 +578,19 @@ async function main(): Promise<void> {
 					if (msgType === 'workerRegister') registerWorker(ws, msg, ctx);
 					else if (msgType === 'workerHeartbeat') handleWorkerHeartbeat(ws, ctx);
 					else if (msgType === 'ticketStarted') handleTicketStarted(ws, msg, ctx);
-					else if (msgType === 'ticketComplete') handleTicketComplete(ws, msg, ctx);
-					else if (msgType === 'ticketFailed') handleTicketFailed(ws, msg, ctx);
+					else if (msgType === 'ticketComplete') {
+						handleTicketComplete(ws, msg, ctx);
+						autoPickupAfterWorkerFree(ctx);
+					}
+					else if (msgType === 'ticketFailed') {
+						handleTicketFailed(ws, msg, ctx);
+						autoPickupAfterWorkerFree(ctx);
+					}
 					else if (msgType === 'workerResponse') handleWorkerResponse(ws, msg, ctx);
-					else if (msgType === 'designerSessionEnded') handleDesignerSessionEnded(msg, ctx, ws);
+					else if (msgType === 'designerSessionEnded') {
+						handleDesignerSessionEnded(msg, ctx, ws);
+						autoPickupAfterWorkerFree(ctx);
+					}
 					return;
 				}
 

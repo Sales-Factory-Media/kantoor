@@ -100,36 +100,51 @@ function App() {
         }}
       />
 
-      <ForemanPanel
-        visible={foremanOpen}
-        onClose={() => setForemanOpen(false)}
-        clickupTickets={clickupTickets}
-        clickupConfigured={clickupConfigured}
-        clickupListId={clickupListId}
-        offlineAgents={offlineAgents}
-        officeState={officeState}
-        agents={agents}
-        agentTools={agentTools}
-        agentStatuses={agentStatuses}
-        knownProjects={knownProjects}
-        workers={workers}
-      />
+      <div
+        style={{
+          position: 'absolute',
+          top: 10,
+          left: 10,
+          zIndex: 'var(--pixel-controls-z)' as unknown as number,
+          height: 'calc(100% - 20px)',
+          display: 'flex',
+          flexDirection: 'row',
+          gap: 10,
+          alignItems: 'flex-start',
+          pointerEvents: 'none',
+        }}
+      >
+        <ForemanPanel
+          visible={foremanOpen}
+          onClose={() => setForemanOpen(false)}
+          clickupTickets={clickupTickets}
+          clickupConfigured={clickupConfigured}
+          clickupListId={clickupListId}
+          offlineAgents={offlineAgents}
+          officeState={officeState}
+          agents={agents}
+          agentTools={agentTools}
+          agentStatuses={agentStatuses}
+          knownProjects={knownProjects}
+          workers={workers}
+        />
 
-      <ArtDirectorPanel
-        visible={artDirectorOpen}
-        onClose={() => setArtDirectorOpen(false)}
-        clickupTickets={clickupTickets}
-        clickupConfigured={clickupConfigured}
-        clickupListId={clickupListId}
-        offlineAgents={offlineAgents}
-        officeState={officeState}
-        agents={agents}
-        agentTools={agentTools}
-        agentStatuses={agentStatuses}
-        knownProjects={knownProjects}
-        workers={workers}
-        janDesignConfig={janDesignConfig}
-      />
+        <ArtDirectorPanel
+          visible={artDirectorOpen}
+          onClose={() => setArtDirectorOpen(false)}
+          clickupTickets={clickupTickets}
+          clickupConfigured={clickupConfigured}
+          clickupListId={clickupListId}
+          offlineAgents={offlineAgents}
+          officeState={officeState}
+          agents={agents}
+          agentTools={agentTools}
+          agentStatuses={agentStatuses}
+          knownProjects={knownProjects}
+          workers={workers}
+          janDesignConfig={janDesignConfig}
+        />
+      </div>
 
       <BottomToolbar
         onOpenClaude={handleOpenClaude}

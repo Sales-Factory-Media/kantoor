@@ -137,6 +137,24 @@ export function startClickupPolling(ctx: ServerContext): void {
 
 // ── Refresh & auto-pickup ────────────────────────────────────
 
+/**
+ * Run all auto-pickup cycles after a worker becomes free (ticket complete,
+ * failed, or session ended). Uses cached ClickUp state — no network call — so
+ * this is cheap to invoke on every worker-free event. The ClickUp cache is
+ * fresh enough (3-min poll) for "re-dispatch a to-do ticket that was waiting
+ * on capacity", which is the main use case this covers.
+ *
+ * No-op on workers (they don't run auto-pickup).
+ */
+export function autoPickupAfterWorkerFree(ctx: ServerContext): void {
+	if (ctx.isWorkerMode) return;
+	autoDarrylPickup(ctx);
+	autoJanPickup(ctx);
+	autoVisualQaPickup(ctx);
+	autoDesignerRevisionPickup(ctx);
+}
+
+
 let clickupRefreshInFlight = false;
 
 export async function handleClickupRefresh(ctx: ServerContext): Promise<void> {

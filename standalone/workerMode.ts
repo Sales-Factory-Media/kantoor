@@ -134,7 +134,11 @@ async function handleLaunchRpcFromHub(
 			ensureAgentMemory(agentId);
 			fs.writeFileSync(getAgentMemoryPath(agentId), content, 'utf-8');
 		}
-		ctx.persistentAgents = loadPersistentAgents();
+		// Must use the setter — direct ctx.persistentAgents assignment leaves the
+		// closure variable in server.ts pointing at the old array, and then
+		// findPersistentAgentBySession can't find the session on stale-detection
+		// so the worker never tells the hub it's free.
+		ctx.setPersistentAgents(loadPersistentAgents());
 	}
 
 	// Strip memories before forwarding — the inner handlers don't expect them
@@ -194,6 +198,25 @@ export function reportDesignerSessionEndedToHub(
 		ctx.hubWs.send(JSON.stringify({ type: 'designerSessionEnded', ...payload }));
 	} catch (err) {
 		console.error(`[Worker] Failed to report session end to hub:`, err);
+	}
+}
+
+/**
+ * Called from server.ts onSessionStale when a hub-dispatched Darryl session
+ * ends on this worker. Event-driven replacement for the old 5s poll in
+ * `watchForCompletion` — tells the hub the slot is free immediately instead
+ * of after up to a STALE_CHECK_INTERVAL + 5s poll window.
+ */
+export function reportTicketCompleteToHub(
+	ticketId: string,
+	ctx: ServerContext,
+): void {
+	if (!ctx.hubWs || ctx.hubWs.readyState !== WebSocket.OPEN) return;
+	const updatedMemories = collectLocalMemories(ctx.persistentAgents);
+	try {
+		ctx.hubWs.send(JSON.stringify({ type: 'ticketComplete', ticketId, updatedMemories }));
+	} catch (err) {
+		console.error(`[Worker] Failed to report ticketComplete to hub:`, err);
 	}
 }
 
@@ -275,8 +298,11 @@ function handleTicketFromHub(
 		console.log(`[Worker] Wrote ${Object.keys(agentMemories).length} agent memory files from hub`);
 	}
 
-	// Reload agents from disk (may have been updated by merge)
-	ctx.persistentAgents = loadPersistentAgents();
+	// Reload agents from disk (may have been updated by merge). Use the setter
+	// so server.ts's closure variable also updates — otherwise
+	// findPersistentAgentBySession runs against a stale array and onSessionStale
+	// can't locate the agent, so the hub never hears about the session ending.
+	ctx.setPersistentAgents(loadPersistentAgents());
 
 	// Clear any stale currentSessionId values — on a worker, sessions are local.
 	// If no local process is running for a session, clear it so agents can be launched fresh.
@@ -297,37 +323,12 @@ function handleTicketFromHub(
 	// Tell hub we started
 	ws.send(JSON.stringify({ type: 'ticketStarted', ticketId, ticketName }));
 
-	// Run the Darryl flow locally — same as hub does
+	// Run the Darryl flow locally — same as hub does. Session-end is reported
+	// back to the hub from server.ts onSessionStale via reportTicketCompleteToHub.
 	handleDarrylHandleTicket(
 		{ ticketId, ticketName, ticketUrl, ticketStatus },
 		ctx,
 	);
-
-	// Watch for Darryl's session to end, then report back
-	watchForCompletion(ws, ticketId, ctx);
-}
-
-// ── Watch for Darryl session completion ─────────────────────
-
-function watchForCompletion(ws: WebSocket, ticketId: string, ctx: ServerContext): void {
-	const checkInterval = setInterval(() => {
-		const darryl = ctx.persistentAgents.find(p => p.name === 'Darryl');
-		if (darryl && !darryl.currentSessionId) {
-			// Darryl finished — collect updated memories and report
-			clearInterval(checkInterval);
-
-			const updatedMemories = collectLocalMemories(ctx.persistentAgents);
-
-			if (ws.readyState === WebSocket.OPEN) {
-				ws.send(JSON.stringify({
-					type: 'ticketComplete',
-					ticketId,
-					updatedMemories,
-				}));
-			}
-			console.log(`[Worker] Ticket ${ticketId} completed, reported to hub`);
-		}
-	}, 5000); // Check every 5s
 }
 
 function collectLocalMemories(agents: PersistentAgent[]): Record<string, string> {

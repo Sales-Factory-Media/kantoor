@@ -554,15 +554,12 @@ export function ArtDirectorPanel({
       )}
       <div
         style={{
-          position: 'absolute',
-          top: 10,
-          left: 360,
-          zIndex: 'var(--pixel-controls-z)',
           width: 340,
-          maxHeight: 'calc(100% - 20px)',
+          maxHeight: '100%',
           display: 'flex',
           flexDirection: 'column',
           alignItems: 'center',
+          pointerEvents: 'auto',
         }}
       >
         {/* Jan avatar floating above the panel */}
