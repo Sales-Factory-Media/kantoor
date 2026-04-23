@@ -338,12 +338,16 @@ async function main(): Promise<void> {
 	}
 
 	// ── Seed design teams (UX + Visual: 1 PM + 1 QA + 5 workers each) ──
-	if (!isWorkerMode) {
-		const seeded = seedDesignTeams(persistentAgents);
-		if (seeded) {
-			savePersistentAgents(persistentAgents);
-			console.log('[Standalone] Seeded design teams (UX + Visual)');
-		}
+	// Runs on every machine (hub + workers). seedDesignTeams is idempotent —
+	// it only creates slots that don't already exist. Each machine ends up with
+	// its OWN local team roster (names/IDs distinct per machine), used by fleet
+	// dispatch: when the hub cascades a `launchVisualDesigner` / `launchVisualQa`
+	// RPC to a remote worker, that worker picks a free agent from its own
+	// local roster.
+	const seeded = seedDesignTeams(persistentAgents);
+	if (seeded) {
+		savePersistentAgents(persistentAgents);
+		console.log(`[Standalone] Seeded design teams (UX + Visual)${isWorkerMode ? ' [worker]' : ''}`);
 	}
 
 	// ── WebSocket broadcast sink (webview clients only) ──────
