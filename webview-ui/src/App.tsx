@@ -135,6 +135,7 @@ function App() {
         onOpenClaude={handleOpenClaude}
         workspaceFolders={workspaceFolders}
         clickupNextFetchAt={clickupNextFetchAt}
+        workers={workers}
       />
 
       <ToolOverlay

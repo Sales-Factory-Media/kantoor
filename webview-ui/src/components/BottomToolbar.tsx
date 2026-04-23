@@ -1,11 +1,54 @@
 import { useState, useEffect, useRef } from 'react'
-import type { WorkspaceFolder } from '../hooks/useExtensionMessages.js'
+import type { WorkspaceFolder, WorkerStatusEntry } from '../hooks/useExtensionMessages.js'
 import { vscode, isStandalone } from '../vscodeApi.js'
 
 interface BottomToolbarProps {
   onOpenClaude: () => void
   workspaceFolders: WorkspaceFolder[]
   clickupNextFetchAt: number | null
+  workers: WorkerStatusEntry[]
+}
+
+function WorkerChip({ worker }: { worker: WorkerStatusEntry }) {
+  const disconnected = worker.status === 'disconnected'
+  return (
+    <div
+      title={
+        worker.status === 'busy' && worker.ticketName
+          ? `${worker.name} — ${worker.ticketName}`
+          : `${worker.name} (${worker.status})`
+      }
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 6,
+        padding: '2px 8px',
+        fontSize: '14px',
+        color: disconnected ? 'var(--pixel-text-dim)' : 'var(--pixel-text)',
+        background: 'var(--pixel-btn-bg)',
+        border: '2px solid var(--pixel-border)',
+        borderRadius: 0,
+        opacity: disconnected ? 0.6 : 1,
+      }}
+    >
+      <span
+        style={{
+          width: 8,
+          height: 8,
+          borderRadius: '50%',
+          backgroundColor: disconnected ? '#666' : worker.color,
+          flexShrink: 0,
+        }}
+      />
+      <span>{worker.name}</span>
+      {worker.isHub && (
+        <span style={{ fontSize: '12px', color: 'var(--pixel-text-dim)' }}>(hub)</span>
+      )}
+      {worker.status === 'busy' && worker.ticketId && (
+        <span style={{ fontSize: '12px', color: worker.color }}>CU-{worker.ticketId}</span>
+      )}
+    </div>
+  )
 }
 
 const btnBase: React.CSSProperties = {
@@ -30,6 +73,7 @@ export function BottomToolbar({
   onOpenClaude,
   workspaceFolders,
   clickupNextFetchAt,
+  workers,
 }: BottomToolbarProps) {
   const [hovered, setHovered] = useState<string | null>(null)
   const [isFolderPickerOpen, setIsFolderPickerOpen] = useState(false)
@@ -107,15 +151,38 @@ export function BottomToolbar({
           position: 'absolute',
           bottom: 6,
           left: 8,
+          right: 8,
           zIndex: 'var(--pixel-controls-z)',
           fontSize: '20px',
           color: 'var(--pixel-text-dim)',
           userSelect: 'none',
           display: 'flex',
-          alignItems: 'center',
-          gap: '8px',
+          flexDirection: 'column',
+          alignItems: 'flex-start',
+          gap: '4px',
         }}
       >
+        {workers.length > 0 && (
+          <div
+            style={{
+              display: 'flex',
+              flexWrap: 'wrap',
+              gap: 6,
+              width: '100%',
+            }}
+          >
+            {workers.map((w) => (
+              <WorkerChip key={`${w.hostname}:${w.name}`} worker={w} />
+            ))}
+          </div>
+        )}
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px',
+          }}
+        >
         <span style={{ pointerEvents: 'none' }}>
           Watching... {countdown != null ? `(next fetch in ${countdown})` : 'Countdown not running'}
         </span>
@@ -152,6 +219,7 @@ export function BottomToolbar({
         <span style={{ fontSize: '8px', opacity: 0.4, marginLeft: 8 }}>
           Furniture by pablodelucca (MIT) | Vehicles by MinZinn (CC-BY 4.0) | Cats by bluecarrot16 (CC-BY 3.0) | Forest by Seliel the Shaper
         </span>
+        </div>
       </div>
     )
   }
