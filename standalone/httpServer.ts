@@ -2,7 +2,7 @@ import * as http from 'http';
 import * as fs from 'fs';
 import * as path from 'path';
 import { loadKnownProjects } from '../src/projectStore.js';
-import type { RosterEntry } from './agentStore.js';
+import type { RosterEntry } from './systemPrompts.js';
 import { launchAgentOnTicket, handleLaunchDesigner, handleLaunchVisualDesigner, handleJanReviewDesigner } from './clickupHandlers.js';
 import { WEBVIEW_DIR } from './serverContext.js';
 import type { ServerContext } from './serverContext.js';

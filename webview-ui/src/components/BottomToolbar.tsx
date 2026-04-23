@@ -36,6 +36,28 @@ export function BottomToolbar({
   const [hoveredFolder, setHoveredFolder] = useState<number | null>(null)
   const folderPickerRef = useRef<HTMLDivElement>(null)
   const [countdown, setCountdown] = useState<string | null>(null)
+  const [fetchStartedFrom, setFetchStartedFrom] = useState<number | null>(null)
+  const isFetching = fetchStartedFrom !== null
+
+  // Clear spinner when the server broadcasts a new clickupNextFetchAt (fetch completed).
+  useEffect(() => {
+    if (fetchStartedFrom == null) return
+    if (clickupNextFetchAt != null && clickupNextFetchAt !== fetchStartedFrom) {
+      setFetchStartedFrom(null)
+    }
+  }, [clickupNextFetchAt, fetchStartedFrom])
+
+  // Safety cap so a stuck fetch doesn't pin the spinner forever.
+  useEffect(() => {
+    if (fetchStartedFrom == null) return
+    const id = setTimeout(() => setFetchStartedFrom(null), 30000)
+    return () => clearTimeout(id)
+  }, [fetchStartedFrom])
+
+  const handleFetchNow = () => {
+    setFetchStartedFrom(clickupNextFetchAt ?? 0)
+    vscode.postMessage({ type: 'clickupRefresh' })
+  }
 
   useEffect(() => {
     if (clickupNextFetchAt == null) {
@@ -98,20 +120,34 @@ export function BottomToolbar({
           Watching... {countdown != null ? `(next fetch in ${countdown})` : 'Countdown not running'}
         </span>
         {countdown != null && (
-          <button
-            onClick={() => vscode.postMessage({ type: 'clickupRefresh' })}
-            onMouseEnter={() => setHovered('fetchNow')}
-            onMouseLeave={() => setHovered(null)}
-            title="Fetch now"
-            style={{
-              ...btnBase,
-              fontSize: '16px',
-              padding: '2px 8px',
-              border: hovered === 'fetchNow' ? '2px solid var(--pixel-accent)' : '2px solid transparent',
-            }}
-          >
-            Fetch now
-          </button>
+          isFetching ? (
+            <span
+              className="pixel-spinner"
+              style={{
+                fontSize: '16px',
+                padding: '2px 8px',
+                color: 'var(--pixel-text-dim)',
+              }}
+              title="Fetching..."
+            >
+              {'↻'}
+            </span>
+          ) : (
+            <button
+              onClick={handleFetchNow}
+              onMouseEnter={() => setHovered('fetchNow')}
+              onMouseLeave={() => setHovered(null)}
+              title="Fetch now"
+              style={{
+                ...btnBase,
+                fontSize: '16px',
+                padding: '2px 8px',
+                border: hovered === 'fetchNow' ? '2px solid var(--pixel-accent)' : '2px solid transparent',
+              }}
+            >
+              Fetch now
+            </button>
+          )
         )}
         <span style={{ fontSize: '8px', opacity: 0.4, marginLeft: 8 }}>
           Furniture by pablodelucca (MIT) | Vehicles by MinZinn (CC-BY 4.0) | Cats by bluecarrot16 (CC-BY 3.0) | Forest by Seliel the Shaper

@@ -60,3 +60,13 @@ html, body, #root {
 * {
   font-family: 'Open Sans', sans-serif;
 }
+
+@keyframes pixel-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.pixel-spinner {
+  display: inline-block;
+  animation: pixel-spin 1s linear infinite;
+}

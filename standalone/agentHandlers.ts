@@ -7,12 +7,12 @@ import {
 	savePersistentAgents,
 	ensureAgentMemory,
 	deleteAgentData,
-	buildSystemPrompt,
 	expandHome,
 	ensureMempalaceMcpConfig,
 } from './agentStore.js';
 import type { PersistentAgent, DesignConfig } from './agentStore.js';
 import { DEFAULT_DESIGN_CONFIG } from './agentStore.js';
+import { buildSystemPrompt } from './systemPrompts.js';
 import { readJson, writeJson, getOfflineAgents } from './serverHelpers.js';
 import { SEATS_FILE, SETTINGS_FILE } from './serverContext.js';
 import type { ServerContext } from './serverContext.js';

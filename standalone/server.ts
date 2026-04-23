@@ -14,9 +14,9 @@ import {
 	pickRandomName,
 	ensureAgentMemory,
 	seedDesignTeams,
-	buildOrganogram,
 	getAgentMemoryPath,
 } from './agentStore.js';
+import { buildOrganogram } from './organogram.js';
 import type { PersistentAgent } from './agentStore.js';
 import type { ClickUpConfig } from './clickupClient.js';
 import { readJson, writeJson, getOfflineAgents } from './serverHelpers.js';

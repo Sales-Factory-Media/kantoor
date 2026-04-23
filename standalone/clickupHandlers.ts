@@ -8,6 +8,13 @@ import {
 	savePersistentAgents,
 	ensureAgentMemory,
 	generateAgentId,
+	expandHome,
+	ensureMempalaceMcpConfig,
+	mergeMcpConfigs,
+	pickRandomName,
+} from './agentStore.js';
+import type { DesignConfig } from './agentStore.js';
+import {
 	buildDarrylSystemPrompt,
 	buildJanSystemPrompt,
 	buildDesignerSystemPrompt,
@@ -15,12 +22,8 @@ import {
 	buildVisualQaSystemPrompt,
 	buildVisualQaInitialTask,
 	buildJanReviewPrompt,
-	expandHome,
-	ensureMempalaceMcpConfig,
-	mergeMcpConfigs,
-	pickRandomName,
-} from './agentStore.js';
-import type { RosterEntry, DesignConfig } from './agentStore.js';
+} from './systemPrompts.js';
+import type { RosterEntry } from './systemPrompts.js';
 import { getJanDesignConfig } from './agentHandlers.js';
 import { ensureMcpConfig as ensurePeersMcpConfig } from './conferenceManager.js';
 import { fetchListTasks, addTaskComment } from './clickupClient.js';
@@ -190,22 +193,35 @@ function getDesignerMachineCapacity(ctx: ServerContext): number {
 export function autoJanPickup(ctx: ServerContext): void {
 	if (ctx.isWorkerMode) return;
 
-	// Collect tickets assigned to Jan in "to refine" or "to do" status
+	// IDs of every ticket Jan is an assignee on, across all statuses.
+	// Used to recognise sub-tickets of Jan's work even if they're unassigned.
+	const janTicketIds = new Set<string>();
+	for (const group of ctx.clickupTickets) {
+		for (const task of group.tasks) {
+			if (task.assignees.some(a => a.username === JAN_CLICKUP_USERNAME)) {
+				janTicketIds.add(task.id);
+			}
+		}
+	}
+
+	// Collect tickets assigned to Jan in "to refine" or "to do" status,
+	// and count every in-progress ticket that is Jan's or a direct child of Jan's
+	// (each one potentially holds a Figma slot on some machine).
 	const janTickets: Array<{ id: string; name: string; url: string; status: string }> = [];
-	let inProgressForJan = 0;
+	let inProgressCount = 0;
 	for (const group of ctx.clickupTickets) {
 		const statusLower = group.name.toLowerCase();
 		if (statusLower === 'in progress') {
 			for (const task of group.tasks) {
-				if (task.assignees.some(a => a.username === JAN_CLICKUP_USERNAME)) {
-					inProgressForJan++;
+				if (janTicketIds.has(task.id) || (task.parent && janTicketIds.has(task.parent))) {
+					inProgressCount++;
 				}
 			}
 			continue;
 		}
 		if (statusLower !== 'to do' && statusLower !== 'to refine') continue;
 		for (const task of group.tasks) {
-			if (task.assignees.some(a => a.username === JAN_CLICKUP_USERNAME)) {
+			if (janTicketIds.has(task.id)) {
 				janTickets.push({ id: task.id, name: task.name, url: task.url, status: statusLower });
 			}
 		}
@@ -215,8 +231,8 @@ export function autoJanPickup(ctx: ServerContext): void {
 
 	// Hard cap: never more tickets in progress than designer-capable machines.
 	const designerCapacity = getDesignerMachineCapacity(ctx);
-	if (inProgressForJan >= designerCapacity) {
-		console.log(`[Standalone] Jan pickup gated: ${inProgressForJan} in-progress ticket(s), designer capacity ${designerCapacity}`);
+	if (inProgressCount >= designerCapacity) {
+		console.log(`[Standalone] Jan pickup gated: ${inProgressCount} in-progress ticket(s), designer capacity ${designerCapacity}`);
 		return;
 	}
 
@@ -805,7 +821,7 @@ function tryLaunchVisualDesignerLocal(msg: Record<string, unknown>, ctx: ServerC
 ${revisionLine}${briefBlock}## Steps
 1. Move ticket to "in progress".
 2. Run the Component discipline protocol from your system prompt: family scan (A) + shopping list (B) from the approved UX Figma node in the Brief. Keep the summary short — do NOT dump the whole library into context.
-3. Create the page \`${ticketId} — Visual Design\`. If the shopping list includes candidates, also create \`__Candidates — ${ticketId}\` in the same file.
+3. Create the page \`${ticketId} — Visual Design — {short descriptor}\` — the descriptor is 2–4 words you pick to describe what's on the page (e.g. \`Dashboard Overview\`, \`Onboarding Flow\`), so humans can tell pages apart. If the shopping list includes candidates, also create \`__Candidates — ${ticketId}\` in the same file.
 4. Build the screens using just-in-time lookup (C). New components go on the candidates page, NOT the canonical DS.
 5. Final audit (F). Screenshot + post Figma page URL as a ClickUp comment (include a "Candidates for promotion" list if any, and note any checklist items you flag N/A).
 6. ${AI_REVIEW_ENABLED ? 'Move ticket to "ai review" — the Visual Quality Reviewer will auto-pick it up.' : 'Move ticket to "qa test". A human reviews from there.'}${EXIT_REMINDER}`;

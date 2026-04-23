@@ -26,13 +26,15 @@ vi.mock('./serverHelpers.js', () => ({
 import * as fs from 'fs';
 import {
 	pickRandomName,
-	buildSystemPrompt,
-	buildDarrylSystemPrompt,
 	getAgentMemoryPath,
 	ensureMempalaceMcpConfig,
 	mergeMcpConfigs,
 } from './agentStore.js';
-import type { RosterEntry } from './agentStore.js';
+import {
+	buildSystemPrompt,
+	buildDarrylSystemPrompt,
+} from './systemPrompts.js';
+import type { RosterEntry } from './systemPrompts.js';
 
 function makeAgent(overrides: Partial<PersistentAgent> = {}): PersistentAgent {
 	return {
