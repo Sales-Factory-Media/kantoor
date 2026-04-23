@@ -204,10 +204,11 @@ export function autoJanPickup(ctx: ServerContext): void {
 		}
 	}
 
-	// Collect tickets assigned to Jan in "to refine" or "to do" status,
-	// and count every in-progress ticket that is Jan's or a direct child of Jan's
-	// (each one potentially holds a Figma slot on some machine).
-	const janTickets: Array<{ id: string; name: string; url: string; status: string }> = [];
+	// Collect tickets Jan can act on, split by status, and count in-progress
+	// tickets (each potentially holds a Figma slot on some machine).
+	const refineTickets: Array<{ id: string; name: string; url: string }> = [];
+	const todoTickets: Array<{ id: string; name: string; url: string }> = [];
+	const aiReviewTickets: Array<{ id: string; name: string; url: string }> = [];
 	let inProgressCount = 0;
 	for (const group of ctx.clickupTickets) {
 		const statusLower = group.name.toLowerCase();
@@ -219,40 +220,65 @@ export function autoJanPickup(ctx: ServerContext): void {
 			}
 			continue;
 		}
-		if (statusLower !== 'to do' && statusLower !== 'to refine') continue;
 		for (const task of group.tasks) {
-			if (janTicketIds.has(task.id)) {
-				janTickets.push({ id: task.id, name: task.name, url: task.url, status: statusLower });
+			if (!janTicketIds.has(task.id)) continue;
+			if (statusLower === 'to refine') {
+				refineTickets.push({ id: task.id, name: task.name, url: task.url });
+			} else if (statusLower === 'to do') {
+				todoTickets.push({ id: task.id, name: task.name, url: task.url });
+			} else if (statusLower === 'ai review' && AI_REVIEW_PICKUP_ENABLED) {
+				aiReviewTickets.push({ id: task.id, name: task.name, url: task.url });
 			}
 		}
 	}
 
-	if (janTickets.length === 0) return;
+	if (refineTickets.length === 0 && todoTickets.length === 0 && aiReviewTickets.length === 0) return;
 
-	// Hard cap: never more tickets in progress than designer-capable machines.
-	const designerCapacity = getDesignerMachineCapacity(ctx);
-	if (inProgressCount >= designerCapacity) {
-		console.log(`[Standalone] Jan pickup gated: ${inProgressCount} in-progress ticket(s), designer capacity ${designerCapacity}`);
+	// Jan is a single agent; can only run one session at a time
+	const jan = ctx.persistentAgents.find(p => p.name === 'Jan');
+	if (jan?.currentSessionId) return;
+
+	// "to refine" is still single-ticket: one refine ticket spawns 5 UX designers,
+	// which already saturates the UX team — batching multiple refine tickets is
+	// pointless.
+	if (refineTickets.length > 0) {
+		const ticket = refineTickets[0];
+		console.log(`[Standalone] Auto-pickup: Jan taking refine ticket ${ticket.id}`);
+		handleJanDesignBriefing(
+			{ ticketId: ticket.id, ticketName: ticket.name, ticketUrl: ticket.url, ticketStatus: 'to refine' },
+			ctx,
+		);
 		return;
 	}
 
-	// Jan handles one ticket at a time (like Darryl on the hub)
-	const jan = ctx.persistentAgents.find(p => p.name === 'Jan');
-	if (jan?.currentSessionId) return; // Already busy
+	// Batch mode: combine "to do" (each dispatches one Visual Designer) and
+	// "ai review" (each dispatches the single Visual QA). Each category has
+	// its own capacity limit — we don't want to over-queue either worker pool.
+	const designerCapacity = getDesignerMachineCapacity(ctx);
+	const availableDesignerSlots = Math.max(0, designerCapacity - inProgressCount);
 
-	// Prioritize "to refine" tickets (Phase 1) over "to do" (Phase 2)
-	janTickets.sort((a, b) => {
-		if (a.status === 'to refine' && b.status !== 'to refine') return -1;
-		if (a.status !== 'to refine' && b.status === 'to refine') return 1;
-		return 0;
-	});
-
-	const ticket = janTickets[0];
-	console.log(`[Standalone] Auto-pickup: Jan taking ticket ${ticket.id} (status: ${ticket.status})`);
-	handleJanDesignBriefing(
-		{ ticketId: ticket.id, ticketName: ticket.name, ticketUrl: ticket.url, ticketStatus: ticket.status },
-		ctx,
+	const qaBusy = ctx.persistentAgents.some(
+		p => p.roleShort === VISUAL_QA_ROLE_SHORT
+			&& p.teamId === TEAM_VISUAL_ID
+			&& p.currentSessionId,
 	);
+	const availableQaSlots = qaBusy ? 0 : 1;
+
+	const batchedTodo = todoTickets.slice(0, availableDesignerSlots);
+	const batchedReview = aiReviewTickets.slice(0, availableQaSlots);
+
+	const batch: Array<{ id: string; name: string; url: string; status: 'to do' | 'ai review' }> = [
+		...batchedTodo.map(t => ({ ...t, status: 'to do' as const })),
+		...batchedReview.map(t => ({ ...t, status: 'ai review' as const })),
+	];
+
+	if (batch.length === 0) {
+		console.log(`[Standalone] Jan pickup gated: designers ${inProgressCount}/${designerCapacity} in progress, QA ${qaBusy ? 'busy' : 'free'}; ${todoTickets.length} todo + ${aiReviewTickets.length} ai-review waiting`);
+		return;
+	}
+
+	console.log(`[Standalone] Auto-pickup: Jan batch of ${batch.length} (${batchedTodo.length} to-do, ${batchedReview.length} ai-review)`);
+	handleJanBatchDispatch(batch, ctx);
 }
 
 // ── Ticket work ──────────────────────────────────────────────
@@ -579,6 +605,116 @@ export function handleJanDesignBriefing(msg: Record<string, unknown>, ctx: Serve
 	const mcpConfigPath = ensureMempalaceMcpConfig(mempalaceHost);
 	if (!launchAgentSession(newSessionId, cwd, systemPrompt, initialTask, { mcpConfigPath, extraFlags: ['--permission-mode', 'auto'] })) {
 		console.log(`[Standalone] Failed to launch Jan for ticket ${ticketId}`);
+	}
+}
+
+/**
+ * Launch Jan with a batch of tickets — up to N "to do" (each dispatches one
+ * Visual Designer) plus up to 1 "ai review" (dispatches Visual QA). All
+ * dispatches fire from the same Jan session so she doesn't need to be
+ * relaunched per ticket.
+ */
+export function handleJanBatchDispatch(
+	batch: Array<{ id: string; name: string; url: string; status: 'to do' | 'ai review' }>,
+	ctx: ServerContext,
+): void {
+	if (batch.length === 0) return;
+	const { persistentAgents } = ctx;
+
+	// Find or create Jan
+	let jan = persistentAgents.find(p => p.name === 'Jan');
+	if (!jan) {
+		jan = {
+			id: generateAgentId(),
+			name: 'Jan',
+			roleShort: JAN_ROLE_SHORT,
+			roleFull: 'The Art Director. Receives design briefings, delegates to PM and designers, reviews output, and maintains design quality standards.',
+			workspacePath: JAN_WORKSPACE,
+		};
+		persistentAgents.push(jan);
+		savePersistentAgents(persistentAgents);
+	}
+
+	if (jan.currentSessionId) {
+		console.log(`[Standalone] Jan already has an active session ${jan.currentSessionId}, skipping batch dispatch`);
+		return;
+	}
+
+	// Build roster (excluding Jan)
+	const knownProjects = loadKnownProjects();
+	const roster: RosterEntry[] = persistentAgents
+		.filter(p => p.id !== jan!.id)
+		.map(p => {
+			const projName = path.basename(p.workspacePath);
+			const proj = knownProjects.find(k => k.name === projName);
+			return {
+				id: p.id,
+				name: p.name,
+				roleShort: p.roleShort,
+				roleFull: p.roleFull,
+				workspacePath: p.workspacePath,
+				projectName: proj?.name ?? projName,
+				projectDescription: proj?.description,
+				isOnline: !!p.currentSessionId,
+			};
+		});
+
+	const systemPrompt = buildJanSystemPrompt(jan, roster, SERVER_PORT);
+
+	// Build the multi-ticket initial task. Jan processes each in sequence but
+	// the dispatched agents all run in parallel once fired.
+	const ticketLines = batch.map((t, i) =>
+		`${i + 1}. **[${t.status.toUpperCase()}]** ${t.id}: "${t.name}" (${t.url})`,
+	).join('\n');
+
+	const initialTask = `You have ${batch.length} ticket${batch.length === 1 ? '' : 's'} to dispatch. Work through them in order — do NOT stop after the first one.
+
+${ticketLines}
+
+## For each ticket above:
+
+### If status is **"to do"** (Phase 2 Visual Design)
+1. \`clickup_get_task\` + \`clickup_get_task_comments\` once. Find an approved UX direction (sub-ticket tagged \`UX-prototype-briefing\`, a Figma node URL in comments, or an explicit "approved UX:" line).
+   - If found → cite that Figma node URL + any DS notes in your Brief.
+   - If none → greenfield. Do NOT stall or ask questions. Write a Brief from the ticket description alone and note the missing UX.
+2. Dispatch ONE Visual Designer:
+   \`curl -X POST http://localhost:${SERVER_PORT}/api/launch-visual-designer -d '{"workspacePath":"~/Projects/<project>","ticketId":"<id>","ticketName":"<name>","ticketUrl":"<url>","additionalPrompt":"<Brief>"}'\`
+3. Only \`success:true\` counts. On \`success:false\`, skip this one and move on — it'll be retried on the next pickup cycle.
+
+### If status is **"ai review"** (Delegate — do NOT review yourself)
+1. Dispatch the Visual Quality Reviewer — that agent does the actual review. You are only the dispatcher.
+   \`curl -X POST http://localhost:${SERVER_PORT}/api/launch-visual-qa -d '{"ticketId":"<id>","ticketName":"<name>","ticketUrl":"<url>"}'\`
+2. Do NOT read the ticket, do NOT open Figma, do NOT post a review comment. The QA agent has its own checklist and is the one that posts the verdict.
+3. Only \`success:true\` counts. On \`success:false\`, skip and move on.
+
+## When you're done
+After dispatching (or skipping) every ticket above, you are DONE. Do not wait for designers or QA to finish — they run in parallel on their own timelines. ${EXIT_REMINDER.trim()}`;
+
+	// Launch Jan. Track only the first ticket on the persistent-agent record
+	// (used for UI labels); the rest are recorded in the initial task.
+	const first = batch[0];
+	const newSessionId = crypto.randomUUID();
+	jan.currentSessionId = newSessionId;
+	jan.currentTicketId = first.id;
+	jan.currentTicketName = first.name;
+	jan.currentTicketUrl = first.url;
+	savePersistentAgents(persistentAgents);
+	ensureAgentMemory(jan.id);
+
+	const cwd = expandHome(jan.workspacePath || '~');
+	let mempalaceHost: string | undefined;
+	if (ctx.mempalaceServerUrl) {
+		try {
+			mempalaceHost = new URL(ctx.mempalaceServerUrl).hostname;
+		} catch {
+			mempalaceHost = undefined;
+		}
+	}
+	const mcpConfigPath = ensureMempalaceMcpConfig(mempalaceHost);
+	if (!launchAgentSession(newSessionId, cwd, systemPrompt, initialTask, { mcpConfigPath, extraFlags: ['--permission-mode', 'auto'] })) {
+		console.log(`[Standalone] Failed to launch Jan batch of ${batch.length}`);
+		jan.currentSessionId = undefined;
+		savePersistentAgents(persistentAgents);
 	}
 }
 
