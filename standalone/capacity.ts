@@ -3,8 +3,9 @@
  *
  * Every machine (hub or remote worker) with the 'designer' role can run at
  * most ONE visual task at a time — Visual Designer, UX Designer, or Visual
- * QA. The Figma lock enforces this per-machine. This module computes the
- * aggregate view used by Jan's batch pickup.
+ * QA. The per-machine "visual slot" lock enforces this (see
+ * findBusyVisualSlot). This module computes the aggregate view used by Jan's
+ * batch pickup.
  */
 
 import {
@@ -18,12 +19,13 @@ import type { PersistentAgent } from './agentStore.js';
 import type { ServerContext } from './serverContext.js';
 
 /**
- * Find the agent currently holding the Figma lock on THIS machine, if any.
- * The lock covers every role that touches the local Figma instance — UX
- * Designer, Visual Designer, and Visual Quality Reviewer — since they all
- * share the single Figma app.
+ * Find the agent currently occupying THIS machine's visual-task slot, if any.
+ * Every visual role (UX Designer, Visual Designer, Visual QA) shares the same
+ * slot because they all compete for the local Figma instance and for finite
+ * per-machine resources. Returns the blocking agent so callers can report
+ * "machine busy because <name> (<role>) is running".
  */
-export function findFigmaLockHolder(persistentAgents: PersistentAgent[]): PersistentAgent | undefined {
+export function findBusyVisualSlot(persistentAgents: PersistentAgent[]): PersistentAgent | undefined {
 	return persistentAgents.find(
 		p => (p.roleShort === DESIGNER_ROLE_SHORT
 			|| p.roleShort === VISUAL_DESIGNER_ROLE_SHORT

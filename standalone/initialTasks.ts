@@ -184,13 +184,13 @@ ${revisionLine}${briefBlock}## Steps
 }
 
 export function buildJanBatchInitialTask(
-	batch: Array<{ id: string; name: string; url: string; status: 'to do' | 'ai review' }>,
+	batch: Array<{ id: string; name: string; url: string; status: 'to do' | 'ai review' | 'revision needed' }>,
 ): string {
 	const ticketLines = batch.map((t, i) =>
 		`${i + 1}. **[${t.status.toUpperCase()}]** ${t.id}: "${t.name}" (${t.url})`,
 	).join('\n');
 
-	return `You have ${batch.length} ticket${batch.length === 1 ? '' : 's'} to dispatch. Work through them in order — do NOT stop after the first one.
+	return `You have ${batch.length} ticket${batch.length === 1 ? '' : 's'} to dispatch. Work through them in order — do NOT stop after the first one. You never open Figma — you are an orchestrator.
 
 ${ticketLines}
 
@@ -207,9 +207,21 @@ ${ticketLines}
 ### If status is **"ai review"** — DELEGATE ONLY. Your sole action is the curl call.
 1. Fire the dispatch:
    \`curl -X POST http://localhost:${SERVER_PORT}/api/launch-visual-qa -d '{"ticketId":"<id>","ticketName":"<name>","ticketUrl":"<url>"}'\`
-2. FORBIDDEN in this mode: \`clickup_get_task\`, \`clickup_get_task_comments\`, any \`figma_*\` tool, any \`clickup_update_task\` (status), any comment. The Visual Quality Reviewer agent is the one that reads the ticket, opens Figma, counts FRAME vs INSTANCE nodes, writes the verdict, and moves the ticket to \`in progress\` (on start) then \`qa test\`/\`to do\` (on finish). You MUST NOT do any of these steps.
+2. FORBIDDEN in this mode: \`clickup_get_task\`, \`clickup_get_task_comments\`, any \`figma_*\` tool, any \`clickup_update_task\` (status), any comment. Visual QA handles reading the ticket, inspecting the design, counting FRAME vs INSTANCE, writing the verdict, and moving the ticket (\`in progress\` → \`qa test\` or \`to do\`). You MUST NOT do any of these steps.
 3. Only \`success:true\` counts. On \`success:false\`, skip and move on to the next ticket in the batch.
 
+### If status is **"revision needed"**
+1. \`clickup_get_task\` + \`clickup_get_task_comments\` once. Identify:
+   - Is this a UX ticket or a Visual ticket? (Look at the ticket tags / parent / description. UX tickets are usually sub-tickets tagged \`UX-prototype-briefing\`.)
+   - What did the reviewer want changed? (Top-most review comment with required changes.)
+   - The workspace path (from the original dispatch or the project context).
+2. Write a tight Brief summarising the required changes — the designer should NOT need to re-read every comment.
+3. Dispatch the appropriate designer with \`revisionMode:true\`:
+   - UX: \`curl -X POST http://localhost:${SERVER_PORT}/api/launch-designer -d '{"workspacePath":"~/Projects/<project>","ticketId":"<id>","ticketName":"<name>","ticketUrl":"<url>","additionalPrompt":"<Brief>","revisionMode":true}'\`
+   - Visual: \`curl -X POST http://localhost:${SERVER_PORT}/api/launch-visual-designer -d '{"workspacePath":"~/Projects/<project>","ticketId":"<id>","ticketName":"<name>","ticketUrl":"<url>","additionalPrompt":"<Brief>","revisionMode":true}'\`
+4. The hub auto-routes across the fleet — you don't pick a machine. If the original designer is free, they'll get it. Otherwise another free designer picks it up. Don't try to route manually.
+5. Only \`success:true\` counts. On \`success:false\`, skip and move on — the next pickup cycle retries.
+
 ## When you're done
-After dispatching (or skipping) every ticket above, you are DONE. Do not wait for designers or QA to finish — they run in parallel on their own timelines.`;
+After dispatching (or skipping) every ticket above, you are DONE. Do not wait for designers or QA to finish — they run in parallel on their own timelines. You never open Figma.`;
 }

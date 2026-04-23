@@ -3,7 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { loadKnownProjects } from '../src/projectStore.js';
 import type { RosterEntry } from './systemPrompts.js';
-import { launchAgentOnTicket, handleLaunchDesigner, handleLaunchVisualDesigner, handleJanReviewDesigner, handleVisualQaReview } from './clickupHandlers.js';
+import { launchAgentOnTicket, handleLaunchDesigner, handleLaunchVisualDesigner, handleVisualQaReview } from './clickupHandlers.js';
 import { WEBVIEW_DIR } from './serverContext.js';
 import type { ServerContext } from './serverContext.js';
 
@@ -82,7 +82,6 @@ const HUB_ONLY_API_PATHS = new Set([
 	'/api/launch-designer',
 	'/api/launch-visual-designer',
 	'/api/launch-visual-qa',
-	'/api/review-designer',
 ]);
 
 // ── HTTP server factory ──────────────────────────────────────
@@ -202,41 +201,6 @@ export function createHttpServer(ctx: ServerContext): http.Server {
 						}, ctx);
 						res.writeHead(result.success ? 200 : 400);
 						res.end(JSON.stringify(result));
-					} catch {
-						res.writeHead(400);
-						res.end(JSON.stringify({ error: 'Invalid JSON' }));
-					}
-				});
-				return;
-			}
-
-			if (req.method === 'POST' && urlPath === '/api/review-designer') {
-				const MAX_BODY_BYTES = 64 * 1024;
-				let body = '';
-				let exceeded = false;
-				req.on('data', (chunk: Buffer) => {
-					if (exceeded) return;
-					body += chunk.toString();
-					if (Buffer.byteLength(body) > MAX_BODY_BYTES) {
-						exceeded = true;
-						res.writeHead(413);
-						res.end(JSON.stringify({ error: 'Request body too large' }));
-						req.destroy();
-					}
-				});
-				req.on('end', () => {
-					if (exceeded) return;
-					try {
-						const json = JSON.parse(body) as Record<string, unknown>;
-						handleJanReviewDesigner({
-							ticketId: json.ticketId as string,
-							ticketName: (json.ticketName as string) || '',
-							ticketUrl: (json.ticketUrl as string) || '',
-							designerName: (json.designerName as string) || 'unknown',
-							workspacePath: (json.workspacePath as string) || '',
-						}, ctx);
-						res.writeHead(200);
-						res.end(JSON.stringify({ success: true }));
 					} catch {
 						res.writeHead(400);
 						res.end(JSON.stringify({ error: 'Invalid JSON' }));

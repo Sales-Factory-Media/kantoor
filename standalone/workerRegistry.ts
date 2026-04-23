@@ -12,6 +12,7 @@ import { WORKER_ASSIGNMENTS_FILE, SETTINGS_DIR } from './serverContext.js';
 import type { ServerContext, WorkerInfo, WorkerAssignment } from './serverContext.js';
 import { loadPersistentAgents, getAgentMemoryPath, ensureAgentMemory } from './agentStore.js';
 import type { PersistentAgent } from './agentStore.js';
+import { releaseTicket } from './dispatchRegistry.js';
 
 // ── Assignment persistence ──────────────────────────────────
 
@@ -120,9 +121,11 @@ export function checkWorkerHeartbeats(ctx: ServerContext): void {
 		const worker = ctx.workers.get(name);
 		if (worker) {
 			try { worker.ws.close(); } catch { /* ignore */ }
-			// If worker was working on a ticket, mark it as failed
+			// If worker was working on a ticket, mark it as failed and release
+			// the claim so another machine can retry.
 			if (worker.currentTicketId) {
 				markAssignment(ctx, worker.currentTicketId, 'failed');
+				releaseTicket(ctx.dispatchRegistry, worker.currentTicketId);
 			}
 		}
 		ctx.workers.delete(name);
@@ -140,6 +143,7 @@ export function handleWorkerDisconnect(ws: WebSocket, ctx: ServerContext): void 
 			console.log(`[Hub] Worker "${name}" disconnected`);
 			if (worker.currentTicketId) {
 				markAssignment(ctx, worker.currentTicketId, 'failed');
+				releaseTicket(ctx.dispatchRegistry, worker.currentTicketId);
 			}
 			ctx.workers.delete(name);
 			broadcastWorkerStatus(ctx);
@@ -257,6 +261,7 @@ export function handleTicketComplete(
 			worker.currentTicketId = null;
 			worker.currentTicketName = null;
 			markAssignment(ctx, ticketId, 'completed');
+			releaseTicket(ctx.dispatchRegistry, ticketId);
 			broadcastWorkerStatus(ctx);
 			return;
 		}
@@ -277,6 +282,7 @@ export function handleTicketFailed(
 			worker.currentTicketId = null;
 			worker.currentTicketName = null;
 			markAssignment(ctx, ticketId, 'failed');
+			releaseTicket(ctx.dispatchRegistry, ticketId);
 			broadcastWorkerStatus(ctx);
 			return;
 		}
@@ -294,6 +300,7 @@ export function clearWorkerTicket(ws: WebSocket, ctx: ServerContext): string | n
 			const previous = worker.currentTicketId;
 			worker.currentTicketId = null;
 			worker.currentTicketName = null;
+			if (previous) releaseTicket(ctx.dispatchRegistry, previous);
 			broadcastWorkerStatus(ctx);
 			return previous;
 		}

@@ -12,6 +12,7 @@ import type { WebSocket } from 'ws';
 import type { StandaloneAgentManager } from './standaloneAgentManager.js';
 import type { PersistentAgent } from './agentStore.js';
 import type { ClickUpConfig, ClickUpStatusGroup } from './clickupClient.js';
+import type { DispatchRegistry } from './dispatchRegistry.js';
 
 // ── Worker types ────────────────────────────────────────────
 export interface WorkerInfo {
@@ -100,4 +101,8 @@ export interface ServerContext {
 	mempalaceServerUrl: string | null;
 	// Worker-mode: WS connection back to hub, used to forward session-end events
 	hubWs: WebSocket | null;
+	// In-flight dispatch claims — one entry per ticket currently being worked.
+	// Hub-only; workers don't run auto-pickup so their registry is unused.
+	// See standalone/dispatchRegistry.ts for semantics.
+	dispatchRegistry: DispatchRegistry;
 }

@@ -22,6 +22,7 @@ import type { ClickUpConfig } from './clickupClient.js';
 import { readJson, writeJson, getOfflineAgents } from './serverHelpers.js';
 import { preloadAssets, SEATS_FILE, SETTINGS_FILE, WORKER_IDENTITY_FILE } from './serverContext.js';
 import type { ServerContext, WorkerIdentity } from './serverContext.js';
+import { createDispatchRegistry, releaseTicket } from './dispatchRegistry.js';
 import {
 	handleFocusAgent,
 	handleSaveAgentSeats,
@@ -45,13 +46,9 @@ import {
 	handleJanDesignBriefing,
 	handleLaunchDesigner,
 	handleLaunchVisualDesigner,
-	handleJanReviewDesigner,
 	handleVisualQaReview,
 	handleDesignerSessionEnded,
-	autoVisualQaPickup,
-	autoDesignerRevisionPickup,
 	autoDarrylPickup,
-	autoJanPickup,
 	autoPickupAfterWorkerFree,
 } from './clickupHandlers.js';
 import {
@@ -235,11 +232,12 @@ function handleWebviewReady(ws: WebSocket, ctx: ServerContext): void {
 	// Send organogram snapshot
 	ws.send(JSON.stringify({ type: 'organogramSnapshot', organogram: buildOrganogram(persistentAgents) }));
 
-	// Try auto-pickup on client connect (agents may have become free since last poll)
+	// Try Darryl's auto-pickup on client connect — dev workers may have become
+	// free since the last poll. Jan is deliberately NOT fired here; her
+	// dispatch only runs on the ClickUp poll timer or an explicit refresh, so
+	// she doesn't launch unexpectedly just because someone opened the webview.
 	if (!ctx.isWorkerMode) {
 		autoDarrylPickup(ctx);
-		autoJanPickup(ctx);
-		autoDesignerRevisionPickup(ctx);
 	}
 }
 
@@ -293,16 +291,10 @@ const messageHandlers: Record<string, (ws: WebSocket, msg: Record<string, unknow
 	getOrganogram: (ws, _msg, ctx) => {
 		ws.send(JSON.stringify({ type: 'organogramSnapshot', organogram: buildOrganogram(ctx.persistentAgents) }));
 	},
-	janReviewDesigner: (_ws, msg, ctx) => {
-		if (rejectIfWorker(ctx, 'janReviewDesigner')) return;
-		handleJanReviewDesigner({
-			ticketId: msg.ticketId as string,
-			ticketName: (msg.ticketName as string) || '',
-			ticketUrl: (msg.ticketUrl as string) || '',
-			designerName: (msg.designerName as string) || 'unknown',
-			workspacePath: (msg.workspacePath as string) || '',
-		}, ctx);
-	},
+	// janReviewDesigner was removed: Jan is a pure orchestrator and does not
+	// open Figma to review designer output. Designers move their own tickets
+	// to `qa test` (human review) when they finish; Visual Designer output
+	// additionally passes through Visual QA via Jan's ai-review dispatch.
 };
 
 /**
@@ -420,6 +412,7 @@ async function main(): Promise<void> {
 		pendingWorkerRequests: new Map(),
 		mempalaceServerUrl: null,
 		hubWs: null,
+		dispatchRegistry: createDispatchRegistry(),
 	};
 
 	// ── Workspace path cache (decoded from project hash) ────
@@ -501,6 +494,15 @@ async function main(): Promise<void> {
 				pa.currentTicketUrl = undefined;
 				savePersistentAgents(persistentAgents);
 
+				// Release the dispatch claim if this session held one. On hub this
+				// lets the next autoPickup cycle see the slot as free; on workers
+				// the hub releases its own claim via the forwarded session-end
+				// messages below, so releasing locally here is also fine (the
+				// worker-side registry is a no-op in practice).
+				if (completedTicket) {
+					releaseTicket(ctx.dispatchRegistry, completedTicket.ticketId);
+				}
+
 				const isDesignRole = pa.roleShort === VISUAL_DESIGNER_ROLE_SHORT
 					|| pa.roleShort === DESIGNER_ROLE_SHORT
 					|| pa.roleShort === VISUAL_QA_ROLE_SHORT
@@ -508,7 +510,8 @@ async function main(): Promise<void> {
 
 				if (isWorkerMode && isDesignRole) {
 					// On a remote worker: forward the session-end to the hub so Jan
-					// review / Visual QA / revision pickup still trigger centrally.
+					// can pick up the next step (Visual QA for finished Visual
+					// Designer output, next revision for Jan-owned tickets).
 					let memoryContent: string | undefined;
 					try {
 						const memPath = getAgentMemoryPath(pa.id);
@@ -528,27 +531,21 @@ async function main(): Promise<void> {
 					}, ctx);
 				} else if (isWorkerMode && pa.name === 'Darryl' && completedTicket) {
 					// On a remote worker: Darryl's session for a hub-dispatched ticket
-					// just ended. Report back immediately (event-driven) instead of the
-					// old 5s poll in watchForCompletion.
+					// just ended. Report back immediately so the hub releases its
+					// own claim and frees the worker's slot.
 					reportTicketCompleteToHub(completedTicket.ticketId, ctx);
 				} else {
-					// On the hub: trigger the existing local review pipeline.
+					// On the hub: if a Visual Designer just finished, kick off the
+					// AI-review step (QA dispatch) if auto-escalation is on.
 					if (AI_REVIEW_AUTO_ESCALATE && pa.roleShort === VISUAL_DESIGNER_ROLE_SHORT && completedTicket) {
 						console.log(`[Standalone] Visual Designer "${pa.name}" finished ticket ${completedTicket.ticketId}, triggering Visual QA AI Review`);
 						setTimeout(() => { handleVisualQaReview(completedTicket, ctx).catch(err => console.error('[Standalone] Visual QA dispatch failed:', err)); }, REVIEW_TRIGGER_DELAY_MS);
 					}
-					if (pa.roleShort === DESIGNER_ROLE_SHORT && completedTicket) {
-						console.log(`[Standalone] UX Designer "${pa.name}" finished ticket ${completedTicket.ticketId}, triggering Jan review`);
-						setTimeout(() => handleJanReviewDesigner(completedTicket, ctx), REVIEW_TRIGGER_DELAY_MS);
-					}
-					if (AI_REVIEW_AUTO_ESCALATE && pa.roleShort === VISUAL_QA_ROLE_SHORT) {
-						setTimeout(() => autoDesignerRevisionPickup(ctx), REVIEW_TRIGGER_DELAY_MS);
-					}
-					if (pa.roleShort === JAN_ROLE_SHORT) {
-						setTimeout(() => autoDesignerRevisionPickup(ctx), REVIEW_TRIGGER_DELAY_MS);
-					}
-					// Capacity opened up locally — re-run pickup so waiting tickets don't
-					// sit for up to CLICKUP_POLL_INTERVAL_MS before being dispatched.
+					// All other follow-ups (revision, next batch of Jan tickets,
+					// next Darryl ticket) go through autoPickupAfterWorkerFree
+					// below — there are no longer any role-specific dispatch
+					// shortcuts. Jan handles every design state transition; we
+					// never dispatch a designer from here directly.
 					autoPickupAfterWorkerFree(ctx);
 				}
 			}
