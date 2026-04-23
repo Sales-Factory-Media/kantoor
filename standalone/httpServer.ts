@@ -161,7 +161,7 @@ export function createHttpServer(ctx: ServerContext): http.Server {
 						req.destroy();
 					}
 				});
-				req.on('end', () => {
+				req.on('end', async () => {
 					if (exceeded) return;
 					try {
 						const json = JSON.parse(body) as Record<string, unknown>;
@@ -171,15 +171,15 @@ export function createHttpServer(ctx: ServerContext): http.Server {
 							res.end(JSON.stringify({ success: false, error: 'Missing ticketId' }));
 							return;
 						}
-						handleVisualQaReview({
+						const result = await handleVisualQaReview({
 							ticketId,
 							ticketName: (json.ticketName as string) || '',
 							ticketUrl: (json.ticketUrl as string) || '',
 							designerName: (json.designerName as string) || 'unknown',
 							workspacePath: (json.workspacePath as string) || '',
 						}, ctx);
-						res.writeHead(200);
-						res.end(JSON.stringify({ success: true }));
+						res.writeHead(result.success ? 200 : 400);
+						res.end(JSON.stringify(result));
 					} catch {
 						res.writeHead(400);
 						res.end(JSON.stringify({ error: 'Invalid JSON' }));

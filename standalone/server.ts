@@ -497,7 +497,7 @@ async function main(): Promise<void> {
 					// On the hub: trigger the existing local review pipeline.
 					if (AI_REVIEW_AUTO_ESCALATE && pa.roleShort === VISUAL_DESIGNER_ROLE_SHORT && completedTicket) {
 						console.log(`[Standalone] Visual Designer "${pa.name}" finished ticket ${completedTicket.ticketId}, triggering Visual QA AI Review`);
-						setTimeout(() => handleVisualQaReview(completedTicket, ctx), REVIEW_TRIGGER_DELAY_MS);
+						setTimeout(() => { handleVisualQaReview(completedTicket, ctx).catch(err => console.error('[Standalone] Visual QA dispatch failed:', err)); }, REVIEW_TRIGGER_DELAY_MS);
 					}
 					if (pa.roleShort === DESIGNER_ROLE_SHORT && completedTicket) {
 						console.log(`[Standalone] UX Designer "${pa.name}" finished ticket ${completedTicket.ticketId}, triggering Jan review`);

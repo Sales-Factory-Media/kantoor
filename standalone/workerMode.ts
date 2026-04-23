@@ -15,6 +15,7 @@ import {
 	handleDarrylHandleTicket,
 	handleLaunchDesigner,
 	handleLaunchVisualDesigner,
+	handleVisualQaReview,
 } from './clickupHandlers.js';
 import type { ServerContext } from './serverContext.js';
 
@@ -101,7 +102,7 @@ function handleHubMessage(
 		handleRegistered(msg, ctx);
 	} else if (type === 'handleTicket') {
 		handleTicketFromHub(ws, msg, ctx);
-	} else if (type === 'launchDesigner' || type === 'launchVisualDesigner') {
+	} else if (type === 'launchDesigner' || type === 'launchVisualDesigner' || type === 'launchVisualQa') {
 		handleLaunchRpcFromHub(ws, type, msg, ctx).catch(err => {
 			console.error(`[Worker] ${type} RPC error:`, err);
 			const requestId = msg.requestId as string | undefined;
@@ -118,7 +119,7 @@ function handleHubMessage(
 
 async function handleLaunchRpcFromHub(
 	ws: WebSocket,
-	rpcType: 'launchDesigner' | 'launchVisualDesigner',
+	rpcType: 'launchDesigner' | 'launchVisualDesigner' | 'launchVisualQa',
 	msg: Record<string, unknown>,
 	ctx: ServerContext,
 ): Promise<void> {
@@ -143,8 +144,20 @@ async function handleLaunchRpcFromHub(
 	let result: { success: boolean; error?: string; worker?: string };
 	if (rpcType === 'launchDesigner') {
 		result = await handleLaunchDesigner(launchMsg, ctx);
-	} else {
+	} else if (rpcType === 'launchVisualDesigner') {
 		result = await handleLaunchVisualDesigner(launchMsg, ctx);
+	} else {
+		// launchVisualQa — same dispatch pattern, different agent role.
+		// The hub has already chosen this worker (via getIdleWorkersWithRole)
+		// based on its advertised 'designer' role + idle status, so just
+		// hand the ticket to the local handler.
+		result = await handleVisualQaReview({
+			ticketId: (launchMsg.ticketId as string) || '',
+			ticketName: (launchMsg.ticketName as string) || '',
+			ticketUrl: (launchMsg.ticketUrl as string) || '',
+			designerName: (launchMsg.designerName as string) || 'unknown',
+			workspacePath: (launchMsg.workspacePath as string) || '',
+		}, ctx);
 	}
 
 	console.log(`[Worker] ${rpcType} result: success=${result.success}${result.error ? ` error="${result.error}"` : ''}`);

@@ -251,33 +251,69 @@ export function autoJanPickup(ctx: ServerContext): void {
 		return;
 	}
 
-	// Batch mode: combine "to do" (each dispatches one Visual Designer) and
-	// "ai review" (each dispatches the single Visual QA). Each category has
-	// its own capacity limit — we don't want to over-queue either worker pool.
-	const designerCapacity = getDesignerMachineCapacity(ctx);
-	const availableDesignerSlots = Math.max(0, designerCapacity - inProgressCount);
+	// Unified capacity model: every machine (hub or worker) with the 'designer'
+	// role can perform ONE visual task at a time — either a Visual Designer, a
+	// UX Designer, or a Visual QA review. So `availableSlots` is a single
+	// number shared across all three, and Jan's batch is one pool of tickets
+	// picked up to that limit.
+	//
+	// `inProgressCount` (from ClickUp "in progress" scan above) is the primary
+	// signal. We also count any visual-role persistent agent with a
+	// currentSessionId that isn't already reflected in in-progress tickets
+	// yet — this catches the ~15-30s window between Jan dispatching and the
+	// dispatched agent actually moving the ticket to "in progress".
+	const totalMachines = getDesignerMachineCapacity(ctx);
+	const inProgressTicketIds = new Set<string>();
+	for (const group of ctx.clickupTickets) {
+		if (group.name.toLowerCase() !== 'in progress') continue;
+		for (const task of group.tasks) {
+			if (janTicketIds.has(task.id) || (task.parent && janTicketIds.has(task.parent))) {
+				inProgressTicketIds.add(task.id);
+			}
+		}
+	}
 
-	const qaBusy = ctx.persistentAgents.some(
-		p => p.roleShort === VISUAL_QA_ROLE_SHORT
-			&& p.teamId === TEAM_VISUAL_ID
-			&& p.currentSessionId,
-	);
-	const availableQaSlots = qaBusy ? 0 : 1;
+	// Persistent-agent sessions on the hub running a visual task that isn't
+	// already counted in `inProgressCount`.
+	let pendingDispatches = 0;
+	for (const pa of ctx.persistentAgents) {
+		if (!pa.currentSessionId) continue;
+		if (pa.roleShort !== DESIGNER_ROLE_SHORT
+			&& pa.roleShort !== VISUAL_DESIGNER_ROLE_SHORT
+			&& pa.roleShort !== VISUAL_QA_ROLE_SHORT) continue;
+		// If the current ticket is already counted in inProgressTicketIds,
+		// don't double-count — ClickUp already reflects this session.
+		if (pa.currentTicketId && inProgressTicketIds.has(pa.currentTicketId)) continue;
+		pendingDispatches++;
+	}
+	// Remote workers that have a ticket assigned but whose ClickUp status
+	// hasn't caught up yet (same race window).
+	for (const worker of ctx.workers.values()) {
+		if (!worker.currentTicketId) continue;
+		if (inProgressTicketIds.has(worker.currentTicketId)) continue;
+		pendingDispatches++;
+	}
 
-	const batchedTodo = todoTickets.slice(0, availableDesignerSlots);
-	const batchedReview = aiReviewTickets.slice(0, availableQaSlots);
+	const activeSlots = inProgressCount + pendingDispatches;
+	const availableSlots = Math.max(0, totalMachines - activeSlots);
 
-	const batch: Array<{ id: string; name: string; url: string; status: 'to do' | 'ai review' }> = [
-		...batchedTodo.map(t => ({ ...t, status: 'to do' as const })),
-		...batchedReview.map(t => ({ ...t, status: 'ai review' as const })),
+	// Combined batch: fill available slots with whatever's waiting. Put
+	// ai-review tickets first — they're quicker (reviews don't write code),
+	// so draining the review queue keeps the board moving.
+	const combined = [
+		...aiReviewTickets.map(t => ({ ...t, status: 'ai review' as const })),
+		...todoTickets.map(t => ({ ...t, status: 'to do' as const })),
 	];
+	const batch = combined.slice(0, availableSlots);
 
 	if (batch.length === 0) {
-		console.log(`[Standalone] Jan pickup gated: designers ${inProgressCount}/${designerCapacity} in progress, QA ${qaBusy ? 'busy' : 'free'}; ${todoTickets.length} todo + ${aiReviewTickets.length} ai-review waiting`);
+		console.log(`[Standalone] Jan pickup gated: ${activeSlots}/${totalMachines} machines active (${inProgressCount} in-progress + ${pendingDispatches} pending-dispatch); ${todoTickets.length} todo + ${aiReviewTickets.length} ai-review waiting`);
 		return;
 	}
 
-	console.log(`[Standalone] Auto-pickup: Jan batch of ${batch.length} (${batchedTodo.length} to-do, ${batchedReview.length} ai-review)`);
+	const todoInBatch = batch.filter(b => b.status === 'to do').length;
+	const reviewInBatch = batch.filter(b => b.status === 'ai review').length;
+	console.log(`[Standalone] Auto-pickup: Jan batch of ${batch.length} (${todoInBatch} to-do, ${reviewInBatch} ai-review) — ${activeSlots}/${totalMachines} machines already active`);
 	handleJanBatchDispatch(batch, ctx);
 }
 
@@ -739,7 +775,7 @@ function findFigmaLockHolder(persistentAgents: PersistentAgent[]): PersistentAge
 async function dispatchDesignerToFleet(
 	msg: Record<string, unknown>,
 	ctx: ServerContext,
-	rpcType: 'launchDesigner' | 'launchVisualDesigner',
+	rpcType: 'launchDesigner' | 'launchVisualDesigner' | 'launchVisualQa',
 	localError?: string,
 ): Promise<{ success: boolean; error?: string; worker?: string }> {
 	const ticketId = msg.ticketId as string | undefined;
@@ -1121,7 +1157,7 @@ export function handleDesignerSessionEnded(
 	if (agentRole === VISUAL_DESIGNER_ROLE_SHORT) {
 		if (AI_REVIEW_AUTO_ESCALATE) {
 			console.log(`[Hub] Remote Visual Designer finished ticket ${ticketId} — triggering Visual QA AI review`);
-			setTimeout(() => handleVisualQaReview(completedTicket, ctx), REVIEW_TRIGGER_DELAY_MS);
+			setTimeout(() => { handleVisualQaReview(completedTicket, ctx).catch(err => console.error('[Hub] Visual QA dispatch failed:', err)); }, REVIEW_TRIGGER_DELAY_MS);
 		} else {
 			console.log(`[Hub] Remote Visual Designer finished ticket ${ticketId} — auto-escalation paused, no auto-QA`);
 		}
@@ -1154,31 +1190,49 @@ export function handleDesignerSessionEnded(
  * Launches the team's Visual Quality Reviewer to evaluate the work.
  * The QA agent decides Pass (→ "qa test") or Fail (→ "to do" for revision).
  */
-export function handleVisualQaReview(
+export async function handleVisualQaReview(
 	completedTicket: { ticketId: string; ticketName: string; ticketUrl: string; designerName: string; workspacePath: string },
 	ctx: ServerContext,
-): void {
+): Promise<{ success: boolean; error?: string; worker?: string }> {
+	// Same pattern as Visual Designer fleet dispatch: try local first, cascade
+	// to a remote worker if this machine's Figma is busy.
+	const local = tryLaunchVisualQaLocal(completedTicket, ctx);
+	if (local.success) return { ...local, worker: ctx.workerIdentity?.name };
+	if (!ctx.isWorkerMode && local.figmaBusy) {
+		// Reuse the generic fleet dispatcher with a launchVisualQa RPC.
+		const msg: Record<string, unknown> = {
+			ticketId: completedTicket.ticketId,
+			ticketName: completedTicket.ticketName,
+			ticketUrl: completedTicket.ticketUrl,
+			designerName: completedTicket.designerName,
+			workspacePath: completedTicket.workspacePath,
+		};
+		return dispatchDesignerToFleet(msg, ctx, 'launchVisualQa', local.error);
+	}
+	return local;
+}
+
+function tryLaunchVisualQaLocal(
+	completedTicket: { ticketId: string; ticketName: string; ticketUrl: string; designerName: string; workspacePath: string },
+	ctx: ServerContext,
+): { success: boolean; error?: string; figmaBusy?: boolean } {
 	const { ticketId, ticketName, ticketUrl, designerName } = completedTicket;
 	const { persistentAgents } = ctx;
 
-	// Find the Visual QA agent (seeded at startup)
+	// Figma lock is the single source of truth: one designer / QA per machine.
+	// If something already holds the lock on THIS machine, defer. The cascade
+	// above will try a remote worker instead.
+	const activeFigma = findFigmaLockHolder(persistentAgents);
+	if (activeFigma) {
+		return { success: false, figmaBusy: true, error: `Local Figma busy: "${activeFigma.name}" (${activeFigma.roleShort}) is already running.` };
+	}
+
+	// Find the Visual QA agent for this machine.
 	const qa = persistentAgents.find(
 		p => p.roleShort === VISUAL_QA_ROLE_SHORT && p.teamId === TEAM_VISUAL_ID,
 	);
 	if (!qa) {
-		console.log(`[Standalone] No Visual QA agent seeded — cannot review ticket ${ticketId}`);
-		return;
-	}
-	if (qa.currentSessionId) {
-		console.log(`[Standalone] Visual QA "${qa.name}" is already busy, deferring review of ticket ${ticketId}`);
-		return;
-	}
-	// Figma lock: defer if a designer is already running on this machine so we
-	// don't fight them for Figma. autoVisualQaPickup will retry on the next poll.
-	const activeFigma = findFigmaLockHolder(persistentAgents);
-	if (activeFigma) {
-		console.log(`[Standalone] Local Figma busy: "${activeFigma.name}" (${activeFigma.roleShort}) is running — deferring Visual QA for ticket ${ticketId}`);
-		return;
+		return { success: false, error: 'No Visual QA agent seeded on this machine' };
 	}
 
 	const qaDesignConfig = getJanDesignConfig();
@@ -1210,11 +1264,11 @@ export function handleVisualQaReview(
 	const cwd = expandHome(qa.workspacePath || '~');
 	if (launchAgentSession(newSessionId, cwd, systemPrompt, initialTask, { mcpConfigPath, extraFlags: ['--permission-mode', 'auto'] })) {
 		console.log(`[Standalone] Launched Visual QA "${qa.name}" for AI review of ticket ${ticketId}`);
-	} else {
-		qa.currentSessionId = undefined;
-		savePersistentAgents(persistentAgents);
-		console.log(`[Standalone] Failed to launch Visual QA for ticket ${ticketId}`);
+		return { success: true };
 	}
+	qa.currentSessionId = undefined;
+	savePersistentAgents(persistentAgents);
+	return { success: false, error: 'Failed to launch Visual QA session' };
 }
 
 /**
@@ -1245,7 +1299,7 @@ export function autoVisualQaPickup(ctx: ServerContext): void {
 			ticketUrl: ticket.url,
 			designerName: 'unknown',
 			workspacePath: qa.workspacePath,
-		}, ctx);
+		}, ctx).catch(err => console.error('[Standalone] Visual QA pickup dispatch failed:', err));
 		return;
 	}
 }
