@@ -74,9 +74,11 @@ import {
 	autoDarrylPickup,
 	autoJanPickup,
 	runAutoPickupNow,
+} from './clickupHandlers.js';
+import {
 	launchAgentOnTicket,
 	handleDesignerSessionEnded,
-} from './clickupHandlers.js';
+} from './workerDispatch.js';
 
 // Keep in sync with standalone/constants.ts — imported values would work too,
 // but hardcoding makes the tests more explicit about what they're testing.

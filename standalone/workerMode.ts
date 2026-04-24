@@ -15,7 +15,7 @@ import {
 	handleLaunchDesigner,
 	handleLaunchVisualDesigner,
 	handleVisualQaReview,
-} from './clickupHandlers.js';
+} from './workerDispatch.js';
 import type { ServerContext } from './serverContext.js';
 
 let hubWs: WebSocket | null = null;

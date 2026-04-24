@@ -3,7 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { loadKnownProjects } from '../src/projectStore.js';
 import type { RosterEntry } from './systemPrompts.js';
-import { launchAgentOnTicket, handleLaunchDesigner, handleLaunchVisualDesigner, handleVisualQaReview } from './clickupHandlers.js';
+import { launchAgentOnTicket, handleLaunchDesigner, handleLaunchVisualDesigner, handleVisualQaReview } from './workerDispatch.js';
 import { WEBVIEW_DIR } from './serverContext.js';
 import type { ServerContext } from './serverContext.js';
 

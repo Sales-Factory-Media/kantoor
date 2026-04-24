@@ -40,13 +40,15 @@ import {
 import {
 	startClickupPolling,
 	handleClickupRefresh,
-	handleClickupStartWork,
 	handleClickupConfigure,
 	handleJanDesignBriefing,
+} from './clickupHandlers.js';
+import {
+	handleClickupStartWork,
 	handleLaunchDesigner,
 	handleLaunchVisualDesigner,
 	handleDesignerSessionEnded,
-} from './clickupHandlers.js';
+} from './workerDispatch.js';
 import {
 	handleStartConference,
 	handleEndConference,
