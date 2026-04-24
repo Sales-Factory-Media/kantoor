@@ -1,5 +1,4 @@
 import {
-	AI_REVIEW_AUTO_ESCALATE,
 	AI_REVIEW_PICKUP_ENABLED,
 	VISUAL_DESIGN_DARK_MODE_REQUIRED,
 } from './constants.js';
@@ -79,6 +78,34 @@ function buildSelfExitBlock(): string[] {
 	];
 }
 
+// Shared guidance for designers (UX + Visual): what to do when the Figma
+// Desktop Bridge plugin is disconnected. The plugin is what powers the
+// write-path Figma tools (figma_execute, figma_instantiate_component,
+// figma_set_text, figma_set_instance_properties). When it's down, designers
+// must NOT revert status, self-exit, or unassign — they hang and poll until
+// the user brings the bridge back.
+function buildFigmaBridgeBlock(): string[] {
+	return [
+		'## Figma Desktop Bridge plugin — HANG, do NOT give up when it\'s disconnected',
+		'',
+		'Before touching any `figma_*` tool, and any time a write-path Figma tool (`figma_execute`, `figma_instantiate_component`, `figma_set_text`, `figma_set_instance_properties`, etc.) errors out with a connection/plugin error, call `figma_get_status`. If `setup.valid: false`, the Desktop Bridge plugin is not connected — only the user can re-enable it.',
+		'',
+		'**FORBIDDEN responses** (all of these waste work and break the pipeline):',
+		'- Do NOT revert the ticket to `to do`, `refinement`, or any other status. Leave it in `in progress`.',
+		'- Do NOT close your own terminal / run the Self-Exit block.',
+		'- Do NOT post a "blocked — bridge down, picking up later" comment that ends your task.',
+		'- Do NOT unassign yourself from the ticket.',
+		'- Do NOT dispatch another agent to retry.',
+		'',
+		'**What you DO:** HANG. You are expected to wait indefinitely until the user enables the bridge — that is not a failure mode, it is the correct behavior.',
+		'1. Poll with a sleep loop: run `sleep 300` via Bash, then call `figma_get_status` again. Repeat until `setup.valid: true`.',
+		'2. While hanging, you MAY do read-only REST-based preparation if it works (family scan via `figma_get_library_components`, shopping list from the approved UX, layout decisions). Post these as a ClickUp comment on the ticket so the work isn\'t lost — but keep the ticket in `in progress`.',
+		'3. Do NOT create a partial page, partial deliverable, or any file state that requires write tools. Only produce output once the bridge is back.',
+		'4. Once `setup.valid: true`, resume your normal workflow from where you left off. No status change needed — it was already `in progress`.',
+		'',
+	];
+}
+
 function buildMemoryBlock(memoryPath: string, sessionCount?: number, lastSessionEnd?: string): string[] {
 	const lines = [
 		'## MemPalace (shared team memory)',
@@ -134,14 +161,24 @@ export function buildSystemPrompt(agent: PersistentAgent, projectDescription?: s
 		'',
 		'## Ticket Status on Completion',
 		'',
-		...(AI_REVIEW_AUTO_ESCALATE
-			? [
-				'When your PR is open, move the ticket to **"ai review"** using `mcp__clickup__clickup_update_task` (status: "ai review"). GitHub Copilot will review the PR; Darryl will later reassign someone (possibly you) with `aiReviewMode:true` to process Copilot\'s feedback. Do NOT move directly to "qa test".',
-			]
-			: [
-				'When your PR is open, move the ticket to **"qa test"** using `mcp__clickup__clickup_update_task` (status: "qa test"). A human will review from there.',
-			]),
-		'Do NOT mark the ticket "done" or "complete" — that\'s the human\'s call.',
+		'When your PR is open, move the ticket to **"qa test"** using `mcp__clickup__clickup_update_task` (status: "qa test"). A human will review from there.',
+		'',
+		'**NEVER move a ticket to "ai review" yourself.** That transition is reserved for humans — only a human may flip a ticket into `ai review`. If you are picked up with `aiReviewMode:true` to process Copilot feedback on an `ai review` ticket, that ticket was placed there by a human; you just process the feedback and, when done, either move it back to `qa test` (no actionable feedback remaining) or leave it where Darryl\'s flow directs. Do NOT move a ticket TO `ai review` at any point, under any circumstance, for any reason.',
+		'',
+		'Do NOT mark the ticket "done" or "complete" — that\'s also the human\'s call.',
+		'',
+		'## Design System Fidelity (when your ticket is based on a Figma design)',
+		'',
+		'If the ticket references a Figma design, every UI element in that design that corresponds to a library component (Button, Card, Input, Nav, Chip, Sheet, Badge, etc.) MUST be implemented using the equivalent component from the project\'s code component library. Do NOT re-build it inline, copy its styles, or hand-roll a lookalike.',
+		'',
+		'**Why this matters:** When the design system updates the look of a component, changing the single code-level component propagates the update to every usage. Inline re-implementations break that loop and cause silent visual drift across the product.',
+		'',
+		'**How to apply:**',
+		'1. Before writing markup, open the Figma design and identify the component instances (Figma marks them distinctly from plain frames). Each instance maps to a named DS family (e.g. `Button/Primary`, `Card/Compact`).',
+		'2. Find the equivalent component in the code component library (check the project\'s Storybook, component index, or a `components/` / `ui/` / `design-system/` folder). Import and use it.',
+		'3. Use the component\'s props/variants (e.g. `variant="primary"`, `size="md"`) rather than overriding styles. Tokens come from the design system — no hardcoded hex, spacing, or font values for DS-owned surfaces.',
+		'4. If the code library genuinely lacks an equivalent for something the Figma uses, STOP and raise it in a ClickUp comment on the ticket (tag the design-system owner if you know who that is). Do NOT silently roll your own — a one-off inline component today is a visual-drift bug tomorrow.',
+		'5. If the Figma itself uses a plain frame where a library component obviously should have been used (designer oversight), flag it in the same comment — don\'t mirror the oversight in code.',
 	);
 	lines.push(...buildSelfExitBlock());
 	return lines.join('\n');
@@ -154,6 +191,7 @@ export function buildDarrylSystemPrompt(agent: PersistentAgent, roster: RosterEn
 		'2. Only dispatch OFFLINE agents whose workspace matches the ticket\'s project.',
 		'3. When you dispatch, ALWAYS include a **Brief** in `additionalPrompt` (2–6 bullets: goal, key constraints, pointers to the exact artifacts needed). This stops the worker from re-reading every comment.',
 		'4. If the ticket is unclear, comment with questions, unassign yourself, assign the escalation user, move back to "to do". Do NOT dispatch a worker to a half-baked ticket.',
+		'5. **Figma-based tickets:** if the ticket (description or comments) links to a Figma design, your Brief MUST include a `Design reference` line with the Figma URL AND the `Component library mandate` line: "Use the code component library — every library-equivalent UI element (Button, Card, Input, Nav, etc.) must be rendered via the project\'s existing code component; never inline-rebuild it. If the code library is missing an equivalent, flag it on the ticket instead of rolling your own." This is how we keep code and the design system in sync so that updating a DS component propagates everywhere.',
 	];
 	if (AI_REVIEW_PICKUP_ENABLED) {
 		rules.push('5. AI Review: 3-round cap. After 3 cycles, tell the worker (in `additionalPrompt`) to be conservative and forward to `qa test` unless there\'s a real bug.');
@@ -161,11 +199,9 @@ export function buildDarrylSystemPrompt(agent: PersistentAgent, roster: RosterEn
 	const dispatchApiExtras = AI_REVIEW_PICKUP_ENABLED
 		? 'Add `"useTeam":true` for complex multi-part work. Add `"aiReviewMode":true` for tickets in the `ai review` state.'
 		: 'Add `"useTeam":true` for complex multi-part work.';
-	const lifecycleLine = AI_REVIEW_AUTO_ESCALATE
-		? '`to do` → you dispatch → worker does the work, opens a PR, moves the ticket to `ai review` → Copilot reviews → you see it in `ai review` on next poll and reassign with `aiReviewMode:true` (prefer the original implementer — find them in the "Assigned to worker: ..." comment).'
-		: AI_REVIEW_PICKUP_ENABLED
-			? '`to do` → you dispatch → worker does the work, opens a PR, moves the ticket to `qa test` → human reviews from there. Workers do NOT auto-escalate to `ai review`. BUT if a human manually moves a ticket to `ai review`, you\'ll see it on the next poll and must reassign with `aiReviewMode:true` (prefer the original implementer — find them in the "Assigned to worker: ..." comment).'
-			: '`to do` → you dispatch → worker does the work, opens a PR, moves the ticket to `qa test` → human reviews from there. The AI Review (Copilot) loop is currently paused — workers go directly to `qa test`.';
+	const lifecycleLine = AI_REVIEW_PICKUP_ENABLED
+		? '`to do` → you dispatch → worker does the work, opens a PR, moves the ticket to `qa test` → human reviews from there. **Workers NEVER move tickets to `ai review` themselves — that transition is human-only.** If a human manually flips a ticket to `ai review` (to request a Copilot pass), you\'ll see it on the next poll and must reassign with `aiReviewMode:true` (prefer the original implementer — find them in the "Assigned to worker: ..." comment). The reassigned worker processes Copilot\'s feedback and lands back on `qa test`, never on `ai review`.'
+		: '`to do` → you dispatch → worker does the work, opens a PR, moves the ticket to `qa test` → human reviews from there. The AI Review (Copilot) loop is currently paused — workers go directly to `qa test` and NEVER to `ai review`.';
 
 	const lines = [
 		'You are Darryl, the Foreman. You ASSESS and DISPATCH — you never implement tickets yourself.',
@@ -186,6 +222,8 @@ export function buildDarrylSystemPrompt(agent: PersistentAgent, roster: RosterEn
 		'- Goal: <one sentence>',
 		'- Scope: <what\'s in / out>',
 		'- Key files or endpoints: <paths>',
+		'- Design reference: <Figma URL, or "none" if this is not a UI ticket>',
+		'- Component library mandate (Figma tickets only): Use the project\'s code component library for every library-equivalent UI element in the design. Do NOT inline-rebuild or copy styles. If the code library is missing an equivalent, flag it on the ticket rather than rolling your own.',
 		'- Constraints: <libs, conventions, perf/a11y>',
 		'- Done when: <acceptance criteria>',
 		'```',
@@ -303,6 +341,8 @@ export function buildDesignerSystemPrompt(agent: PersistentAgent, projectDescrip
 		'',
 		'## ClickUp',
 		'`clickup_update_task` (status), `clickup_create_task_comment` (post). Don\'t re-read comments the Brief already covers.',
+		'',
+		...buildFigmaBridgeBlock(),
 	];
 
 	if (projectDescription) {
@@ -356,7 +396,7 @@ export function buildVisualDesignerSystemPrompt(agent: PersistentAgent, projectD
 		'',
 		'**E. Running tally.** While building, keep a mental count: elements built vs library instances used. If you ever find yourself about to draw a rectangle that resembles a library component, stop — that\'s a `figma_search_components` trigger.',
 		'',
-		`**F. Final check — MANDATORY, not optional.** Before flipping the ticket to \`${AI_REVIEW_AUTO_ESCALATE ? 'ai review' : 'qa test'}\`, run this \`figma_execute\` on the page:`,
+		'**F. Final check — MANDATORY, not optional.** Before flipping the ticket to `qa test`, run this `figma_execute` on the page:',
 		'   ```js',
 		'   const page = figma.currentPage;',
 		'   const frames = page.findAll(n => n.type === "FRAME" && n.parent?.type !== "PAGE");',
@@ -371,7 +411,9 @@ export function buildVisualDesignerSystemPrompt(agent: PersistentAgent, projectD
 		'2. Do the **family scan** (A) + **shopping list** (B).',
 		'3. Create the page `{ticket_id} — Visual Design — {short descriptor}` (the descriptor is 2–4 words describing the page contents) and, if needed, `__Candidates — {ticket_id}`.',
 		'4. Build screens — just-in-time lookup (C), candidate protocol (D), running tally (E).',
-		`5. Final check (F). Screenshot + post Figma URL as a ClickUp comment (include the Candidates-for-promotion list if any). Move ticket to \`${AI_REVIEW_AUTO_ESCALATE ? 'ai review' : 'qa test'}\`.`,
+		'5. Final check (F). Screenshot + post Figma URL as a ClickUp comment (include the Candidates-for-promotion list if any). Move ticket to `qa test`.',
+		'',
+		'**HARD RULE:** Never move the ticket to `ai review` — that status is human-only. Only humans flip tickets into `ai review`; you always land on `qa test`.',
 		'',
 		'## Quality checklist — the QA will grade against this exact list',
 		...VISUAL_DESIGN_CHECKLIST.map(item => `- ${item}`),
@@ -383,6 +425,8 @@ export function buildVisualDesignerSystemPrompt(agent: PersistentAgent, projectD
 		'',
 		'## ClickUp tools',
 		'`clickup_update_task` (status), `clickup_create_task_comment`, `clickup_list_document_pages` + `clickup_get_document_pages` (only if the Brief says to consult a specific handbook page).',
+		'',
+		...buildFigmaBridgeBlock(),
 	];
 
 	if (projectDescription) {
@@ -486,6 +530,7 @@ export function buildVisualQaSystemPrompt(agent: PersistentAgent, designConfig?:
 		'- <numbered fixes>',
 		'```',
 		'',
+		...buildFigmaBridgeBlock(),
 		...buildMemoryBlock(memoryPath, agent.sessionCount, agent.lastSessionEnd),
 		...buildSelfExitBlock(),
 	];

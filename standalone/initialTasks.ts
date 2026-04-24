@@ -32,10 +32,10 @@ ${briefBlock}## Steps
 1. Move ticket to "in progress".
 2. Find the PR (branch \`feature/CU-${ticketId}-*\`). Read Copilot's review + inline comments via \`mcp__github__pull_request_read\`.
 3. Triage: actionable (real bug / security / broken convention) vs not (style opinions you disagree with, already-addressed).
-4a. Actionable: check out the branch, fix, commit with \`CU-${ticketId}\` ref, push, comment what you addressed + what you deliberately skipped (and why), move ticket back to "ai review".
+4a. Actionable: check out the branch, fix, commit with \`CU-${ticketId}\` ref, push, comment what you addressed + what you deliberately skipped (and why), then move ticket to "qa test".
 4b. Nothing actionable: comment confirming review, move ticket to "qa test".
 
-Rules: commit+push BEFORE flipping back to "ai review". 3-round cap — if this is round 3+, forward to "qa test" unless there's a real bug.`;
+**HARD RULE:** You MUST NOT move the ticket back to "ai review". Only humans flip tickets into "ai review". After you\'ve addressed Copilot, always land on "qa test" so a human can decide whether another Copilot pass is warranted. Commit+push before flipping to "qa test".`;
 }
 
 export function buildWorkerStandardInitialTask(
@@ -44,9 +44,6 @@ export function buildWorkerStandardInitialTask(
 	ticketUrl: string,
 	briefBlock: string,
 ): string {
-	const finalStep = AI_REVIEW_AUTO_ESCALATE
-		? 'Move ticket to **"ai review"** (not "qa test") — Copilot reviews, then you may be reassigned to process its feedback.'
-		: 'Move ticket to **"qa test"**. A human reviews from there.';
 	return `Ticket ${ticketId}: "${ticketName}" (${ticketUrl}).
 
 ${briefBlock}## Steps
@@ -54,7 +51,9 @@ ${briefBlock}## Steps
 2. Check out or create branch \`feature/CU-${ticketId}-<short-desc>\` from develop.
 3. Do the work. Rely on the Brief above — only re-read the ticket if the Brief is missing something specific.
 4. Open a PR. Commit messages must include \`CU-${ticketId}\`.
-5. ${finalStep}`;
+5. Move ticket to **"qa test"**. A human reviews from there.
+
+**HARD RULE:** Never move the ticket to "ai review" — that status is human-only. Only humans flip tickets into "ai review"; you always land on "qa test".`;
 }
 
 // ── Darryl (foreman) ──────────────────────────────────────────
@@ -169,9 +168,6 @@ export function buildVisualDesignerInitialTask(
 	const revisionLine = revisionMode
 		? 'REVISION: read the LATEST Jan/QA review comment on the ticket and address it. Preserve what was approved.\n\n'
 		: '';
-	const finalStep = AI_REVIEW_AUTO_ESCALATE
-		? 'Move ticket to "ai review" — the Visual Quality Reviewer will auto-pick it up.'
-		: 'Move ticket to "qa test". A human reviews from there.';
 	return `Ticket ${ticketId}: "${ticketName}" (${ticketUrl})
 
 ${revisionLine}${briefBlock}## Steps
@@ -180,7 +176,9 @@ ${revisionLine}${briefBlock}## Steps
 3. Create the page \`${ticketId} — Visual Design — {short descriptor}\` — the descriptor is 2–4 words you pick to describe what's on the page (e.g. \`Dashboard Overview\`, \`Onboarding Flow\`), so humans can tell pages apart. If the shopping list includes candidates, also create \`__Candidates — ${ticketId}\` in the same file.
 4. Build the screens using just-in-time lookup (C). New components go on the candidates page, NOT the canonical DS.
 5. Final audit (F). Screenshot + post Figma page URL as a ClickUp comment (include a "Candidates for promotion" list if any, and note any checklist items you flag N/A).
-6. ${finalStep}`;
+6. Move ticket to "qa test". A human reviews from there.
+
+**HARD RULE:** Never move the ticket to "ai review" — that status is human-only. Only humans flip tickets into "ai review"; you always land on "qa test".`;
 }
 
 export function buildJanBatchInitialTask(
