@@ -73,8 +73,9 @@ import { createDispatchRegistry, claimTicket, isTicketClaimed } from './dispatch
 import {
 	autoDarrylPickup,
 	autoJanPickup,
-	autoPickupAfterWorkerFree,
 	runAutoPickupNow,
+	launchAgentOnTicket,
+	handleDesignerSessionEnded,
 } from './clickupHandlers.js';
 
 // Keep in sync with standalone/constants.ts — imported values would work too,
@@ -183,46 +184,15 @@ describe('invariant 1: workers never auto-start tasks', () => {
 		expect(ctx.dispatchRegistry.size).toBe(0);
 	});
 
-	it('autoPickupAfterWorkerFree is a no-op in worker mode (no debounced action scheduled either)', async () => {
-		const ctx = makeTestCtx({
-			isWorkerMode: true,
-			clickupTickets: [ticketGroup('to do', [{ id: 'T-1', assignee: DARRYL_USER }])],
-		});
-		autoPickupAfterWorkerFree(ctx);
-		// Wait past the debounce window — nothing should fire.
-		await new Promise(r => setTimeout(r, 300));
-		expect(ctx.dispatchRegistry.size).toBe(0);
-		expect(launchPersistentAgentMock).not.toHaveBeenCalled();
-	});
 });
 
-// ── Invariant 1b: Jan only launches on the ClickUp poll / manual refresh ──
+// ── Invariant 1b: specialists only launch on ClickUp poll / manual refresh ──
 
-describe('invariant 1b: Jan\'s launch cadence is the ClickUp timer', () => {
-	it('autoPickupAfterWorkerFree does NOT trigger autoJanPickup (no Jan session)', async () => {
-		// Build a ctx where Jan has a "to do" ticket ready to dispatch. If
-		// autoPickupAfterWorkerFree called autoJanPickup, Jan would launch
-		// and claim the ticket for visual-designer dispatch. The invariant
-		// is that she doesn't — her cadence is the 3-min ClickUp poll only.
-		const ctx = makeTestCtx({
-			clickupTickets: [ticketGroup('to do', [{ id: 'T-1', assignee: JAN_USER }])],
-			persistentAgents: [
-				{ id: 'jan-1', name: 'Jan', roleShort: 'Art Director', roleFull: '', workspacePath: '' },
-			],
-		});
-
-		autoPickupAfterWorkerFree(ctx);
-		await new Promise(r => setTimeout(r, 300));
-
-		// Jan's ticket must not have been dispatched — registry empty, no
-		// launch call fired.
-		expect(ctx.dispatchRegistry.size).toBe(0);
-		expect(launchAgentSessionMock).not.toHaveBeenCalled();
-	});
-
-	it('runAutoPickupNow (the ClickUp-refresh path) DOES trigger autoJanPickup', () => {
-		// The poll path IS allowed to fire Jan. This is the dual-test of the
-		// above — confirms we didn't accidentally remove Jan from every path.
+describe('invariant 1b: runAutoPickupNow is the single auto-dispatch entry point', () => {
+	it('runAutoPickupNow (the ClickUp-refresh path) triggers BOTH Darryl and Jan', () => {
+		// The poll path and the kantoor manual refresh are the only two triggers
+		// that can start specialist work. runAutoPickupNow covers both and must
+		// fire autoDarrylPickup + autoJanPickup.
 		const ctx = makeTestCtx({
 			clickupTickets: [ticketGroup('to do', [{ id: 'T-1', assignee: JAN_USER }])],
 			persistentAgents: [
@@ -233,9 +203,7 @@ describe('invariant 1b: Jan\'s launch cadence is the ClickUp timer', () => {
 		runAutoPickupNow(ctx);
 
 		// Jan was launched (launchAgentSessionMock called) because runAutoPickupNow
-		// includes autoJanPickup. Registry may be untouched because Jan's session
-		// lock is set via launchPersistentAgentSession — the important check is
-		// that the launch pipeline was hit.
+		// includes autoJanPickup.
 		expect(launchAgentSessionMock).toHaveBeenCalled();
 	});
 });
@@ -330,6 +298,76 @@ describe('invariant 2: no ticket is dispatched twice', () => {
 
 		// Jan's pickup must not have disturbed T-1's existing claim.
 		expect(ctx.dispatchRegistry.get('T-1')?.purpose).toBe('visual-designer');
+	});
+});
+
+// ── Invariant 4: orchestrator spawn never self-blocks worker dispatch ──
+
+describe('invariant 4: Darryl\'s spawn does not self-block his own /api/launch-agent', () => {
+	it('autoDarrylPickup leaves the registry empty so Darryl can dispatch a worker on the same ticket', () => {
+		// Regression test for the "darryl-dispatch" stuck-claim bug. Before
+		// unification, autoDarrylPickup grabbed a "Hub / darryl-dispatch" claim
+		// on the ticket it was about to hand to Darryl. That claim was held
+		// for Darryl's whole session, so when Darryl called /api/launch-agent
+		// on the SAME ticket, launchAgentOnTicket rejected with "already in
+		// flight". The fix removes the orchestrator-level claim — Darryl only
+		// claims via the worker-dispatch endpoint. If this test fails, the
+		// self-collision bug is back.
+		const ctx = makeTestCtx({
+			clickupTickets: [ticketGroup('to do', [{ id: 'T-1', assignee: DARRYL_USER }])],
+			persistentAgents: [
+				{ id: 'darryl-1', name: 'Darryl', roleShort: 'Foreman', roleFull: '', workspacePath: '~/kantoor' },
+				{ id: 'worker-1', name: 'Worker', roleShort: 'Dev', roleFull: '', workspacePath: '~/project' },
+			],
+		});
+
+		autoDarrylPickup(ctx);
+
+		// No claim created for T-1 — autoDarrylPickup touches nothing.
+		expect(ctx.dispatchRegistry.size).toBe(0);
+
+		// Simulate Darryl (inside his session) calling /api/launch-agent on T-1.
+		// Must succeed — the old bug made this return success:false with
+		// "already in flight (claimed by Hub for darryl-dispatch)".
+		const result = launchAgentOnTicket('worker-1', 'T-1', 'Task T-1', 'https://clickup.test/T-1', ctx);
+		expect(result.success).toBe(true);
+		expect(result.error).toBeUndefined();
+	});
+});
+
+// ── Invariant 5: reactive events never launch a specialist ──
+
+describe('invariant 5: no specialist starts from a reactive event', () => {
+	it('handleDesignerSessionEnded does not chain any launch (Visual QA, Darryl, or otherwise)', async () => {
+		// Enforces the "no reactive auto-dispatch" rule: specialists only start
+		// from the 3-min ClickUp poll or a manual kantoor refresh — never
+		// from a worker-free / session-end event. Before this rule landed,
+		// handleDesignerSessionEnded chained both a setTimeout(handleVisualQaReview)
+		// and autoPickupAfterWorkerFree. Those are gone.
+		const ctx = makeTestCtx({
+			persistentAgents: [
+				{ id: 'jan-1', name: 'Jan', roleShort: 'Art Director', roleFull: '', workspacePath: '' },
+				{ id: 'stanley-1', name: 'Stanley', roleShort: 'Visual Designer', roleFull: '', workspacePath: '~/project' },
+			],
+		});
+		const fakeWs = { send: vi.fn(), readyState: 1 } as unknown as import('ws').WebSocket;
+
+		handleDesignerSessionEnded({
+			agentRole: 'Visual Designer',
+			ticketId: 'T-1',
+			ticketName: 'Visual task',
+			ticketUrl: 'https://clickup.test/T-1',
+			designerName: 'Stanley',
+			workspacePath: '~/project',
+		}, ctx, fakeWs);
+
+		// Wait past any plausible setTimeout — if a reactive auto-launch gets
+		// re-added with a delay, this catches it.
+		await new Promise(r => setTimeout(r, 100));
+
+		expect(launchAgentSessionMock).not.toHaveBeenCalled();
+		expect(launchPersistentAgentMock).not.toHaveBeenCalled();
+		expect(ctx.dispatchRegistry.size).toBe(0);
 	});
 });
 

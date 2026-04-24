@@ -5,7 +5,7 @@ import { WebSocketServer } from 'ws';
 import type { WebSocket } from 'ws';
 import type { MessageSink } from '../src/types.js';
 import { loadKnownProjects, addKnownProject } from '../src/projectStore.js';
-import { SERVER_PORT, DESIGNER_ROLE_SHORT, VISUAL_DESIGNER_ROLE_SHORT, VISUAL_QA_ROLE_SHORT, JAN_ROLE_SHORT, REVIEW_TRIGGER_DELAY_MS, DEFAULT_WORKER_ROLES, AI_REVIEW_AUTO_ESCALATE } from './constants.js';
+import { SERVER_PORT, DESIGNER_ROLE_SHORT, VISUAL_DESIGNER_ROLE_SHORT, VISUAL_QA_ROLE_SHORT, JAN_ROLE_SHORT, DEFAULT_WORKER_ROLES } from './constants.js';
 import { ProjectScanner, decodeProjectHash, getLiveSessionIds } from './projectScanner.js';
 import { StandaloneAgentManager } from './standaloneAgentManager.js';
 import {
@@ -45,10 +45,7 @@ import {
 	handleJanDesignBriefing,
 	handleLaunchDesigner,
 	handleLaunchVisualDesigner,
-	handleVisualQaReview,
 	handleDesignerSessionEnded,
-	autoDarrylPickup,
-	autoPickupAfterWorkerFree,
 } from './clickupHandlers.js';
 import {
 	handleStartConference,
@@ -231,17 +228,8 @@ function handleWebviewReady(ws: WebSocket, ctx: ServerContext): void {
 	// Send organogram snapshot
 	ws.send(JSON.stringify({ type: 'organogramSnapshot', organogram: buildOrganogram(persistentAgents) }));
 
-	// Try Darryl's auto-pickup on client connect — dev workers may have become
-	// free since the last poll. Jan is deliberately NOT fired here. Her
-	// decisions depend on fresh ClickUp state, and fresh state only comes
-	// from a ClickUp fetch. Opening the webview doesn't fetch ClickUp (we
-	// serve the last-polled cache), so firing Jan here would have her act on
-	// stale data — she could try to dispatch tickets that have already been
-	// picked up but whose status hasn't caught up in the cache yet. See the
-	// comment on autoPickupAfterWorkerFree for the full reasoning.
-	if (!ctx.isWorkerMode) {
-		autoDarrylPickup(ctx);
-	}
+	// No auto-pickup on webview connect. Specialists only start via the 3-min
+	// ClickUp poll or an explicit manual refresh from the kantoor interface.
 }
 
 // ── Message dispatch ─────────────────────────────────────────
@@ -533,20 +521,11 @@ async function main(): Promise<void> {
 					// just ended. Report back immediately so the hub releases its
 					// own claim and frees the worker's slot.
 					reportTicketCompleteToHub(completedTicket.ticketId, ctx);
-				} else {
-					// On the hub: if a Visual Designer just finished, kick off the
-					// AI-review step (QA dispatch) if auto-escalation is on.
-					if (AI_REVIEW_AUTO_ESCALATE && pa.roleShort === VISUAL_DESIGNER_ROLE_SHORT && completedTicket) {
-						console.log(`[Standalone] Visual Designer "${pa.name}" finished ticket ${completedTicket.ticketId}, triggering Visual QA AI Review`);
-						setTimeout(() => { handleVisualQaReview(completedTicket, ctx).catch(err => console.error('[Standalone] Visual QA dispatch failed:', err)); }, REVIEW_TRIGGER_DELAY_MS);
-					}
-					// All other follow-ups (revision, next batch of Jan tickets,
-					// next Darryl ticket) go through autoPickupAfterWorkerFree
-					// below — there are no longer any role-specific dispatch
-					// shortcuts. Jan handles every design state transition; we
-					// never dispatch a designer from here directly.
-					autoPickupAfterWorkerFree(ctx);
 				}
+				// No reactive auto-dispatch on session end. Follow-up work
+				// (revisions, AI review, next batch) will be picked up by the
+				// next 3-min ClickUp poll or a manual refresh from the kantoor
+				// interface — never by a session-end event.
 			}
 			agentManager.removeSession(jsonlFile);
 			broadcastSink.postMessage({ type: 'offlineAgents', agents: getOfflineAgents(agentManager, persistentAgents) });
@@ -602,19 +581,10 @@ async function main(): Promise<void> {
 					if (msgType === 'workerRegister') registerWorker(ws, msg, ctx);
 					else if (msgType === 'workerHeartbeat') handleWorkerHeartbeat(ws, ctx);
 					else if (msgType === 'ticketStarted') handleTicketStarted(ws, msg, ctx);
-					else if (msgType === 'ticketComplete') {
-						handleTicketComplete(ws, msg, ctx);
-						autoPickupAfterWorkerFree(ctx);
-					}
-					else if (msgType === 'ticketFailed') {
-						handleTicketFailed(ws, msg, ctx);
-						autoPickupAfterWorkerFree(ctx);
-					}
+					else if (msgType === 'ticketComplete') handleTicketComplete(ws, msg, ctx);
+					else if (msgType === 'ticketFailed') handleTicketFailed(ws, msg, ctx);
 					else if (msgType === 'workerResponse') handleWorkerResponse(ws, msg, ctx);
-					else if (msgType === 'designerSessionEnded') {
-						handleDesignerSessionEnded(msg, ctx, ws);
-						autoPickupAfterWorkerFree(ctx);
-					}
+					else if (msgType === 'designerSessionEnded') handleDesignerSessionEnded(msg, ctx, ws);
 					return;
 				}
 

@@ -21,9 +21,7 @@ import {
 	TEAM_VISUAL_ID,
 	SERVER_PORT,
 	WORKER_ROLE_DESIGNER,
-	AI_REVIEW_AUTO_ESCALATE,
 	AI_REVIEW_PICKUP_ENABLED,
-	REVIEW_TRIGGER_DELAY_MS,
 } from './constants.js';
 import {
 	savePersistentAgents,
@@ -140,60 +138,16 @@ export function startClickupPolling(ctx: ServerContext): void {
 // ── Refresh & auto-pickup ────────────────────────────────────
 
 /**
- * Run Darryl's dispatch after a worker becomes free (ticket complete, failed,
- * or session ended). Uses cached ClickUp state — no network call — so this is
- * cheap to invoke on every worker-free event.
+ * Dispatch policy: specialists are NEVER auto-launched in response to a
+ * reactive event (worker-free, session-end, ClickUp status change, webview
+ * connect). The only two things that can start work are:
+ *   1. The 3-minute ClickUp polling loop (`startClickupPolling`).
+ *   2. An explicit manual refresh from the kantoor webview
+ *      (`clickupRefresh` message → `handleClickupRefresh`).
  *
- * IMPORTANT: Jan is DELIBERATELY not fired here. Jan's dispatch cadence is
- * coupled to the ClickUp poll for correctness reasons, not just ergonomics:
- *
- *   1. Jan's only meaningful inputs are ClickUp ticket states. She has
- *      nothing new to decide until the ClickUp cache is refreshed.
- *   2. When a designer gets dispatched, the AGENT (not the hub) is the one
- *      that moves the ticket from "to do" → "in progress" in ClickUp. That
- *      takes time — seconds to a minute or so. Until that happens, a fresh
- *      ClickUp fetch would still show the ticket as "to do".
- *   3. The CLICKUP_POLL_INTERVAL_MS (3 min) is the natural cooldown window
- *      during which in-flight dispatches settle into ClickUp. Firing Jan
- *      sooner means she'd read "to do" tickets that agents are already
- *      starting on. The dispatch registry filter would prevent the actual
- *      double-dispatch, but Jan would still waste a session evaluating
- *      stale state.
- *
- * So: Jan only launches when we've just fetched ClickUp fresh, i.e. via
- * handleClickupRefresh → runAutoPickupNow. That's the poll timer OR an
- * explicit manual refresh from the webview. Reactive worker-free events do
- * NOT trigger her.
- *
- * Darryl is unaffected — his cadence is not coupled to ClickUp state in the
- * same way (dev workers aren't bottlenecked on ticket-status transitions
- * the way the design fleet is), and reactive dispatch is the right call for
- * keeping dev throughput high.
- *
- * No-op on workers (they don't run auto-pickup). Debounced to coalesce
- * rapid-fire events (multiple workers finishing in the same ~second) into
- * one pickup pass.
- */
-let pickupDebounceTimer: ReturnType<typeof setTimeout> | null = null;
-const PICKUP_DEBOUNCE_MS = 250;
-
-export function autoPickupAfterWorkerFree(ctx: ServerContext): void {
-	if (ctx.isWorkerMode) return;
-	if (pickupDebounceTimer) return;
-	pickupDebounceTimer = setTimeout(() => {
-		pickupDebounceTimer = null;
-		autoDarrylPickup(ctx);
-		// autoJanPickup is intentionally omitted — see comment above.
-	}, PICKUP_DEBOUNCE_MS);
-}
-
-/**
- * Synchronous variant — runs BOTH Darryl and Jan pickup right now. ONLY
- * called from `handleClickupRefresh`, which has just fetched fresh ClickUp
- * state. This is the single entry point where Jan is allowed to launch,
- * because her decisions depend on knowing the true current state of the
- * ClickUp board (see autoPickupAfterWorkerFree comment for the full
- * reasoning on why staleness is unsafe for Jan).
+ * Both funnel through `runAutoPickupNow`, which fires autoDarrylPickup +
+ * autoJanPickup against freshly-fetched ClickUp state. There is no
+ * reactive-pickup-on-worker-free function.
  */
 export function runAutoPickupNow(ctx: ServerContext): void {
 	if (ctx.isWorkerMode) return;
@@ -433,49 +387,60 @@ export function handleClickupConfigure(msg: Record<string, unknown>, ctx: Server
 	handleClickupRefresh(ctx).catch(() => {});
 }
 
-// ── Darryl orchestration ─────────────────────────────────────
+// ── Shared orchestrator batch dispatch ──────────────────────
 
 /**
- * Launch Darryl with a batch of dev tickets. He processes them sequentially
- * in one session, firing a `/api/launch-agent` curl per ticket; the dispatched
- * workers then run in parallel on their own machines.
+ * Launch an orchestrator (Darryl or Jan) with a batch of tickets. The
+ * orchestrator processes them sequentially in one session, firing a dispatch
+ * curl per ticket; the dispatched workers run in parallel on their own
+ * machines.
  *
- * Darryl is a pure orchestrator — he never claims tickets himself (mirrors
- * Jan's pattern). Each curl he fires claims the ticket at the dispatch
- * endpoint (`launchAgentOnTicket`). Darryl's role-level lock
- * (`darryl.currentSessionId`) stops him from running twice concurrently; the
- * per-ticket registry stops any of his ticket dispatches from double-firing.
+ * Orchestrators are pure — they never claim tickets in the dispatch registry
+ * themselves. The per-worker dispatch endpoints (launchAgentOnTicket,
+ * handleLaunchDesigner, handleLaunchVisualDesigner, handleVisualQaReview)
+ * own the claims. Orchestrator race-protection is the singleton
+ * `currentSessionId` on the persistent-agent record — NOT a registry claim.
+ *
+ * The ONLY per-orchestrator differences live in the spec: which agent to
+ * find/create, which system prompt to build, which batch initial-task to
+ * build. Everything else (roster, singleton gate, first-ticket tracking,
+ * launch, logging) is shared.
  */
-export function handleDarrylBatchDispatch(
-	batch: Array<TicketInfo & { status: 'to do' | 'ai review' }>,
+interface OrchestratorBatchSpec<S extends string> {
+	/** Display name used in logs — e.g. "Darryl", "Jan". */
+	name: string;
+	ensureAgent: (persistentAgents: PersistentAgent[]) => PersistentAgent;
+	buildSystemPrompt: (agent: PersistentAgent, roster: RosterEntry[]) => string;
+	buildInitialTask: (
+		batch: Array<{ id: string; name: string; url: string; status: S }>,
+	) => string;
+}
+
+function dispatchOrchestratorBatch<S extends string>(
+	spec: OrchestratorBatchSpec<S>,
+	batch: Array<TicketInfo & { status: S }>,
 	ctx: ServerContext,
 ): void {
 	if (batch.length === 0) return;
 	const { persistentAgents } = ctx;
 
-	const darryl = findOrCreatePersistentAgent(
-		persistentAgents,
-		'Darryl',
-		DARRYL_ROLE_SHORT,
-		'The Foreman. Assesses tickets, decides which agents should work on them, and launches them.',
-		DARRYL_WORKSPACE,
-	);
-	if (darryl.currentSessionId) {
-		console.log(`[Standalone] Darryl already has an active session ${darryl.currentSessionId}, skipping batch dispatch of ${batch.length}`);
+	const agent = spec.ensureAgent(persistentAgents);
+	if (agent.currentSessionId) {
+		console.log(`[Standalone] ${spec.name} already has an active session ${agent.currentSessionId}, skipping batch dispatch of ${batch.length}`);
 		return;
 	}
 
-	const roster = buildRoster(persistentAgents, darryl.id);
-	const systemPrompt = buildDarrylSystemPrompt(darryl, roster, SERVER_PORT);
-	const initialTask = buildDarrylBatchInitialTask(
+	const roster = buildRoster(persistentAgents, agent.id);
+	const systemPrompt = spec.buildSystemPrompt(agent, roster);
+	const initialTask = spec.buildInitialTask(
 		batch.map(t => ({ id: t.ticketId, name: t.ticketName, url: t.ticketUrl, status: t.status })),
 	) + EXIT_REMINDER;
 
 	// Track only the first ticket on the persistent-agent record (used for UI
-	// labels); the rest are listed in the initial task. Same convention as Jan.
+	// labels); the rest are listed in the initial task.
 	const first = batch[0];
 	const result = launchPersistentAgentSession(
-		darryl,
+		agent,
 		systemPrompt,
 		initialTask,
 		first,
@@ -483,8 +448,36 @@ export function handleDarrylBatchDispatch(
 		persistentAgents,
 	);
 	if (!result.success) {
-		console.log(`[Standalone] Failed to launch Darryl batch of ${batch.length}`);
+		console.log(`[Standalone] Failed to launch ${spec.name} batch of ${batch.length}`);
 	}
+}
+
+// ── Darryl orchestration ─────────────────────────────────────
+
+function ensureDarryl(persistentAgents: PersistentAgent[]): PersistentAgent {
+	return findOrCreatePersistentAgent(
+		persistentAgents,
+		'Darryl',
+		DARRYL_ROLE_SHORT,
+		'The Foreman. Assesses tickets, decides which agents should work on them, and launches them.',
+		DARRYL_WORKSPACE,
+	);
+}
+
+export function handleDarrylBatchDispatch(
+	batch: Array<TicketInfo & { status: 'to do' | 'ai review' }>,
+	ctx: ServerContext,
+): void {
+	dispatchOrchestratorBatch(
+		{
+			name: 'Darryl',
+			ensureAgent: ensureDarryl,
+			buildSystemPrompt: (agent, roster) => buildDarrylSystemPrompt(agent, roster, SERVER_PORT),
+			buildInitialTask: buildDarrylBatchInitialTask,
+		},
+		batch,
+		ctx,
+	);
 }
 
 // ── Jan (Art Director) orchestration ────────────────────────
@@ -532,52 +525,20 @@ export function handleJanDesignBriefing(msg: Record<string, unknown>, ctx: Serve
 	}
 }
 
-/**
- * Launch Jan with a batch of tickets. She processes them sequentially in one
- * session, firing a curl per ticket; the dispatched agents then run in parallel
- * on their own machines.
- *
- * Jan is a pure orchestrator — she never claims tickets herself. Each curl she
- * fires (to /api/launch-designer, /api/launch-visual-designer,
- * /api/launch-visual-qa) claims the ticket at the dispatch endpoint. Jan's
- * role-level lock (`jan.currentSessionId`) stops her from running twice
- * concurrently; the per-ticket registry stops any of her ticket dispatches
- * from double-firing.
- */
 export function handleJanBatchDispatch(
 	batch: Array<TicketInfo & { status: 'to do' | 'ai review' | 'revision needed' }>,
 	ctx: ServerContext,
 ): void {
-	if (batch.length === 0) return;
-	const { persistentAgents } = ctx;
-
-	const jan = ensureJan(persistentAgents);
-	if (jan.currentSessionId) {
-		console.log(`[Standalone] Jan already has an active session ${jan.currentSessionId}, skipping batch dispatch`);
-		return;
-	}
-
-	const roster = buildRoster(persistentAgents, jan.id);
-	const systemPrompt = buildJanSystemPrompt(jan, roster, SERVER_PORT, getJanDesignConfig());
-	// Map to the shape buildJanBatchInitialTask expects.
-	const initialTask = buildJanBatchInitialTask(
-		batch.map(t => ({ id: t.ticketId, name: t.ticketName, url: t.ticketUrl, status: t.status })),
-	) + EXIT_REMINDER;
-
-	// Track only the first ticket on the persistent-agent record (used for UI
-	// labels); the rest are listed in the initial task.
-	const first = batch[0];
-	const result = launchPersistentAgentSession(
-		jan,
-		systemPrompt,
-		initialTask,
-		first,
+	dispatchOrchestratorBatch(
+		{
+			name: 'Jan',
+			ensureAgent: ensureJan,
+			buildSystemPrompt: (agent, roster) => buildJanSystemPrompt(agent, roster, SERVER_PORT, getJanDesignConfig()),
+			buildInitialTask: buildJanBatchInitialTask,
+		},
+		batch,
 		ctx,
-		persistentAgents,
 	);
-	if (!result.success) {
-		console.log(`[Standalone] Failed to launch Jan batch of ${batch.length}`);
-	}
 }
 
 // ── Fleet dispatch (hub-only) ───────────────────────────────
@@ -911,15 +872,13 @@ export function handleDesignerSessionEnded(
 
 	const completedTicket = { ticketId, ticketName, ticketUrl, designerName, workspacePath };
 
-	if (agentRole === VISUAL_DESIGNER_ROLE_SHORT && AI_REVIEW_AUTO_ESCALATE) {
-		console.log(`[Hub] Remote Visual Designer finished ticket ${ticketId} — triggering Visual QA AI review`);
-		setTimeout(() => { handleVisualQaReview(completedTicket, ctx).catch(err => console.error('[Hub] Visual QA dispatch failed:', err)); }, REVIEW_TRIGGER_DELAY_MS);
-	}
-
-	// Everything else — revision pickup, next batch, stranded ai-review — flows
-	// through autoJanPickup. No role-specific dispatch shortcuts remain; Jan
-	// is the single decision point for all design work.
-	autoPickupAfterWorkerFree(ctx);
+	// No reactive auto-dispatch. If the ticket is now in "ai review", the next
+	// 3-min ClickUp poll (or a manual refresh) will hand it to Jan via
+	// autoJanPickup → she dispatches Visual QA. We deliberately do NOT chain a
+	// specialist launch from a worker-free event — specialists are only
+	// started by the poll or the kantoor manual refresh.
+	void completedTicket;
+	void agentRole;
 }
 
 // Re-export capacity helper — several tests/handlers call it from this module.
