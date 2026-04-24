@@ -12,7 +12,6 @@ import type { PersistentAgent } from './agentStore.js';
 import type { ClickUpConfig } from './clickupClient.js';
 import { WORKER_HEARTBEAT_INTERVAL_MS, WORKER_RECONNECT_INTERVAL_MS, DEFAULT_WORKER_ROLES } from './constants.js';
 import {
-	handleDarrylHandleTicket,
 	handleLaunchDesigner,
 	handleLaunchVisualDesigner,
 	handleVisualQaReview,
@@ -100,8 +99,6 @@ function handleHubMessage(
 
 	if (type === 'workerRegistered') {
 		handleRegistered(msg, ctx);
-	} else if (type === 'handleTicket') {
-		handleTicketFromHub(ws, msg, ctx);
 	} else if (type === 'launchDesigner' || type === 'launchVisualDesigner' || type === 'launchVisualQa') {
 		handleLaunchRpcFromHub(ws, type, msg, ctx).catch(err => {
 			console.error(`[Worker] ${type} RPC error:`, err);
@@ -273,62 +270,6 @@ function mergeAgents(hubAgents: PersistentAgent[]): void {
 
 	savePersistentAgents(merged);
 	console.log(`[Worker] Merged agents: ${hubAgents.length} from hub + ${merged.length - hubAgents.length} local-only = ${merged.length} total`);
-}
-
-// ── Handle ticket from hub ──────────────────────────────────
-
-function handleTicketFromHub(
-	ws: WebSocket,
-	msg: Record<string, unknown>,
-	ctx: ServerContext,
-): void {
-	const ticketId = msg.ticketId as string;
-	const ticketName = msg.ticketName as string;
-	const ticketUrl = msg.ticketUrl as string;
-	const ticketStatus = msg.ticketStatus as string | undefined;
-
-	// Write agent memories from hub to local filesystem
-	const agentMemories = msg.agentMemories as Record<string, string> | undefined;
-	if (agentMemories) {
-		for (const [agentId, content] of Object.entries(agentMemories)) {
-			ensureAgentMemory(agentId);
-			const memPath = getAgentMemoryPath(agentId);
-			fs.writeFileSync(memPath, content, 'utf-8');
-		}
-		console.log(`[Worker] Wrote ${Object.keys(agentMemories).length} agent memory files from hub`);
-	}
-
-	// Reload agents from disk (may have been updated by merge). Use the setter
-	// so server.ts's closure variable also updates — otherwise
-	// findPersistentAgentBySession runs against a stale array and onSessionStale
-	// can't locate the agent, so the hub never hears about the session ending.
-	ctx.setPersistentAgents(loadPersistentAgents());
-
-	// Clear any stale currentSessionId values — on a worker, sessions are local.
-	// If no local process is running for a session, clear it so agents can be launched fresh.
-	let cleared = false;
-	for (const pa of ctx.persistentAgents) {
-		if (pa.currentSessionId) {
-			pa.currentSessionId = undefined;
-			cleared = true;
-		}
-	}
-	if (cleared) {
-		savePersistentAgents(ctx.persistentAgents);
-		console.log(`[Worker] Cleared stale session IDs from persistent agents`);
-	}
-
-	console.log(`[Worker] Received ticket ${ticketId}: "${ticketName}"`);
-
-	// Tell hub we started
-	ws.send(JSON.stringify({ type: 'ticketStarted', ticketId, ticketName }));
-
-	// Run the Darryl flow locally — same as hub does. Session-end is reported
-	// back to the hub from server.ts onSessionStale via reportTicketCompleteToHub.
-	handleDarrylHandleTicket(
-		{ ticketId, ticketName, ticketUrl, ticketStatus },
-		ctx,
-	);
 }
 
 function collectLocalMemories(agents: PersistentAgent[]): Record<string, string> {

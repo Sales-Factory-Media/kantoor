@@ -243,7 +243,13 @@ describe('invariant 1b: Jan\'s launch cadence is the ClickUp timer', () => {
 // ── Invariant 2: Jan's delegation never double-dispatches ──
 
 describe('invariant 2: no ticket is dispatched twice', () => {
-	it('autoDarrylPickup skips tickets already in the dispatch registry', () => {
+	it('autoDarrylPickup leaves existing claims untouched (Jan-pattern: orchestrator spawn does not touch the registry)', () => {
+		// After the Darryl/Jan unification, autoDarrylPickup's sole action is
+		// to spawn Darryl with a batch. Actual ticket claims only happen when
+		// Darryl (inside his session) calls /api/launch-agent per ticket.
+		// Pre-existing claims must therefore be preserved — selectDarrylPickups
+		// filters them out of the batch but autoDarrylPickup itself never
+		// touches them.
 		const ctx = makeTestCtx({
 			clickupTickets: [
 				ticketGroup('to do', [
@@ -251,27 +257,29 @@ describe('invariant 2: no ticket is dispatched twice', () => {
 					{ id: 'T-2', assignee: DARRYL_USER },
 				]),
 			],
-			workers: new Map([
-				['worker-a', makeWorker('worker-a')],
-				['worker-b', makeWorker('worker-b')],
-			]),
-			hubRoles: ['designer'], // No dev role on hub — forces dispatch to workers only
+			persistentAgents: [
+				{ id: 'darryl-1', name: 'Darryl', roleShort: 'Foreman', roleFull: '', workspacePath: '' },
+			],
 		});
 
-		// Pre-claim T-1 as if a prior cycle/handler had it in flight.
+		// Pre-claim T-1 as if Darryl's worker dispatch had already grabbed it.
 		claimTicket(ctx.dispatchRegistry, 'T-1', 'somebody-else', 'dev-worker');
 
 		autoDarrylPickup(ctx);
 
-		// Only T-2 should have been claimed in this cycle. T-1's claim
-		// belongs to somebody-else, untouched.
+		// T-1's pre-existing claim is preserved — autoDarrylPickup never
+		// mutates the registry (Jan pattern). T-2 is still unclaimed here;
+		// it gets claimed only when Darryl's session calls
+		// `launchAgentOnTicket`, which is outside autoDarrylPickup's scope.
 		expect(isTicketClaimed(ctx.dispatchRegistry, 'T-1')).toBe(true);
 		expect(ctx.dispatchRegistry.get('T-1')?.claimedBy).toBe('somebody-else');
-		expect(isTicketClaimed(ctx.dispatchRegistry, 'T-2')).toBe(true);
-		expect(ctx.dispatchRegistry.get('T-2')?.claimedBy).not.toBe('somebody-else');
+		expect(isTicketClaimed(ctx.dispatchRegistry, 'T-2')).toBe(false);
 	});
 
-	it('running autoDarrylPickup twice back-to-back on the same cache never double-claims', () => {
+	it('Darryl is a singleton — autoDarrylPickup is a no-op while he is running', () => {
+		// Mirrors Jan's singleton lock. While Darryl has a currentSessionId,
+		// autoDarrylPickup must not start another session, regardless of how
+		// many eligible tickets are in the cache.
 		const ctx = makeTestCtx({
 			clickupTickets: [
 				ticketGroup('to do', [
@@ -279,23 +287,23 @@ describe('invariant 2: no ticket is dispatched twice', () => {
 					{ id: 'T-2', assignee: DARRYL_USER },
 				]),
 			],
-			workers: new Map([
-				['worker-a', makeWorker('worker-a')],
-				['worker-b', makeWorker('worker-b')],
-			]),
-			hubRoles: ['designer'], // No dev on hub — workers only
+			persistentAgents: [
+				{
+					id: 'darryl-1',
+					name: 'Darryl',
+					roleShort: 'Foreman',
+					roleFull: '',
+					workspacePath: '',
+					currentSessionId: 'running-session',
+				},
+			],
 		});
 
-		// First cycle dispatches both tickets to workers (one each).
 		autoDarrylPickup(ctx);
-		const firstCycleClaims = new Set(ctx.dispatchRegistry.keys());
-		expect(firstCycleClaims).toEqual(new Set(['T-1', 'T-2']));
 
-		// Workers now carry the tickets; a concurrent cycle from a stale
-		// ClickUp cache must NOT re-dispatch. Capacity is gated by
-		// worker.currentTicketId which was set during the first cycle.
-		autoDarrylPickup(ctx);
-		expect(ctx.dispatchRegistry.size).toBe(2); // still exactly 2
+		// No new Darryl launched, registry untouched.
+		expect(launchAgentSessionMock).not.toHaveBeenCalled();
+		expect(ctx.dispatchRegistry.size).toBe(0);
 	});
 
 	it('Jan batch selection never includes a ticket already in flight — even if ClickUp still shows "to do"', () => {

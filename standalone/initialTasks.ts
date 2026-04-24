@@ -58,40 +58,39 @@ ${briefBlock}## Steps
 
 // ── Darryl (foreman) ──────────────────────────────────────────
 
-export function buildDarrylAiReviewInitialTask(
-	ticketId: string,
-	ticketName: string,
-	ticketUrl: string,
+export function buildDarrylBatchInitialTask(
+	batch: Array<{ id: string; name: string; url: string; status: 'to do' | 'ai review' }>,
 ): string {
-	return `Ticket ${ticketId}: "${ticketName}" is in **AI Review**. Dispatch an agent to process Copilot's feedback.
-URL: ${ticketUrl}
+	const ticketLines = batch.map((t, i) =>
+		`${i + 1}. **[${t.status.toUpperCase()}]** ${t.id}: "${t.name}" (${t.url})`,
+	).join('\n');
 
-## Steps
-1. \`clickup_get_task\` + \`clickup_get_task_comments\` once. Find: the original implementer (comment "Assigned to worker: <name>"), the project workspace, how many prior AI Review rounds (count "ai review" → "in progress" cycles).
-2. Pick an agent: prefer the original implementer (best context). Fallback = free agent in same workspace.
-3. Dispatch with \`aiReviewMode:true\` and a short Brief summarizing what Copilot flagged:
-\`curl -X POST http://localhost:${SERVER_PORT}/api/launch-agent -d '{"agentId":"...","ticketId":"${ticketId}","ticketName":"${ticketName}","ticketUrl":"${ticketUrl}","aiReviewMode":true,"additionalPrompt":"<Brief>"}'\`
-4. Comment on the ticket naming who you reassigned.
+	return `You have ${batch.length} ticket${batch.length === 1 ? '' : 's'} to dispatch. Work through them in order — do NOT stop after the first one. You are a pure orchestrator: you ASSESS and DISPATCH, you never implement yourself.
 
-Rules: do NOT change the ticket status yourself (the reassigned agent will). 3+ prior rounds → tell them in the Brief to be conservative and forward to "qa test" unless there's a real bug.`;
-}
+${ticketLines}
 
-export function buildDarrylStandardInitialTask(
-	ticketId: string,
-	ticketName: string,
-	ticketUrl: string,
-): string {
-	return `Ticket ${ticketId}: "${ticketName}" (${ticketUrl}).
+## For each ticket above:
 
-## Steps
+### If status is **"to do"**
 1. \`clickup_get_task\` + \`clickup_get_task_comments\` once.
 2. Is the ticket complete enough to dispatch?
-   - **No** → comment with specific questions, unassign yourself, assign "${DARRYL_ESCALATION_USERNAME}", move ticket to "to do". Stop.
-   - **Yes** → pick the right free agent from your roster, then dispatch them with a Brief:
-     \`curl -X POST http://localhost:${SERVER_PORT}/api/launch-agent -d '{"agentId":"...","ticketId":"${ticketId}","ticketName":"${ticketName}","ticketUrl":"${ticketUrl}","additionalPrompt":"<Brief>","useTeam":<bool>}'\`
-3. Move the ticket to "in progress" yourself ONLY if dispatch succeeded. Otherwise leave it.
+   - **No** → comment with specific questions, unassign yourself, assign "${DARRYL_ESCALATION_USERNAME}", leave the ticket in "to do", move on to the next ticket.
+   - **Yes** → pick the right free agent from \`GET http://localhost:${SERVER_PORT}/api/roster\` (offline=free) whose \`workspacePath\` matches the ticket's project, then dispatch them with a Brief:
+     \`curl -X POST http://localhost:${SERVER_PORT}/api/launch-agent -d '{"agentId":"...","ticketId":"<id>","ticketName":"<name>","ticketUrl":"<url>","additionalPrompt":"<Brief>","useTeam":<bool>}'\`
+3. On \`success:true\` move the ticket to "in progress". On \`success:false\` leave it alone and move on — the next pickup cycle will retry.
 
-The Brief should summarize the ticket in 2–6 bullets so the worker doesn't re-read everything. Use the template from your system prompt.`;
+### If status is **"ai review"**
+1. \`clickup_get_task\` + \`clickup_get_task_comments\` once. Find the original implementer via the "Assigned to worker: <name>" comment. Count prior AI Review rounds.
+2. Pick that implementer (best context) or, if they're busy/retired, another free agent in the same workspace.
+3. Dispatch with \`aiReviewMode:true\` and a short Brief summarising Copilot's feedback:
+   \`curl -X POST http://localhost:${SERVER_PORT}/api/launch-agent -d '{"agentId":"...","ticketId":"<id>","ticketName":"<name>","ticketUrl":"<url>","aiReviewMode":true,"additionalPrompt":"<Brief>"}'\`
+4. Comment naming who you reassigned. Do NOT change the ticket status — the reassigned agent will.
+5. 3+ prior rounds → tell them in the Brief to be conservative and forward to "qa test" unless there's a real bug.
+
+## When you're done
+After dispatching (or skipping) every ticket above, you are DONE. Do not wait for workers to finish — they run in parallel on their own timelines. Exit cleanly.
+
+The Brief should summarise the ticket in 2–6 bullets so the worker doesn't re-read everything. Use the briefing template from your system prompt.`;
 }
 
 // ── Jan (Art Director) ────────────────────────────────────────

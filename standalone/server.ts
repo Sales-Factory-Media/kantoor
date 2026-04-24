@@ -42,7 +42,6 @@ import {
 	handleClickupRefresh,
 	handleClickupStartWork,
 	handleClickupConfigure,
-	handleDarrylHandleTicket,
 	handleJanDesignBriefing,
 	handleLaunchDesigner,
 	handleLaunchVisualDesigner,
@@ -268,10 +267,6 @@ const messageHandlers: Record<string, (ws: WebSocket, msg: Record<string, unknow
 	startConference: (_ws, msg, ctx) => handleStartConference(msg, ctx),
 	endConference: (_ws, msg, ctx) => handleEndConference(msg, ctx),
 	updateProjectDescription: (_ws, msg, ctx) => handleUpdateProjectDescription(msg, ctx),
-	darrylHandleTicket: (_ws, msg, ctx) => {
-		if (rejectIfWorker(ctx, 'darrylHandleTicket')) return;
-		handleDarrylHandleTicket(msg, ctx);
-	},
 	janDesignBriefing: (_ws, msg, ctx) => {
 		if (rejectIfWorker(ctx, 'janDesignBriefing')) return;
 		handleJanDesignBriefing(msg, ctx);

@@ -20,9 +20,7 @@ import {
 	TEAM_UX_ID,
 	TEAM_VISUAL_ID,
 	SERVER_PORT,
-	WORKER_ROLE_DEV,
 	WORKER_ROLE_DESIGNER,
-	DEFAULT_WORKER_ROLES,
 	AI_REVIEW_AUTO_ESCALATE,
 	AI_REVIEW_PICKUP_ENABLED,
 	REVIEW_TRIGGER_DELAY_MS,
@@ -50,10 +48,7 @@ import { readJson, writeJson } from './serverHelpers.js';
 import { SETTINGS_FILE } from './serverContext.js';
 import type { ServerContext } from './serverContext.js';
 import {
-	getAvailableCapacity,
-	getIdleWorkers,
 	getIdleWorkersWithRole,
-	addAssignment,
 	collectAgentMemories,
 	broadcastWorkerStatus,
 	sendWorkerRequest,
@@ -75,7 +70,6 @@ import {
 import {
 	claimTicket,
 	releaseTicket,
-	isTicketClaimed,
 	claimedTicketIds,
 } from './dispatchRegistry.js';
 import {
@@ -85,8 +79,7 @@ import {
 import {
 	buildWorkerAiReviewInitialTask,
 	buildWorkerStandardInitialTask,
-	buildDarrylAiReviewInitialTask,
-	buildDarrylStandardInitialTask,
+	buildDarrylBatchInitialTask,
 	buildJanRefineInitialTask,
 	buildJanSingleTodoInitialTask,
 	buildJanBatchInitialTask,
@@ -230,7 +223,7 @@ export async function handleClickupRefresh(ctx: ServerContext): Promise<void> {
 }
 
 export function autoDarrylPickup(ctx: ServerContext): void {
-	// Workers don't auto-pickup — they receive tickets from the hub
+	// Workers don't auto-pickup — hub is the single orchestrator entry point.
 	if (ctx.isWorkerMode) return;
 
 	// Decision pass (pure — see pickupPlanner.ts). Drops anything already in
@@ -241,76 +234,22 @@ export function autoDarrylPickup(ctx: ServerContext): void {
 
 	if (todoTickets.length === 0) return;
 
-	const capacity = getAvailableCapacity(ctx, WORKER_ROLE_DEV);
-	if (capacity === 0) return;
-
-	const ticketsToAssign = todoTickets.slice(0, capacity);
-	const idleWorkers = getIdleWorkers(ctx, WORKER_ROLE_DEV);
-
-	const hubHasDevRole = (ctx.workerIdentity?.roles ?? [...DEFAULT_WORKER_ROLES]).includes(WORKER_ROLE_DEV);
+	// Single-orchestrator pattern (same shape as autoJanPickup): Darryl is the
+	// sole dispatch decision-maker for dev tickets. If he's already running,
+	// skip — his current session will dispatch its batch, the next poll picks
+	// up whatever's still "to do".
 	const darryl = ctx.persistentAgents.find(p => p.name === 'Darryl');
-	const hubAvailable = hubHasDevRole && !darryl?.currentSessionId;
+	if (darryl?.currentSessionId) return;
 
-	const slots: Array<{ type: 'hub' } | { type: 'worker'; worker: typeof idleWorkers[0] }> = [];
-	if (hubAvailable) slots.push({ type: 'hub' });
-	for (const w of idleWorkers) slots.push({ type: 'worker', worker: w });
+	const batch: Array<TicketInfo & { status: 'to do' | 'ai review' }> = todoTickets.map(t => ({
+		ticketId: t.id,
+		ticketName: t.name,
+		ticketUrl: t.url,
+		status: t.status,
+	}));
 
-	const hasRemoteAssignment = ticketsToAssign.length > (hubAvailable ? 1 : 0);
-	const memories = hasRemoteAssignment ? collectAgentMemories(ctx.persistentAgents) : {};
-
-	for (let i = 0; i < ticketsToAssign.length && i < slots.length; i++) {
-		const ticket = ticketsToAssign[i];
-		const slot = slots[i];
-
-		if (slot.type === 'hub') {
-			// Atomic claim — bails if a concurrent cycle grabbed this ticket first.
-			if (!claimTicket(ctx.dispatchRegistry, ticket.id, ctx.workerIdentity?.name ?? 'Hub', 'darryl-dispatch')) {
-				console.log(`[Hub] Skipping ticket ${ticket.id} — already claimed by "${ctx.dispatchRegistry.get(ticket.id)?.claimedBy ?? '?'}"`);
-				continue;
-			}
-			console.log(`[Hub] Assigning ticket ${ticket.id} to local hub (${ctx.workerIdentity?.name || 'Hub'})`);
-			if (ctx.workerIdentity) {
-				addAssignment(ctx, ticket.id, ticket.name, ctx.workerIdentity.name, 'localhost');
-			}
-			if (ctx.clickupConfig && ctx.workerIdentity) {
-				addTaskComment(ctx.clickupConfig, ticket.id, `Assigned to worker: ${ctx.workerIdentity.name}`).catch(err => {
-					console.error(`[Hub] Failed to comment on ticket ${ticket.id}:`, err);
-				});
-			}
-			handleDarrylHandleTicket(
-				{ ticketId: ticket.id, ticketName: ticket.name, ticketUrl: ticket.url, ticketStatus: ticket.status },
-				ctx,
-			);
-		} else {
-			const { worker } = slot;
-			if (!claimTicket(ctx.dispatchRegistry, ticket.id, worker.name, 'darryl-dispatch')) {
-				console.log(`[Hub] Skipping ticket ${ticket.id} — already claimed by "${ctx.dispatchRegistry.get(ticket.id)?.claimedBy ?? '?'}"`);
-				continue;
-			}
-			console.log(`[Hub] Assigning ticket ${ticket.id} to worker "${worker.name}" (${worker.hostname}) [${ticket.status}]`);
-			addAssignment(ctx, ticket.id, ticket.name, worker.name, worker.hostname);
-
-			worker.ws.send(JSON.stringify({
-				type: 'handleTicket',
-				ticketId: ticket.id,
-				ticketName: ticket.name,
-				ticketUrl: ticket.url,
-				ticketStatus: ticket.status,
-				agentMemories: memories,
-			}));
-
-			if (ctx.clickupConfig) {
-				addTaskComment(ctx.clickupConfig, ticket.id, `Assigned to worker: ${worker.name}`).catch(err => {
-					console.error(`[Hub] Failed to comment on ticket ${ticket.id}:`, err);
-				});
-			}
-
-			worker.currentTicketId = ticket.id;
-			worker.currentTicketName = ticket.name;
-		}
-	}
-
-	broadcastWorkerStatus(ctx);
+	console.log(`[Standalone] Auto-pickup: Darryl batch of ${batch.length} (${batch.filter(b => b.status === 'to do').length} to-do, ${batch.filter(b => b.status === 'ai review').length} ai-review)`);
+	handleDarrylBatchDispatch(batch, ctx);
 }
 
 export function autoJanPickup(ctx: ServerContext): void {
@@ -496,12 +435,22 @@ export function handleClickupConfigure(msg: Record<string, unknown>, ctx: Server
 
 // ── Darryl orchestration ─────────────────────────────────────
 
-export function handleDarrylHandleTicket(msg: Record<string, unknown>, ctx: ServerContext): void {
-	const ticketId = msg.ticketId as string;
-	const ticketName = msg.ticketName as string;
-	const ticketUrl = msg.ticketUrl as string;
-	const ticketStatus = ((msg.ticketStatus as string | undefined) ?? 'to do').toLowerCase();
-	const isAiReviewMode = ticketStatus === 'ai review';
+/**
+ * Launch Darryl with a batch of dev tickets. He processes them sequentially
+ * in one session, firing a `/api/launch-agent` curl per ticket; the dispatched
+ * workers then run in parallel on their own machines.
+ *
+ * Darryl is a pure orchestrator — he never claims tickets himself (mirrors
+ * Jan's pattern). Each curl he fires claims the ticket at the dispatch
+ * endpoint (`launchAgentOnTicket`). Darryl's role-level lock
+ * (`darryl.currentSessionId`) stops him from running twice concurrently; the
+ * per-ticket registry stops any of his ticket dispatches from double-firing.
+ */
+export function handleDarrylBatchDispatch(
+	batch: Array<TicketInfo & { status: 'to do' | 'ai review' }>,
+	ctx: ServerContext,
+): void {
+	if (batch.length === 0) return;
 	const { persistentAgents } = ctx;
 
 	const darryl = findOrCreatePersistentAgent(
@@ -511,39 +460,30 @@ export function handleDarrylHandleTicket(msg: Record<string, unknown>, ctx: Serv
 		'The Foreman. Assesses tickets, decides which agents should work on them, and launches them.',
 		DARRYL_WORKSPACE,
 	);
-
 	if (darryl.currentSessionId) {
-		console.log(`[Standalone] Darryl already has an active session ${darryl.currentSessionId}, skipping relaunch for ticket ${ticketId}`);
+		console.log(`[Standalone] Darryl already has an active session ${darryl.currentSessionId}, skipping batch dispatch of ${batch.length}`);
 		return;
-	}
-
-	// Claim the ticket. If autoDarrylPickup already claimed this ticket for the
-	// same session, the claim will already exist — that's fine, skip if so.
-	// Otherwise claim now. Released on session end (onSessionStale).
-	const alreadyClaimed = isTicketClaimed(ctx.dispatchRegistry, ticketId);
-	if (!alreadyClaimed) {
-		claimTicket(ctx.dispatchRegistry, ticketId, darryl.name, isAiReviewMode ? 'darryl-ai-review' : 'darryl-dispatch');
 	}
 
 	const roster = buildRoster(persistentAgents, darryl.id);
 	const systemPrompt = buildDarrylSystemPrompt(darryl, roster, SERVER_PORT);
-	const initialTask = (isAiReviewMode
-		? buildDarrylAiReviewInitialTask(ticketId, ticketName, ticketUrl)
-		: buildDarrylStandardInitialTask(ticketId, ticketName, ticketUrl)
+	const initialTask = buildDarrylBatchInitialTask(
+		batch.map(t => ({ id: t.ticketId, name: t.ticketName, url: t.ticketUrl, status: t.status })),
 	) + EXIT_REMINDER;
 
+	// Track only the first ticket on the persistent-agent record (used for UI
+	// labels); the rest are listed in the initial task. Same convention as Jan.
+	const first = batch[0];
 	const result = launchPersistentAgentSession(
 		darryl,
 		systemPrompt,
 		initialTask,
-		{ ticketId, ticketName, ticketUrl },
+		first,
 		ctx,
 		persistentAgents,
 	);
 	if (!result.success) {
-		console.log(`[Standalone] Failed to launch Darryl for ticket ${ticketId}`);
-		// Release the claim on failure — let the next pickup cycle retry.
-		if (!alreadyClaimed) releaseTicket(ctx.dispatchRegistry, ticketId);
+		console.log(`[Standalone] Failed to launch Darryl batch of ${batch.length}`);
 	}
 }
 
