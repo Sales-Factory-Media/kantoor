@@ -151,17 +151,35 @@ export function startClickupPolling(ctx: ServerContext): void {
  * or session ended). Uses cached ClickUp state — no network call — so this is
  * cheap to invoke on every worker-free event.
  *
- * IMPORTANT: Jan is DELIBERATELY not fired here. Jan only launches on the
- * ClickUp poll cadence (every CLICKUP_POLL_INTERVAL_MS) or on an explicit
- * manual refresh from the user. Keeping Jan's dispatch cadence predictable
- * prevents unexpected session launches from reactive worker-free events and
- * matches the user's mental model ("she runs on her timer, not on events").
- * Darryl is cheap and reactive is fine for him.
+ * IMPORTANT: Jan is DELIBERATELY not fired here. Jan's dispatch cadence is
+ * coupled to the ClickUp poll for correctness reasons, not just ergonomics:
  *
- * No-op on workers (they don't run auto-pickup).
+ *   1. Jan's only meaningful inputs are ClickUp ticket states. She has
+ *      nothing new to decide until the ClickUp cache is refreshed.
+ *   2. When a designer gets dispatched, the AGENT (not the hub) is the one
+ *      that moves the ticket from "to do" → "in progress" in ClickUp. That
+ *      takes time — seconds to a minute or so. Until that happens, a fresh
+ *      ClickUp fetch would still show the ticket as "to do".
+ *   3. The CLICKUP_POLL_INTERVAL_MS (3 min) is the natural cooldown window
+ *      during which in-flight dispatches settle into ClickUp. Firing Jan
+ *      sooner means she'd read "to do" tickets that agents are already
+ *      starting on. The dispatch registry filter would prevent the actual
+ *      double-dispatch, but Jan would still waste a session evaluating
+ *      stale state.
  *
- * Debounced to coalesce rapid-fire events (multiple workers finishing in the
- * same ~second) into one pickup pass.
+ * So: Jan only launches when we've just fetched ClickUp fresh, i.e. via
+ * handleClickupRefresh → runAutoPickupNow. That's the poll timer OR an
+ * explicit manual refresh from the webview. Reactive worker-free events do
+ * NOT trigger her.
+ *
+ * Darryl is unaffected — his cadence is not coupled to ClickUp state in the
+ * same way (dev workers aren't bottlenecked on ticket-status transitions
+ * the way the design fleet is), and reactive dispatch is the right call for
+ * keeping dev throughput high.
+ *
+ * No-op on workers (they don't run auto-pickup). Debounced to coalesce
+ * rapid-fire events (multiple workers finishing in the same ~second) into
+ * one pickup pass.
  */
 let pickupDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 const PICKUP_DEBOUNCE_MS = 250;
@@ -177,9 +195,12 @@ export function autoPickupAfterWorkerFree(ctx: ServerContext): void {
 }
 
 /**
- * Synchronous variant — runs BOTH Darryl and Jan pickup right now. Only
- * called from `handleClickupRefresh` (the ClickUp poll or manual refresh),
- * which is the single entry point where Jan is allowed to launch.
+ * Synchronous variant — runs BOTH Darryl and Jan pickup right now. ONLY
+ * called from `handleClickupRefresh`, which has just fetched fresh ClickUp
+ * state. This is the single entry point where Jan is allowed to launch,
+ * because her decisions depend on knowing the true current state of the
+ * ClickUp board (see autoPickupAfterWorkerFree comment for the full
+ * reasoning on why staleness is unsafe for Jan).
  */
 export function runAutoPickupNow(ctx: ServerContext): void {
 	if (ctx.isWorkerMode) return;

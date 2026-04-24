@@ -233,9 +233,13 @@ function handleWebviewReady(ws: WebSocket, ctx: ServerContext): void {
 	ws.send(JSON.stringify({ type: 'organogramSnapshot', organogram: buildOrganogram(persistentAgents) }));
 
 	// Try Darryl's auto-pickup on client connect — dev workers may have become
-	// free since the last poll. Jan is deliberately NOT fired here; her
-	// dispatch only runs on the ClickUp poll timer or an explicit refresh, so
-	// she doesn't launch unexpectedly just because someone opened the webview.
+	// free since the last poll. Jan is deliberately NOT fired here. Her
+	// decisions depend on fresh ClickUp state, and fresh state only comes
+	// from a ClickUp fetch. Opening the webview doesn't fetch ClickUp (we
+	// serve the last-polled cache), so firing Jan here would have her act on
+	// stale data — she could try to dispatch tickets that have already been
+	// picked up but whose status hasn't caught up in the cache yet. See the
+	// comment on autoPickupAfterWorkerFree for the full reasoning.
 	if (!ctx.isWorkerMode) {
 		autoDarrylPickup(ctx);
 	}

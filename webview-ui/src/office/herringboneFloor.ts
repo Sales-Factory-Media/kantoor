@@ -27,10 +27,10 @@ import { TILE_SIZE } from '../constants.js'
 // from PLANK_FILL are kept small so the pattern reads as subtle wood grain
 // rather than high-contrast stripes.
 const PLANK_FILL = '#8a8a8a'
-const PLANK_GRAIN = '#828282'   // was #7a (−16), now −8 → half the contrast
-const PLANK_SEAM = '#636363'    // was #3c (−78), now −39
-const BORDER_FILL = '#929292'   // was #9a (+16), now +8
-const BORDER_GRAIN = '#878787'  // was #85 (−5), now −3
+const PLANK_GRAIN = '#868686'   // −4 (halved from −8)
+const PLANK_SEAM = '#767676'    // −20 (halved from −39)
+const BORDER_FILL = '#8e8e8e'   // +4 (halved from +8)
+const BORDER_GRAIN = '#888888'  // −2 (halved from −3)
 
 const NORTH = 1
 const EAST = 2
