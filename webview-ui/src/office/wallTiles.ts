@@ -25,6 +25,7 @@ let wallSprites: SpriteData[] | null = null
 /** Set wall sprites (called once when extension sends wallTilesLoaded) */
 export function setWallSprites(sprites: SpriteData[]): void {
   wallSprites = sprites
+  invalidateWallInstanceCache()
 }
 
 /** Check if wall sprites have been loaded */
@@ -95,8 +96,29 @@ export function getColorizedWallSprite(
 }
 
 /**
+ * Cache for getWallInstances. The tile map and tile-color array are
+ * regenerated on layout change (see officeState.rebuildFromLayout), so a
+ * simple identity check on those references is enough to invalidate.
+ */
+let cachedWallInstances: FurnitureInstance[] | null = null
+let cachedTileMapRef: TileTypeVal[][] | null = null
+let cachedTileColorsRef: Array<FloorColor | null> | undefined = undefined
+let cachedSpritesRef: SpriteData[] | null = null
+
+/** Clear the wall-instance cache. Called on layout change. */
+export function invalidateWallInstanceCache(): void {
+  cachedWallInstances = null
+  cachedTileMapRef = null
+  cachedTileColorsRef = undefined
+  cachedSpritesRef = null
+}
+
+/**
  * Build FurnitureInstance-like objects for all wall tiles so they can participate
  * in z-sorting with furniture and characters.
+ *
+ * Result is cached and reused across frames as long as the tile map, tile
+ * colors, and loaded wall sprites are reference-equal to the previous call.
  */
 export function getWallInstances(
   tileMap: TileTypeVal[][],
@@ -104,6 +126,16 @@ export function getWallInstances(
   cols?: number,
 ): FurnitureInstance[] {
   if (!wallSprites) return []
+
+  if (
+    cachedWallInstances !== null &&
+    cachedTileMapRef === tileMap &&
+    cachedTileColorsRef === tileColors &&
+    cachedSpritesRef === wallSprites
+  ) {
+    return cachedWallInstances
+  }
+
   const tmRows = tileMap.length
   const tmCols = tmRows > 0 ? tileMap[0].length : 0
   const layoutCols = cols ?? tmCols
@@ -140,6 +172,11 @@ export function getWallInstances(
       })
     }
   }
+
+  cachedWallInstances = instances
+  cachedTileMapRef = tileMap
+  cachedTileColorsRef = tileColors
+  cachedSpritesRef = wallSprites
   return instances
 }
 

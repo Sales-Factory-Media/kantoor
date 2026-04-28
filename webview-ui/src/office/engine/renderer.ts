@@ -48,6 +48,8 @@ export function renderTileGrid(
   zoom: number,
   tileColors?: Array<FloorColor | null>,
   cols?: number,
+  canvasWidth?: number,
+  canvasHeight?: number,
 ): void {
   const s = TILE_SIZE * zoom
   const useSpriteFloors = hasFloorSprites()
@@ -56,9 +58,23 @@ export function renderTileGrid(
   const tmCols = tmRows > 0 ? tileMap[0].length : 0
   const layoutCols = cols ?? tmCols
 
+  // Viewport culling: only iterate tiles whose bounding box overlaps the canvas.
+  // Without this, a 64×64 grid (4096 tiles) is touched every frame even when
+  // most tiles sit far off-screen — a large CPU cost on every rAF tick.
+  let firstRow = 0
+  let lastRow = tmRows
+  let firstCol = 0
+  let lastCol = tmCols
+  if (canvasWidth !== undefined && canvasHeight !== undefined && s > 0) {
+    firstCol = Math.max(0, Math.floor(-offsetX / s))
+    lastCol = Math.min(tmCols, Math.ceil((canvasWidth - offsetX) / s))
+    firstRow = Math.max(0, Math.floor(-offsetY / s))
+    lastRow = Math.min(tmRows, Math.ceil((canvasHeight - offsetY) / s))
+  }
+
   // Floor tiles + wall base color
-  for (let r = 0; r < tmRows; r++) {
-    for (let c = 0; c < tmCols; c++) {
+  for (let r = firstRow; r < lastRow; r++) {
+    for (let c = firstCol; c < lastCol; c++) {
       const tile = tileMap[r][c]
 
       // Skip VOID and WINDOW tiles entirely (transparent at the tile pass —
@@ -413,7 +429,7 @@ export function renderFrame(
   }
 
   // Draw tiles (floor + wall base color)
-  renderTileGrid(ctx, tileMap, offsetX, offsetY, zoom, tileColors, layoutCols)
+  renderTileGrid(ctx, tileMap, offsetX, offsetY, zoom, tileColors, layoutCols, canvasWidth, canvasHeight)
 
   // Seat indicators (below furniture/characters, on top of floor)
   if (selection) {
@@ -455,17 +471,41 @@ function renderOutdoorTiles(
   officeOffsetX: number,
   officeOffsetY: number,
   zoom: number,
-  _canvasWidth: number,
-  _canvasHeight: number,
+  canvasWidth: number,
+  canvasHeight: number,
 ): void {
   const { bakedCanvas, width, height, offsetCol, offsetRow } = outdoor
   if (!bakedCanvas) return
 
-  // Single blit of the prebaked outdoor canvas, scaled to current zoom.
-  // imageSmoothingEnabled=false (set in gameLoop) keeps integer-zoom pixel-crisp.
+  // Compute the destination rect in canvas space.
   const baseX = officeOffsetX + offsetCol * TILE_SIZE * zoom
   const baseY = officeOffsetY + offsetRow * TILE_SIZE * zoom
-  const dw = width * TILE_SIZE * zoom
-  const dh = height * TILE_SIZE * zoom
-  ctx.drawImage(bakedCanvas, Math.round(baseX), Math.round(baseY), dw, dh)
+  const dwFull = width * TILE_SIZE * zoom
+  const dhFull = height * TILE_SIZE * zoom
+
+  // Clip destination to visible canvas.
+  const dxClipped = Math.max(0, baseX)
+  const dyClipped = Math.max(0, baseY)
+  const dxEnd = Math.min(canvasWidth, baseX + dwFull)
+  const dyEnd = Math.min(canvasHeight, baseY + dhFull)
+  if (dxEnd <= dxClipped || dyEnd <= dyClipped) return
+
+  // Map clipped destination back into source-canvas coordinates so the GPU
+  // only scales the visible portion. Without this, drawImage hands the
+  // browser a destination rect many times the canvas size at high zoom and
+  // the implementation has to reason about all of it before clipping.
+  const baseSrcW = bakedCanvas.width
+  const baseSrcH = bakedCanvas.height
+  const srcX = (dxClipped - baseX) * baseSrcW / dwFull
+  const srcY = (dyClipped - baseY) * baseSrcH / dhFull
+  const srcW = (dxEnd - dxClipped) * baseSrcW / dwFull
+  const srcH = (dyEnd - dyClipped) * baseSrcH / dhFull
+
+  ctx.drawImage(
+    bakedCanvas,
+    srcX, srcY, srcW, srcH,
+    Math.round(dxClipped), Math.round(dyClipped),
+    Math.round(dxEnd) - Math.round(dxClipped),
+    Math.round(dyEnd) - Math.round(dyClipped),
+  )
 }
