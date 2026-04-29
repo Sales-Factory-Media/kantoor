@@ -189,12 +189,13 @@ export function buildDarrylSystemPrompt(agent: PersistentAgent, roster: RosterEn
 	const rules: string[] = [
 		'1. NEVER write code or edit files for a ticket. Your job is to decide WHO works on it.',
 		'2. Only dispatch OFFLINE agents whose workspace matches the ticket\'s project.',
-		'3. When you dispatch, ALWAYS include a **Brief** in `additionalPrompt` (2–6 bullets: goal, key constraints, pointers to the exact artifacts needed). This stops the worker from re-reading every comment.',
-		'4. If the ticket is unclear, comment with questions, unassign yourself, assign the escalation user, move back to "to do". Do NOT dispatch a worker to a half-baked ticket.',
-		'5. **Figma-based tickets:** if the ticket (description or comments) links to a Figma design, your Brief MUST include a `Design reference` line with the Figma URL AND the `Component library mandate` line: "Use the code component library — every library-equivalent UI element (Button, Card, Input, Nav, etc.) must be rendered via the project\'s existing code component; never inline-rebuild it. If the code library is missing an equivalent, flag it on the ticket instead of rolling your own." This is how we keep code and the design system in sync so that updating a DS component propagates everywhere.',
+		'3. **One ticket per worker, no exceptions.** A worker can only run a single task at a time. If you dispatch two tickets to the same worker, the second silently overwrites the first and work is lost. After every successful dispatch, that worker is BUSY for the rest of your session — do NOT pick them again. **Re-fetch `GET /api/roster` before EACH dispatch in a batch** so you see the freshly-busy worker; never reuse a roster snapshot across multiple dispatches. The hub also enforces this server-side and will return `success:false` with `Worker "<name>" is already running a session...` — if you see that error, pick a different free worker (or skip the ticket and let the next pickup retry).',
+		'4. When you dispatch, ALWAYS include a **Brief** in `additionalPrompt` (2–6 bullets: goal, key constraints, pointers to the exact artifacts needed). This stops the worker from re-reading every comment.',
+		'5. If the ticket is unclear, comment with questions, unassign yourself, assign the escalation user, move back to "to do". Do NOT dispatch a worker to a half-baked ticket.',
+		'6. **Figma-based tickets:** if the ticket (description or comments) links to a Figma design, your Brief MUST include a `Design reference` line with the Figma URL AND the `Component library mandate` line: "Use the code component library — every library-equivalent UI element (Button, Card, Input, Nav, etc.) must be rendered via the project\'s existing code component; never inline-rebuild it. If the code library is missing an equivalent, flag it on the ticket instead of rolling your own." This is how we keep code and the design system in sync so that updating a DS component propagates everywhere.',
 	];
 	if (AI_REVIEW_PICKUP_ENABLED) {
-		rules.push('5. AI Review: 3-round cap. After 3 cycles, tell the worker (in `additionalPrompt`) to be conservative and forward to `qa test` unless there\'s a real bug.');
+		rules.push('7. AI Review: 3-round cap. After 3 cycles, tell the worker (in `additionalPrompt`) to be conservative and forward to `qa test` unless there\'s a real bug.');
 	}
 	const dispatchApiExtras = AI_REVIEW_PICKUP_ENABLED
 		? 'Add `"useTeam":true` for complex multi-part work. Add `"aiReviewMode":true` for tickets in the `ai review` state.'

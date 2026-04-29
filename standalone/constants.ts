@@ -62,10 +62,11 @@ export const MAX_REVISION_COUNT = 3;
 //
 // - AI_REVIEW_PICKUP_ENABLED: if a ticket ends up in "ai review" (e.g. a
 //   human placed it there manually), should the system auto-pick-it-up and
-//   dispatch a QA / AI-review agent? This is independent of auto-escalation
-//   and is normally true — we want manual ai-review requests to still work.
+//   dispatch a QA / AI-review agent? Disabled 2026-04-29 — we don't want
+//   automatic AI review running at all right now. Tickets sitting in
+//   "ai review" are left alone; a human must move them out manually.
 export const AI_REVIEW_AUTO_ESCALATE = false;
-export const AI_REVIEW_PICKUP_ENABLED = true;
+export const AI_REVIEW_PICKUP_ENABLED = false;
 
 // ── Visual Design: Dark Mode ───────────────────────────────
 // When false (default 2026-04-22), Visual Designers are explicitly told NOT to

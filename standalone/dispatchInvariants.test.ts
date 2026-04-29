@@ -38,10 +38,15 @@ vi.mock('./itermFocus.js', () => ({
 	focusItermSession: vi.fn(),
 }));
 
-const launchPersistentAgentMock = vi.fn(() => true);
+// Mimic the real launchPersistentAgent side-effect of stamping currentSessionId
+// on the persistent-agent record. Per-worker concurrency tests rely on this.
+const launchPersistentAgentMock = vi.fn((pa: { currentSessionId?: string }) => {
+	pa.currentSessionId = 'mock-session-uuid';
+	return true;
+});
 
 vi.mock('./agentHandlers.js', () => ({
-	launchPersistentAgent: (...args: unknown[]) => launchPersistentAgentMock(...args),
+	launchPersistentAgent: (...args: unknown[]) => launchPersistentAgentMock(...(args as [{ currentSessionId?: string }])),
 	getJanDesignConfig: () => ({
 		figmaUrl: 'x',
 		clickupDocUrl: 'x',
@@ -334,6 +339,66 @@ describe('invariant 4: Darryl\'s spawn does not self-block his own /api/launch-a
 		const result = launchAgentOnTicket('worker-1', 'T-1', 'Task T-1', 'https://clickup.test/T-1', ctx);
 		expect(result.success).toBe(true);
 		expect(result.error).toBeUndefined();
+	});
+});
+
+// ── Invariant 4b: per-worker concurrency lock ─────────────────
+
+describe('invariant 4b: a worker only runs one ticket at a time', () => {
+	it('launchAgentOnTicket rejects a second dispatch to the same worker even with a different ticket', () => {
+		// Regression test for the "Darryl dispatches multiple tickets to the
+		// same worker" bug. Darryl picks workers from /api/roster (offline=
+		// free), but his roster snapshot can be stale across a batch — without
+		// this guard he can dispatch ticket A → Worker X, then ticket B →
+		// Worker X, and the second launchPersistentAgent silently overwrites
+		// the first session. The fix is a per-agent currentSessionId check at
+		// the entry of launchAgentOnTicket. If this test fails, the dual-
+		// dispatch bug is back.
+		const ctx = makeTestCtx({
+			persistentAgents: [
+				{
+					id: 'worker-1',
+					name: 'Worker',
+					roleShort: 'Dev',
+					roleFull: '',
+					workspacePath: '~/project',
+				},
+			],
+		});
+
+		// First dispatch — should succeed and mark the worker busy.
+		const first = launchAgentOnTicket('worker-1', 'T-1', 'Task T-1', 'https://clickup.test/T-1', ctx);
+		expect(first.success).toBe(true);
+		expect(ctx.persistentAgents[0].currentSessionId).toBeTruthy();
+
+		// Second dispatch on a DIFFERENT ticket but the SAME worker — must
+		// reject with a busy-worker error and must NOT claim the new ticket
+		// (otherwise the registry would block the next pickup cycle from
+		// retrying T-2 on a free worker).
+		const second = launchAgentOnTicket('worker-1', 'T-2', 'Task T-2', 'https://clickup.test/T-2', ctx);
+		expect(second.success).toBe(false);
+		expect(second.error).toMatch(/already running a session/i);
+		expect(isTicketClaimed(ctx.dispatchRegistry, 'T-2')).toBe(false);
+	});
+
+	it('a second dispatch to the same worker does not overwrite the first session id', () => {
+		// Defense-in-depth assertion: even after the rejection in the test
+		// above, the worker's currentSessionId must still be the one from
+		// dispatch #1 (not undefined, not a fresh UUID).
+		const ctx = makeTestCtx({
+			persistentAgents: [
+				{ id: 'worker-1', name: 'Worker', roleShort: 'Dev', roleFull: '', workspacePath: '~/project' },
+			],
+		});
+
+		launchAgentOnTicket('worker-1', 'T-1', 'Task T-1', 'https://clickup.test/T-1', ctx);
+		const sessionAfterFirst = ctx.persistentAgents[0].currentSessionId;
+		expect(sessionAfterFirst).toBeTruthy();
+
+		launchAgentOnTicket('worker-1', 'T-2', 'Task T-2', 'https://clickup.test/T-2', ctx);
+		expect(ctx.persistentAgents[0].currentSessionId).toBe(sessionAfterFirst);
+		// Ticket tracking from dispatch #1 is also preserved.
+		expect(ctx.persistentAgents[0].currentTicketId).toBe('T-1');
 	});
 });
 

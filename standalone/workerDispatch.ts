@@ -88,6 +88,18 @@ export function launchAgentOnTicket(
 	const pa = persistentAgents.find(p => p.id === agentId);
 	if (!pa) return { success: false, error: `Agent not found: ${agentId}` };
 
+	// Per-worker concurrency lock: a single worker runs at most one ticket at a
+	// time. Darryl picks workers from `/api/roster` (offline=free), but his
+	// roster snapshot can be stale across a batch — without this guard he
+	// could dispatch two tickets to the same worker in quick succession, and
+	// the second `launchPersistentAgent` would silently overwrite the first
+	// session. Reject loudly so Darryl picks a different free worker (or
+	// waits for the current one to finish) on retry.
+	if (pa.currentSessionId) {
+		const onTicket = pa.currentTicketId ? ` on ticket ${pa.currentTicketId}` : '';
+		return { success: false, error: `Worker "${pa.name}" is already running a session${onTicket}. Pick a different free worker from /api/roster.` };
+	}
+
 	// Claim the ticket BEFORE we do any launch work. If another dispatch path
 	// already holds it, bail — Darryl's next pickup cycle (or the retry in
 	// his prompt) will re-evaluate.

@@ -75,16 +75,16 @@ ${ticketLines}
 1. \`clickup_get_task\` + \`clickup_get_task_comments\` once.
 2. Is the ticket complete enough to dispatch?
    - **No** → comment with specific questions, unassign yourself, assign "${DARRYL_ESCALATION_USERNAME}", leave the ticket in "to do", move on to the next ticket.
-   - **Yes** → pick the right free agent from \`GET http://localhost:${SERVER_PORT}/api/roster\` (offline=free) whose \`workspacePath\` matches the ticket's project, then dispatch them with a Brief:
+   - **Yes** → **re-fetch \`GET http://localhost:${SERVER_PORT}/api/roster\` right now** (do NOT trust a roster you fetched for a previous ticket — workers you just dispatched are now BUSY). Pick a worker where \`isOnline:false\` AND \`workspacePath\` matches the ticket's project, then dispatch them with a Brief:
      \`curl -X POST http://localhost:${SERVER_PORT}/api/launch-agent -d '{"agentId":"...","ticketId":"<id>","ticketName":"<name>","ticketUrl":"<url>","additionalPrompt":"<Brief>","useTeam":<bool>}'\`
-3. On \`success:true\` move the ticket to "in progress". On \`success:false\` leave it alone and move on — the next pickup cycle will retry.
+3. On \`success:true\` move the ticket to "in progress". On \`success:false\` (including the per-worker \`Worker "<name>" is already running a session...\` error) leave the ticket alone and move on — the next pickup cycle will retry. **Never retry a busy-worker error against the same agentId** — that means your roster was stale; the next ticket should re-fetch and pick a different free worker.
 
 ### If status is **"ai review"**
 1. \`clickup_get_task\` + \`clickup_get_task_comments\` once. Find the original implementer via the "Assigned to worker: <name>" comment. Count prior AI Review rounds.
-2. Pick that implementer (best context) or, if they're busy/retired, another free agent in the same workspace.
+2. Re-fetch \`GET http://localhost:${SERVER_PORT}/api/roster\` and check the implementer's \`isOnline\`. If \`isOnline:false\` use them (best context). If they're busy or retired, pick any other \`isOnline:false\` agent in the same workspace.
 3. Dispatch with \`aiReviewMode:true\` and a short Brief summarising Copilot's feedback:
    \`curl -X POST http://localhost:${SERVER_PORT}/api/launch-agent -d '{"agentId":"...","ticketId":"<id>","ticketName":"<name>","ticketUrl":"<url>","aiReviewMode":true,"additionalPrompt":"<Brief>"}'\`
-4. Comment naming who you reassigned. Do NOT change the ticket status — the reassigned agent will.
+4. Comment naming who you reassigned. Do NOT change the ticket status — the reassigned agent will. On \`success:false\` (including the busy-worker error), skip the ticket — the next pickup cycle retries.
 5. 3+ prior rounds → tell them in the Brief to be conservative and forward to "qa test" unless there's a real bug.
 
 ## When you're done
