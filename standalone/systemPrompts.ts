@@ -112,6 +112,7 @@ function buildMemoryBlock(memoryPath: string, sessionCount?: number, lastSession
 		'- Before starting: `mcp__mempalace__mempalace_search` (decisions) + `mempalace_kg_query` (entities). Skim, don\'t deep-read.',
 		'- On significant decisions: `mempalace_add_drawer`. Never save secrets, routine changes, or session-only state.',
 		`- Personal scratchpad (rough notes only): ${memoryPath}`,
+		'- **Do NOT write notes, dispatch records, ticket plans, or any state you might want to recall later to `/tmp/` (or any temp dir).** Files in `/tmp` are invisible to teammates, lost between sessions, and untracked by the org. If a record is worth keeping, it goes in MemPalace via `mempalace_add_drawer`. If it\'s personal scratch, it goes in your MEMORY.md at the path above. The only acceptable use of `/tmp` is a transient body file for a single shell command (e.g. `curl -d @/tmp/x.json` immediately followed by the curl) that you delete or stop caring about right after.',
 	];
 	if (sessionCount && sessionCount > 0) {
 		lines.push(lastSessionEnd
