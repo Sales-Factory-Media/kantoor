@@ -15,6 +15,7 @@ import {
 	handleLaunchDesigner,
 	handleLaunchVisualDesigner,
 	handleVisualQaReview,
+	launchAgentOnTicket,
 } from './workerDispatch.js';
 import type { ServerContext } from './serverContext.js';
 
@@ -99,7 +100,7 @@ function handleHubMessage(
 
 	if (type === 'workerRegistered') {
 		handleRegistered(msg, ctx);
-	} else if (type === 'launchDesigner' || type === 'launchVisualDesigner' || type === 'launchVisualQa') {
+	} else if (type === 'launchDesigner' || type === 'launchVisualDesigner' || type === 'launchVisualQa' || type === 'launchDev') {
 		handleLaunchRpcFromHub(ws, type, msg, ctx).catch(err => {
 			console.error(`[Worker] ${type} RPC error:`, err);
 			const requestId = msg.requestId as string | undefined;
@@ -116,7 +117,7 @@ function handleHubMessage(
 
 async function handleLaunchRpcFromHub(
 	ws: WebSocket,
-	rpcType: 'launchDesigner' | 'launchVisualDesigner' | 'launchVisualQa',
+	rpcType: 'launchDesigner' | 'launchVisualDesigner' | 'launchVisualQa' | 'launchDev',
 	msg: Record<string, unknown>,
 	ctx: ServerContext,
 ): Promise<void> {
@@ -147,7 +148,7 @@ async function handleLaunchRpcFromHub(
 		result = await handleLaunchDesigner(launchMsg, ctx);
 	} else if (rpcType === 'launchVisualDesigner') {
 		result = await handleLaunchVisualDesigner(launchMsg, ctx);
-	} else {
+	} else if (rpcType === 'launchVisualQa') {
 		// launchVisualQa — same dispatch pattern, different agent role.
 		// The hub has already chosen this worker (via getIdleWorkersWithRole)
 		// based on its advertised 'designer' role + idle status, so just
@@ -159,6 +160,23 @@ async function handleLaunchRpcFromHub(
 			designerName: (launchMsg.designerName as string) || 'unknown',
 			workspacePath: (launchMsg.workspacePath as string) || '',
 		}, ctx);
+	} else {
+		// launchDev — Darryl's dev-ticket cascade. Hub already filtered to an
+		// idle worker advertising the 'dev' role; we just run the same local
+		// dispatch pipeline that `/api/launch-agent` uses, against this
+		// machine's persistent-agent pool.
+		result = await launchAgentOnTicket(
+			(launchMsg.workspacePath as string) || '',
+			(launchMsg.ticketId as string) || '',
+			(launchMsg.ticketName as string) || '',
+			(launchMsg.ticketUrl as string) || '',
+			ctx,
+			{
+				useTeam: launchMsg.useTeam as boolean | undefined,
+				additionalPrompt: launchMsg.additionalPrompt as string | undefined,
+				aiReviewMode: launchMsg.aiReviewMode as boolean | undefined,
+			},
+		);
 	}
 
 	console.log(`[Worker] ${rpcType} result: success=${result.success}${result.error ? ` error="${result.error}"` : ''}`);

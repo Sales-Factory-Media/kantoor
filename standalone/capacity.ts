@@ -95,6 +95,16 @@ export function findBusyVisualSlot(persistentAgents: PersistentAgent[]): Persist
 }
 
 /**
+ * Mirror of `findBusyVisualSlot` for dev work: returns the agent currently
+ * occupying THIS machine's dev slot, if any. Used by Darryl's dispatch to
+ * cap the hub at one dev ticket at a time and cascade further work to idle
+ * remote workers — same shape as Jan's flow.
+ */
+export function findBusyDevSlot(persistentAgents: PersistentAgent[]): PersistentAgent | undefined {
+	return persistentAgents.find(p => isDevWorker(p) && !!p.currentSessionId);
+}
+
+/**
  * Total machines in the fleet that can run a visual task: hub (if it
  * advertises the designer role) plus every remote worker with the designer
  * role. Each counts as one machine = one slot.

@@ -34,6 +34,7 @@ import {
 	TEAM_UX_ID,
 	TEAM_VISUAL_ID,
 	WORKER_ROLE_DESIGNER,
+	WORKER_ROLE_DEV,
 } from './constants.js';
 import { ensureAgentMemory } from './agentStore.js';
 import type { PersistentAgent } from './agentStore.js';
@@ -55,7 +56,7 @@ import {
 	saveAgentMemoryFromWorker,
 } from './workerRegistry.js';
 import { loadKnownProjects } from '../src/projectStore.js';
-import { findBusyVisualSlot, findFreeDevWorker } from './capacity.js';
+import { findBusyDevSlot, findBusyVisualSlot, findFreeDevWorker } from './capacity.js';
 import {
 	EXIT_REMINDER,
 	launchPersistentAgentSession,
@@ -87,7 +88,9 @@ export interface WorkerDispatchSpec {
 	tryLaunchLocal: (msg: Record<string, unknown>, ctx: ServerContext) => LocalLaunchOutcome;
 	/** Optional WebSocket-RPC fleet cascade. */
 	fleet?: {
-		rpcType: 'launchDesigner' | 'launchVisualDesigner' | 'launchVisualQa';
+		rpcType: 'launchDesigner' | 'launchVisualDesigner' | 'launchVisualQa' | 'launchDev';
+		/** Worker role required to receive this RPC. */
+		role: typeof WORKER_ROLE_DESIGNER | typeof WORKER_ROLE_DEV;
 	};
 }
 
@@ -112,7 +115,7 @@ export async function dispatchWorker(
 	}
 
 	if (!ctx.isWorkerMode && local.slotBusy && spec.fleet) {
-		const fleet = await dispatchToFleet(msg, ctx, spec.fleet.rpcType, local.error);
+		const fleet = await dispatchToFleet(msg, ctx, spec.fleet.rpcType, spec.fleet.role, local.error);
 		if (!fleet.success && claimed) releaseTicket(ctx.dispatchRegistry, ticketId);
 		return fleet;
 	}
@@ -130,16 +133,18 @@ export async function dispatchWorker(
 async function dispatchToFleet(
 	msg: Record<string, unknown>,
 	ctx: ServerContext,
-	rpcType: 'launchDesigner' | 'launchVisualDesigner' | 'launchVisualQa',
+	rpcType: 'launchDesigner' | 'launchVisualDesigner' | 'launchVisualQa' | 'launchDev',
+	role: typeof WORKER_ROLE_DESIGNER | typeof WORKER_ROLE_DEV,
 	localError?: string,
 ): Promise<{ success: boolean; error?: string; worker?: string }> {
 	const ticketId = msg.ticketId as string | undefined;
 	const ticketName = msg.ticketName as string | undefined;
-	const remoteWorkers = getIdleWorkersWithRole(ctx, WORKER_ROLE_DESIGNER);
+	const remoteWorkers = getIdleWorkersWithRole(ctx, role);
 	if (remoteWorkers.length === 0) {
+		const noun = role === WORKER_ROLE_DEV ? 'dev' : 'designer';
 		return { success: false, error: localError
-			? `${localError} No idle remote designer workers connected — wait and retry.`
-			: 'Local Figma busy and no remote designer workers connected — wait and retry.' };
+			? `${localError} No idle remote ${noun} workers connected — wait and retry.`
+			: `Local ${noun} slot busy and no idle remote ${noun} workers connected — wait and retry.` };
 	}
 
 	// Ship agent memories so the agent spawned on the worker has up-to-date context
@@ -223,10 +228,21 @@ function tryLaunchDevWorkerLocal(msg: Record<string, unknown>, ctx: ServerContex
 		return { success: false, error: 'Missing required fields: ticketId, ticketName, ticketUrl' };
 	}
 
+	// Per-machine dev slot lock — same shape as Jan's visual-slot lock. The
+	// hub takes ONE dev ticket at a time; further work cascades to idle remote
+	// workers via the fleet RPC. Without this, every Darryl curl found the
+	// same first-free hub agent and piled all dispatches onto a single machine.
+	const busySlot = findBusyDevSlot(ctx.persistentAgents);
+	if (busySlot) {
+		return {
+			success: false,
+			slotBusy: true,
+			error: `Local dev slot busy: "${busySlot.name}" is already running on this machine.`,
+		};
+	}
+
 	// Atomic worker pick: find any free dev worker (no live session) whose
-	// workspace matches the ticket. Darryl's auto-pickup capacity gate should
-	// have prevented an empty result, but a stale ClickUp cache or out-of-band
-	// dispatch could still get us here.
+	// workspace matches the ticket.
 	const pa = findFreeDevWorker(ctx.persistentAgents, workspacePath);
 	if (!pa) {
 		return { success: false, error: `No free dev worker available for workspace "${workspacePath}".` };
@@ -262,7 +278,9 @@ function tryLaunchDevWorkerLocal(msg: Record<string, unknown>, ctx: ServerContex
 const devWorkerSpec: WorkerDispatchSpec = {
 	purpose: 'dev-worker',
 	tryLaunchLocal: tryLaunchDevWorkerLocal,
-	// Dev workers are hub-local — no fleet cascade.
+	// One dev ticket per machine. When the hub already has a dev session
+	// running, cascade to an idle remote worker advertising the 'dev' role.
+	fleet: { rpcType: 'launchDev', role: WORKER_ROLE_DEV },
 };
 
 const devWorkerAiReviewSpec: WorkerDispatchSpec = {
@@ -375,7 +393,7 @@ function tryLaunchDesignerLocal(msg: Record<string, unknown>, ctx: ServerContext
 const uxDesignerSpec: WorkerDispatchSpec = {
 	purpose: 'ux-designer',
 	tryLaunchLocal: tryLaunchDesignerLocal,
-	fleet: { rpcType: 'launchDesigner' },
+	fleet: { rpcType: 'launchDesigner', role: WORKER_ROLE_DESIGNER },
 };
 
 export function handleLaunchDesigner(msg: Record<string, unknown>, ctx: ServerContext): Promise<{ success: boolean; error?: string; worker?: string }> {
@@ -431,7 +449,7 @@ function tryLaunchVisualDesignerLocal(msg: Record<string, unknown>, ctx: ServerC
 const visualDesignerSpec: WorkerDispatchSpec = {
 	purpose: 'visual-designer',
 	tryLaunchLocal: tryLaunchVisualDesignerLocal,
-	fleet: { rpcType: 'launchVisualDesigner' },
+	fleet: { rpcType: 'launchVisualDesigner', role: WORKER_ROLE_DESIGNER },
 };
 
 export function handleLaunchVisualDesigner(msg: Record<string, unknown>, ctx: ServerContext): Promise<{ success: boolean; error?: string; worker?: string }> {
@@ -473,7 +491,7 @@ function tryLaunchVisualQaLocal(msg: Record<string, unknown>, ctx: ServerContext
 const visualQaSpec: WorkerDispatchSpec = {
 	purpose: 'visual-qa',
 	tryLaunchLocal: tryLaunchVisualQaLocal,
-	fleet: { rpcType: 'launchVisualQa' },
+	fleet: { rpcType: 'launchVisualQa', role: WORKER_ROLE_DESIGNER },
 };
 
 export function handleVisualQaReview(
