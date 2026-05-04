@@ -1,4 +1,47 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
+
+/**
+ * `useState`, but writes are coalesced through `requestAnimationFrame`.
+ *
+ * WebSocket messages from the standalone server arrive in their own event-
+ * loop turns, so React 19's automatic batching only batches setState calls
+ * within a single message handler — not across messages. With a busy fleet
+ * (10–50 msgs/sec) that meant the App tree was reconciling 10–50× per
+ * second, on top of the canvas tick.
+ *
+ * This wrapper keeps the latest value in a ref (so functional updaters see
+ * accumulated state) and flushes to React state at most once per frame.
+ * Reads return one-frame-stale data, which is fine for UI driven by these
+ * fields (it updates at the screen refresh rate anyway).
+ */
+function useBatchedState<T>(initial: T): [T, (updater: T | ((prev: T) => T)) => void] {
+  const [state, setState] = useState<T>(initial)
+  const valueRef = useRef<T>(initial)
+  const scheduledRef = useRef(false)
+  const rafRef = useRef<number>(0)
+
+  useEffect(() => {
+    return () => {
+      if (rafRef.current) cancelAnimationFrame(rafRef.current)
+    }
+  }, [])
+
+  const batchedSet = useCallback((updater: T | ((prev: T) => T)) => {
+    const next = typeof updater === 'function'
+      ? (updater as (prev: T) => T)(valueRef.current)
+      : updater
+    if (next === valueRef.current) return
+    valueRef.current = next
+    if (scheduledRef.current) return
+    scheduledRef.current = true
+    rafRef.current = requestAnimationFrame(() => {
+      scheduledRef.current = false
+      setState(valueRef.current)
+    })
+  }, [])
+
+  return [state, batchedSet]
+}
 import type { OfficeState } from '../office/engine/officeState.js'
 import type { ToolActivity, ConversationEntry } from '../office/types.js'
 import { FurnitureType } from '../office/types.js'
@@ -10,6 +53,7 @@ import { setCharacterTemplates } from '../office/sprites/spriteData.js'
 import { vscode } from '../vscodeApi.js'
 import { playDoneSound, setSoundEnabled } from '../notificationSound.js'
 import { CONVERSATION_MAX_ENTRIES } from '../constants.js'
+import { recordWsMessage } from '../perfOverlay.ts'
 
 const CAR_TYPES = [
   FurnitureType.CAR_SEDAN, FurnitureType.CAR_SPORT, FurnitureType.CAR_SUV,
@@ -151,14 +195,17 @@ export function useExtensionMessages(
 ): ExtensionMessageState {
   const [agents, setAgents] = useState<number[]>([])
   const [selectedAgent, setSelectedAgent] = useState<number | null>(null)
-  const [agentTools, setAgentTools] = useState<Record<number, ToolActivity[]>>({})
-  const [agentStatuses, setAgentStatuses] = useState<Record<number, string>>({})
-  const [subagentTools, setSubagentTools] = useState<Record<number, Record<string, ToolActivity[]>>>({})
-  const [subagentCharacters, setSubagentCharacters] = useState<SubagentCharacter[]>([])
+  // High-frequency channels — every JSONL line write produces a message that
+  // hits one of these. Routed through useBatchedState so a busy fleet can't
+  // hammer React reconciliation faster than the screen can refresh.
+  const [agentTools, setAgentTools] = useBatchedState<Record<number, ToolActivity[]>>({})
+  const [agentStatuses, setAgentStatuses] = useBatchedState<Record<number, string>>({})
+  const [subagentTools, setSubagentTools] = useBatchedState<Record<number, Record<string, ToolActivity[]>>>({})
+  const [subagentCharacters, setSubagentCharacters] = useBatchedState<SubagentCharacter[]>([])
   const [layoutReady, setLayoutReady] = useState(false)
   const [loadedAssets, setLoadedAssets] = useState<{ catalog: FurnitureAsset[]; sprites: Record<string, string[][]> } | undefined>()
   const [workspaceFolders, setWorkspaceFolders] = useState<WorkspaceFolder[]>([])
-  const [agentConversation, setAgentConversation] = useState<Record<number, ConversationEntry[]>>({})
+  const [agentConversation, setAgentConversation] = useBatchedState<Record<number, ConversationEntry[]>>({})
   const [offlineAgents, setOfflineAgents] = useState<OfflineAgent[]>([])
   const [clickupTickets, setClickupTickets] = useState<ClickUpStatusGroup[]>([])
   const [clickupConfigured, setClickupConfigured] = useState(false)
@@ -213,6 +260,9 @@ export function useExtensionMessages(
     const handler = (e: MessageEvent) => {
       const msg = e.data
       const os = getOfficeState()
+
+      // Diagnostic counter (no-op in production once perfOverlay is removed).
+      recordWsMessage(typeof msg?.type === 'string' ? msg.type : 'unknown')
 
       if (msg.type === 'offlineAgents') {
         const incoming = msg.agents as OfflineAgent[]

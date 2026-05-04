@@ -10,8 +10,11 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@pixi/tilemap": "^5.0.2",
     "d3": "^7.9.0",
     "d3-org-chart": "^3.1.1",
+    "pixi-viewport": "^6.0.3",
+    "pixi.js": "^8.18.1",
     "react": "^19.2.0",
     "react-dom": "^19.2.0"
   },

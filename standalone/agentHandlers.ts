@@ -134,6 +134,10 @@ export function handleDeleteAgentIdentity(msg: Record<string, unknown>, ctx: Ser
 	const { persistentAgents, broadcastSink, agentManager, setPersistentAgents } = ctx;
 	const agentId = msg.agentId as string;
 	console.log(`[Standalone] Deleting persistent agent ${agentId}`);
+	// Drop the live session first (broadcasts agentClosed so the webview removes
+	// the character without waiting for the stale-process check). Has no effect
+	// when the persistent agent isn't currently running.
+	agentManager.removeSessionByPersistentAgentId(agentId);
 	const updated = persistentAgents.filter(p => p.id !== agentId);
 	savePersistentAgents(updated);
 	setPersistentAgents(updated);
@@ -177,6 +181,10 @@ export function handleForgetAgent(msg: Record<string, unknown>, ctx: ServerConte
 	const { persistentAgents, broadcastSink, agentManager } = ctx;
 	const sessionId = msg.sessionId as string;
 	console.log(`[Standalone] Forgetting agent ${sessionId}`);
+	// Drop the live session first (broadcasts agentClosed so the webview removes
+	// the character without waiting for the stale-process check). Has no effect
+	// when the agent is no longer running.
+	agentManager.removeSessionBySessionId(sessionId);
 	const seats = readJson(SEATS_FILE) as Record<string, unknown> | null;
 	if (seats && sessionId in seats) {
 		delete seats[sessionId];

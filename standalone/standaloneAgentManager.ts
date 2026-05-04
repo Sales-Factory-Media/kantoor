@@ -202,6 +202,39 @@ export class StandaloneAgentManager {
 		return ids;
 	}
 
+	/**
+	 * Remove the live session whose sessionId matches. Used when a user fires
+	 * a non-persistent live agent (the session record carries a sessionId but
+	 * no persistentAgentId).
+	 *
+	 * Returns true if a matching session was found and removed.
+	 */
+	removeSessionBySessionId(sessionId: string): boolean {
+		for (const agent of this.agents.values()) {
+			if (agent.sessionId === sessionId) {
+				this.removeSession(agent.jsonlFile);
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Remove the live session bound to a given persistent-agent id. Used when
+	 * a user fires a persistent agent that's currently running.
+	 *
+	 * Returns true if a matching session was found and removed.
+	 */
+	removeSessionByPersistentAgentId(persistentAgentId: string): boolean {
+		for (const agent of this.agents.values()) {
+			if (agent.persistentAgentId === persistentAgentId) {
+				this.removeSession(agent.jsonlFile);
+				return true;
+			}
+		}
+		return false;
+	}
+
 	/** Send current tool/status state to the sink (for newly connected clients) */
 	sendAgentStatuses(ws: MessageSink): void {
 		for (const [agentId, agent] of this.agents) {

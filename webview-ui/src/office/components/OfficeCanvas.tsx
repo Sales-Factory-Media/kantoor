@@ -2,11 +2,9 @@ import { useRef, useEffect, useCallback } from 'react'
 import { loadCatSprites } from '../cats.js'
 import { loadAndGenerateOutdoor } from '../outdoor/outdoorGenerator.js'
 import type { OfficeState } from '../engine/officeState.js'
-import type { SelectionRenderState } from '../engine/renderer.js'
-import { startGameLoop } from '../engine/gameLoop.js'
-import { renderFrame } from '../engine/renderer.js'
+import { PixiStage } from '../pixi/pixiStage.js'
 import { TILE_SIZE } from '../types.js'
-import { CAMERA_FOLLOW_LERP, CAMERA_FOLLOW_SNAP_THRESHOLD, ZOOM_MIN, ZOOM_MAX, ZOOM_SCROLL_THRESHOLD, PAN_MARGIN_FRACTION, KEY_PAN_SPEED, MAX_DEVICE_PIXEL_RATIO } from '../../constants.js'
+import { CAMERA_FOLLOW_LERP, CAMERA_FOLLOW_SNAP_THRESHOLD, ZOOM_MIN, ZOOM_MAX, ZOOM_SCROLL_THRESHOLD, PAN_MARGIN_FRACTION, KEY_PAN_SPEED, MAX_DEVICE_PIXEL_RATIO, MAX_DELTA_TIME_SEC } from '../../constants.js'
 import { unlockAudio } from '../../notificationSound.js'
 
 interface OfficeCanvasProps {
@@ -29,6 +27,14 @@ export function OfficeCanvas({ officeState, onClick, zoom, onZoomChange, panRef 
   const zoomAccumulatorRef = useRef(0)
   // Arrow key pan state
   const keysDownRef = useRef(new Set<string>())
+  // Mirror the zoom prop into a ref so the long-lived rAF effect below can
+  // read the latest value WITHOUT being in the effect's dep array. Otherwise
+  // every zoom change tears down Pixi (async destroy + re-init) and the two
+  // app instances briefly fight for the same WebGL context — the page stalls.
+  const zoomRef = useRef(zoom)
+  useEffect(() => {
+    zoomRef.current = zoom
+  }, [zoom])
 
   // Clamp pan so the map edge can't go past a margin inside the viewport
   const clampPan = useCallback((px: number, py: number): { x: number; y: number } => {
@@ -66,39 +72,57 @@ export function OfficeCanvas({ officeState, onClick, zoom, onZoomChange, panRef 
 
     resizeCanvas()
 
-    const observer = new ResizeObserver(() => resizeCanvas())
-    if (containerRef.current) {
-      observer.observe(containerRef.current)
-    }
-
-    // Load cat sprites
+    // Load cat sprites — feeding officeState; the Pixi cat layer will pick
+    // them up in a follow-up milestone.
     loadCatSprites('assets/characters/cat.png').then(sprites => {
       if (sprites.length > 0) {
         officeState.setCatSprites(sprites)
       }
     })
 
-    // Outdoor/forest rendering temporarily disabled — too expensive per frame.
-    // Re-enable by restoring the loadAndGenerateOutdoor call.
-    void loadAndGenerateOutdoor
+    // Generate the outdoor / forest layer once (async PNG load + bake).
+    // Pixi's outdoorLayer picks up `officeState.outdoor` on the next tick.
+    if (!officeState.outdoor) {
+      const layout = officeState.getLayout()
+      loadAndGenerateOutdoor('assets/outdoor/summer-forest.png', layout.cols, layout.rows).then(outdoor => {
+        if (outdoor) officeState.outdoor = outdoor
+      })
+    }
 
-    const stop = startGameLoop(canvas, {
-      update: (dt) => {
+    let rafId = 0
+    let lastTime = 0
+    let stopped = false
+    let stage: PixiStage | null = null
+
+    const newStage = new PixiStage()
+    newStage.init(canvas, canvas.width, canvas.height).then(() => {
+      if (stopped) {
+        newStage.destroy()
+        return
+      }
+      stage = newStage
+      // We drive rendering manually from the rAF below. Stop Pixi's internal
+      // ticker so we don't get two render passes per frame.
+      stage.app.stop()
+
+      const tick = (time: number) => {
+        if (stopped) return
+        const dt = lastTime === 0 ? 0 : Math.min((time - lastTime) / 1000, MAX_DELTA_TIME_SEC)
+        lastTime = time
+
         officeState.update(dt)
-      },
-      render: (ctx) => {
-        const w = canvas.width
-        const h = canvas.height
+
+        const z = zoomRef.current
 
         // Camera follow: smoothly center on followed agent
         if (officeState.cameraFollowId !== null) {
           const followCh = officeState.characters.get(officeState.cameraFollowId)
           if (followCh) {
             const layout = officeState.getLayout()
-            const mapW = layout.cols * TILE_SIZE * zoom
-            const mapH = layout.rows * TILE_SIZE * zoom
-            const targetX = mapW / 2 - followCh.x * zoom
-            const targetY = mapH / 2 - followCh.y * zoom
+            const mapW = layout.cols * TILE_SIZE * z
+            const mapH = layout.rows * TILE_SIZE * z
+            const targetX = mapW / 2 - followCh.x * z
+            const targetY = mapH / 2 - followCh.y * z
             const dx = targetX - panRef.current.x
             const dy = targetY - panRef.current.y
             if (Math.abs(dx) < CAMERA_FOLLOW_SNAP_THRESHOLD && Math.abs(dy) < CAMERA_FOLLOW_SNAP_THRESHOLD) {
@@ -112,42 +136,40 @@ export function OfficeCanvas({ officeState, onClick, zoom, onZoomChange, panRef 
           }
         }
 
-        // Build selection render state
-        const selectionRender: SelectionRenderState = {
-          selectedAgentId: officeState.selectedAgentId,
-          hoveredAgentId: officeState.hoveredAgentId,
-          hoveredTile: officeState.hoveredTile,
-          seats: officeState.seats,
-          characters: officeState.characters,
-        }
-
-        const { offsetX, offsetY } = renderFrame(
-          ctx,
-          w,
-          h,
-          officeState.tileMap,
-          officeState.furniture,
-          officeState.getCharacters(),
-          zoom,
-          panRef.current.x,
-          panRef.current.y,
-          selectionRender,
-          officeState.getLayout().tileColors,
-          officeState.getLayout().cols,
-          officeState.getLayout().rows,
-          officeState.rooms,
-          officeState.cats,
-          officeState.outdoor,
-        )
+        // Mirror the world transform's offset for mouse hit-testing
+        // (`screenToWorld` reads offsetRef.current to convert mouse → world).
+        const layout = officeState.getLayout()
+        const mapW = layout.cols * TILE_SIZE * z
+        const mapH = layout.rows * TILE_SIZE * z
+        const offsetX = Math.floor((canvas.width - mapW) / 2) + Math.round(panRef.current.x)
+        const offsetY = Math.floor((canvas.height - mapH) / 2) + Math.round(panRef.current.y)
         offsetRef.current = { x: offsetX, y: offsetY }
-      },
+
+        stage!.update(officeState, z, panRef.current.x, panRef.current.y, canvas.width, canvas.height)
+        stage!.app.render()
+        rafId = requestAnimationFrame(tick)
+      }
+      rafId = requestAnimationFrame(tick)
     })
 
-    return () => {
-      stop()
-      observer.disconnect()
+    const observer = new ResizeObserver(() => {
+      resizeCanvas()
+      stage?.resize(canvas.width, canvas.height)
+    })
+    if (containerRef.current) {
+      observer.observe(containerRef.current)
     }
-  }, [officeState, resizeCanvas, zoom, panRef])
+
+    return () => {
+      stopped = true
+      if (rafId) cancelAnimationFrame(rafId)
+      observer.disconnect()
+      if (stage) {
+        stage.destroy()
+        stage = null
+      }
+    }
+  }, [officeState, resizeCanvas, panRef])
 
   // Convert CSS mouse coords to world (sprite pixel) coords
   const screenToWorld = useCallback(

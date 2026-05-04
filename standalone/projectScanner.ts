@@ -12,7 +12,14 @@ export interface ScannerCallbacks {
 interface WatchedProject {
 	dir: string;
 	name: string;
+	/** Every JSONL file we've ever seen in this project dir. Used to detect
+	 *  newly-appearing files (which we treat as just-started sessions). */
 	knownFiles: Set<string>;
+	/** Files we've reported as live via `onNewSession` and have NOT yet
+	 *  reported as stale. Without this, `checkStale` fired `onSessionStale`
+	 *  every 2s for every historical JSONL in the directory — broadcasting
+	 *  `offlineAgents` ~125×/s on a fleet with hundreds of past sessions. */
+	liveFiles: Set<string>;
 	timer: ReturnType<typeof setInterval>;
 }
 
@@ -158,6 +165,7 @@ export class ProjectScanner {
 	private watchProject(dirPath: string, dirName: string): void {
 		const projectName = this.deriveProjectName(dirName);
 		const knownFiles = new Set<string>();
+		const liveFiles = new Set<string>();
 
 		// Seed with existing files — only report ones with a live claude process
 		try {
@@ -167,6 +175,7 @@ export class ProjectScanner {
 				knownFiles.add(fullPath);
 				const sessionId = path.basename(f, '.jsonl');
 				if (this.liveSessionIds.has(sessionId)) {
+					liveFiles.add(fullPath);
 					this.callbacks.onNewSession(dirPath, fullPath, projectName);
 				}
 			}
@@ -176,21 +185,24 @@ export class ProjectScanner {
 
 		// Poll for new JSONL files
 		const timer = setInterval(() => {
-			this.scanJsonlFiles(dirPath, knownFiles, projectName);
+			this.scanJsonlFiles(dirPath);
 		}, JSONL_SCAN_INTERVAL_MS);
 
-		this.projects.set(dirPath, { dir: dirPath, name: projectName, knownFiles, timer });
+		this.projects.set(dirPath, { dir: dirPath, name: projectName, knownFiles, liveFiles, timer });
 	}
 
-	private scanJsonlFiles(dirPath: string, knownFiles: Set<string>, projectName: string): void {
+	private scanJsonlFiles(dirPath: string): void {
+		const proj = this.projects.get(dirPath);
+		if (!proj) return;
 		try {
 			const files = fs.readdirSync(dirPath).filter(f => f.endsWith('.jsonl'));
 			for (const f of files) {
 				const fullPath = path.join(dirPath, f);
-				if (!knownFiles.has(fullPath)) {
-					knownFiles.add(fullPath);
-					// New file appeared — report it (likely a just-started session)
-					this.callbacks.onNewSession(dirPath, fullPath, projectName);
+				if (!proj.knownFiles.has(fullPath)) {
+					proj.knownFiles.add(fullPath);
+					// New file appeared — treat it as a just-started live session.
+					proj.liveFiles.add(fullPath);
+					this.callbacks.onNewSession(dirPath, fullPath, proj.name);
 				}
 			}
 		} catch {
@@ -200,9 +212,14 @@ export class ProjectScanner {
 
 	private checkStale(): void {
 		for (const proj of this.projects.values()) {
-			for (const filePath of proj.knownFiles) {
+			// Only consider files we've previously reported as live. Without this
+			// guard every historical JSONL in ~/.claude/projects is fired at
+			// every tick (even ones whose process died long ago), and each fire
+			// triggers an `offlineAgents` broadcast — saturating the WS channel.
+			for (const filePath of [...proj.liveFiles]) {
 				const sessionId = path.basename(filePath, '.jsonl');
 				if (!this.liveSessionIds.has(sessionId)) {
+					proj.liveFiles.delete(filePath);
 					this.callbacks.onSessionStale(filePath);
 				}
 			}

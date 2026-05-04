@@ -1,3 +1,5 @@
+import { useEffect } from 'react'
+
 interface ConfirmDialogProps {
   message: string
   confirmLabel?: string
@@ -6,6 +8,20 @@ interface ConfirmDialogProps {
 }
 
 export function ConfirmDialog({ message, confirmLabel = 'Fire', onConfirm, onCancel }: ConfirmDialogProps) {
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Enter') {
+        e.preventDefault()
+        onConfirm()
+      } else if (e.key === 'Escape') {
+        e.preventDefault()
+        onCancel()
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [onConfirm, onCancel])
+
   return (
     <div
       style={{
