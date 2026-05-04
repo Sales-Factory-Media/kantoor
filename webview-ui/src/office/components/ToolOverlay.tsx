@@ -3,7 +3,7 @@ import type { ToolActivity } from '../types.js'
 import type { OfficeState } from '../engine/officeState.js'
 import type { SubagentCharacter } from '../../hooks/useExtensionMessages.js'
 import { TILE_SIZE, CharacterState } from '../types.js'
-import { TOOL_OVERLAY_VERTICAL_OFFSET, CHARACTER_SITTING_OFFSET_PX } from '../../constants.js'
+import { TOOL_OVERLAY_VERTICAL_OFFSET, CHARACTER_SITTING_OFFSET_PX, MAX_DEVICE_PIXEL_RATIO } from '../../constants.js'
 
 interface ToolOverlayProps {
   officeState: OfficeState
@@ -53,18 +53,32 @@ export function ToolOverlay({
   const [, setTick] = useState(0)
   useEffect(() => {
     let rafId = 0
+    let prevHovered: number | null = null
+    let prevSelected: number | null = null
     const tick = () => {
-      setTick((n) => n + 1)
+      const h = officeState.hoveredAgentId
+      const s = officeState.selectedAgentId
+      // Re-render only when something is currently shown (positions move and
+      // need to follow the character) or when the shown set just changed
+      // (transition from null → id requires one render to mount the bubble).
+      if (h !== null || s !== null || h !== prevHovered || s !== prevSelected) {
+        setTick((n) => n + 1)
+      }
+      prevHovered = h
+      prevSelected = s
       rafId = requestAnimationFrame(tick)
     }
     rafId = requestAnimationFrame(tick)
     return () => cancelAnimationFrame(rafId)
-  }, [])
+  }, [officeState])
 
   const el = containerRef.current
   if (!el) return null
   const rect = el.getBoundingClientRect()
-  const dpr = window.devicePixelRatio || 1
+  // Must match the clamped DPR used by OfficeCanvas.resizeCanvas — otherwise
+  // the overlay's screen-space math diverges from where the canvas actually
+  // drew the character, and the bubble lands off to the side.
+  const dpr = Math.min(window.devicePixelRatio || 1, MAX_DEVICE_PIXEL_RATIO)
   const canvasW = Math.round(rect.width * dpr)
   const canvasH = Math.round(rect.height * dpr)
   const layout = officeState.getLayout()

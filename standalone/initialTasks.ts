@@ -75,17 +75,16 @@ ${ticketLines}
 1. \`clickup_get_task\` + \`clickup_get_task_comments\` once.
 2. Is the ticket complete enough to dispatch?
    - **No** → comment with specific questions, unassign yourself, assign "${DARRYL_ESCALATION_USERNAME}", leave the ticket in "to do", move on to the next ticket.
-   - **Yes** → **re-fetch \`GET http://localhost:${SERVER_PORT}/api/roster\` right now** (do NOT trust a roster you fetched for a previous ticket — workers you just dispatched are now BUSY). Pick a worker where \`isOnline:false\` AND \`workspacePath\` matches the ticket's project, then dispatch them with a Brief:
-     \`curl -X POST http://localhost:${SERVER_PORT}/api/launch-agent -d '{"agentId":"...","ticketId":"<id>","ticketName":"<name>","ticketUrl":"<url>","additionalPrompt":"<Brief>","useTeam":<bool>}'\`
-3. On \`success:true\` move the ticket to "in progress". On \`success:false\` (including the per-worker \`Worker "<name>" is already running a session...\` error) leave the ticket alone and move on — the next pickup cycle will retry. **Never retry a busy-worker error against the same agentId** — that means your roster was stale; the next ticket should re-fetch and pick a different free worker.
+   - **Yes** → figure out which project the ticket belongs to (e.g. \`~/Projects/<project>\`) and dispatch with a Brief. The hub picks a free worker for that workspace — you do NOT pick one yourself:
+     \`curl -X POST http://localhost:${SERVER_PORT}/api/launch-agent -d '{"workspacePath":"~/Projects/<project>","ticketId":"<id>","ticketName":"<name>","ticketUrl":"<url>","additionalPrompt":"<Brief>","useTeam":<bool>}'\`
+3. Only \`success:true\` counts. On \`success:true\` move the ticket to "in progress" — the response includes \`worker:"<name>"\` if you want to reference who picked it up. On \`success:false\` (e.g. \`No free dev worker available for workspace ...\`) leave the ticket alone and move on — the next pickup cycle retries when capacity frees up.
 
 ### If status is **"ai review"**
 1. \`clickup_get_task\` + \`clickup_get_task_comments\` once. Find the original implementer via the "Assigned to worker: <name>" comment. Count prior AI Review rounds.
-2. Re-fetch \`GET http://localhost:${SERVER_PORT}/api/roster\` and check the implementer's \`isOnline\`. If \`isOnline:false\` use them (best context). If they're busy or retired, pick any other \`isOnline:false\` agent in the same workspace.
-3. Dispatch with \`aiReviewMode:true\` and a short Brief summarising Copilot's feedback:
-   \`curl -X POST http://localhost:${SERVER_PORT}/api/launch-agent -d '{"agentId":"...","ticketId":"<id>","ticketName":"<name>","ticketUrl":"<url>","aiReviewMode":true,"additionalPrompt":"<Brief>"}'\`
-4. Comment naming who you reassigned. Do NOT change the ticket status — the reassigned agent will. On \`success:false\` (including the busy-worker error), skip the ticket — the next pickup cycle retries.
-5. 3+ prior rounds → tell them in the Brief to be conservative and forward to "qa test" unless there's a real bug.
+2. Dispatch with \`aiReviewMode:true\` and a short Brief summarising Copilot's feedback. The hub picks any free worker in the project's workspace — typically the original implementer if they're free, otherwise another teammate in that workspace:
+   \`curl -X POST http://localhost:${SERVER_PORT}/api/launch-agent -d '{"workspacePath":"~/Projects/<project>","ticketId":"<id>","ticketName":"<name>","ticketUrl":"<url>","aiReviewMode":true,"additionalPrompt":"<Brief>"}'\`
+3. Only \`success:true\` counts. The response includes \`worker:"<name>"\` — comment "Reassigned to <name> for AI Review" so the audit trail is clear. Do NOT change the ticket status — the reassigned agent will. On \`success:false\`, skip the ticket — the next pickup cycle retries.
+4. 3+ prior rounds → tell them in the Brief to be conservative and forward to "qa test" unless there's a real bug.
 
 ## When you're done
 After dispatching (or skipping) every ticket above, you are DONE. Do not wait for workers to finish — they run in parallel on their own timelines. Exit cleanly.

@@ -7,7 +7,7 @@ import { getCachedSprite, getOutlineSprite } from '../sprites/spriteCache.js'
 import { getCharacterSprites, BUBBLE_PERMISSION_SPRITE, BUBBLE_WAITING_SPRITE } from '../sprites/spriteData.js'
 import { getCharacterSprite } from './characters.js'
 import { renderMatrixEffect } from './matrixEffect.js'
-import { getColorizedFloorSprite, getColorizedHerringboneSprite, hasFloorSprites, usesGeneratedFloor, WALL_COLOR } from '../floorTiles.js'
+import { getAllFloorSprites, getColorizedFloorSprite, getColorizedHerringboneSprite, hasFloorSprites, usesGeneratedFloor, WALL_COLOR } from '../floorTiles.js'
 import { hasWallSprites, getWallInstances, wallColorToHex } from '../wallTiles.js'
 import {
   CHARACTER_SITTING_OFFSET_PX,
@@ -33,11 +33,148 @@ import {
 
 // ── Render functions ────────────────────────────────────────────
 
+/** Sentinel empty array reused when wall sprites aren't loaded — avoids
+ *  allocating `[]` on every frame in the hot path. */
+const EMPTY_INSTANCES: FurnitureInstance[] = []
+
 /** A tile is "non-floor" for border detection if it's wall, window, void, or out-of-grid. */
 function isNonFloor(tileMap: TileTypeVal[][], r: number, c: number, rows: number, cols: number): boolean {
   if (r < 0 || c < 0 || r >= rows || c >= cols) return true
   const t = tileMap[r][c]
   return t === TileType.WALL || t === TileType.WINDOW || t === TileType.VOID
+}
+
+/**
+ * Bake of the static floor + wall-base layer.
+ *
+ * The tile grid is otherwise the heaviest single category per frame: every
+ * visible tile pays a cache-key string allocation, two map lookups, and a
+ * `drawImage`. We pre-render the entire grid into one offscreen canvas and
+ * swap the per-frame loop for a single `drawImage`. Reference equality on
+ * `tileMap` / `tileColors` (both are replaced on layout change in
+ * `OfficeState.rebuildFromLayout`) is enough to invalidate; `floorSpritesRef`
+ * also flips when floors.png finishes loading.
+ *
+ * Falls back to per-tile rendering when the baked canvas would exceed the
+ * browser's max canvas size.
+ */
+const MAX_BAKED_DIM_PX = 8192
+let cachedFloorBake: {
+  canvas: HTMLCanvasElement
+  tileMapRef: TileTypeVal[][]
+  tileColorsRef: Array<FloorColor | null> | undefined
+  zoom: number
+  cols: number
+  rows: number
+  spritesRef: ReturnType<typeof getAllFloorSprites>
+} | null = null
+
+function drawTileToContext(
+  ctx: CanvasRenderingContext2D,
+  tileMap: TileTypeVal[][],
+  r: number,
+  c: number,
+  layoutCols: number,
+  tmRows: number,
+  tmCols: number,
+  tileColors: Array<FloorColor | null> | undefined,
+  zoom: number,
+  destX: number,
+  destY: number,
+  useSpriteFloors: boolean,
+  useHerringbone: boolean,
+  s: number,
+): void {
+  const tile = tileMap[r][c]
+  if (tile === TileType.VOID || tile === TileType.WINDOW) return
+
+  if (tile === TileType.WALL || !useSpriteFloors) {
+    if (tile === TileType.WALL) {
+      const colorIdx = r * layoutCols + c
+      const wallColor = tileColors?.[colorIdx]
+      ctx.fillStyle = wallColor ? wallColorToHex(wallColor) : WALL_COLOR
+    } else {
+      ctx.fillStyle = FALLBACK_FLOOR_COLOR
+    }
+    ctx.fillRect(destX, destY, s, s)
+    return
+  }
+
+  const colorIdx = r * layoutCols + c
+  const color = tileColors?.[colorIdx] ?? { h: 0, s: 0, b: 0, c: 0 }
+
+  let sprite
+  if (useHerringbone) {
+    let mask = 0
+    if (isNonFloor(tileMap, r - 1, c, tmRows, tmCols)) mask |= 1
+    if (isNonFloor(tileMap, r, c + 1, tmRows, tmCols)) mask |= 2
+    if (isNonFloor(tileMap, r + 1, c, tmRows, tmCols)) mask |= 4
+    if (isNonFloor(tileMap, r, c - 1, tmRows, tmCols)) mask |= 8
+    sprite = getColorizedHerringboneSprite(r, c, mask, color)
+  } else {
+    sprite = getColorizedFloorSprite(tile, color)
+  }
+  const cached = getCachedSprite(sprite, zoom)
+  ctx.drawImage(cached, destX, destY)
+}
+
+function getBakedFloor(
+  tileMap: TileTypeVal[][],
+  tileColors: Array<FloorColor | null> | undefined,
+  layoutCols: number,
+  layoutRows: number,
+  zoom: number,
+): HTMLCanvasElement | null {
+  const w = layoutCols * TILE_SIZE * zoom
+  const h = layoutRows * TILE_SIZE * zoom
+  if (w <= 0 || h <= 0) return null
+  if (w > MAX_BAKED_DIM_PX || h > MAX_BAKED_DIM_PX) return null
+
+  const sprites = getAllFloorSprites()
+  if (
+    cachedFloorBake !== null &&
+    cachedFloorBake.tileMapRef === tileMap &&
+    cachedFloorBake.tileColorsRef === tileColors &&
+    cachedFloorBake.zoom === zoom &&
+    cachedFloorBake.cols === layoutCols &&
+    cachedFloorBake.rows === layoutRows &&
+    cachedFloorBake.spritesRef === sprites
+  ) {
+    return cachedFloorBake.canvas
+  }
+
+  const canvas = document.createElement('canvas')
+  canvas.width = w
+  canvas.height = h
+  const bakeCtx = canvas.getContext('2d')
+  if (!bakeCtx) return null
+  bakeCtx.imageSmoothingEnabled = false
+
+  const tmRows = tileMap.length
+  const tmCols = tmRows > 0 ? tileMap[0].length : 0
+  const useSpriteFloors = hasFloorSprites()
+  const useHerringbone = usesGeneratedFloor()
+  const s = TILE_SIZE * zoom
+
+  for (let r = 0; r < tmRows; r++) {
+    for (let c = 0; c < tmCols; c++) {
+      drawTileToContext(
+        bakeCtx, tileMap, r, c, layoutCols, tmRows, tmCols, tileColors, zoom,
+        c * s, r * s, useSpriteFloors, useHerringbone, s,
+      )
+    }
+  }
+
+  cachedFloorBake = {
+    canvas,
+    tileMapRef: tileMap,
+    tileColorsRef: tileColors,
+    zoom,
+    cols: layoutCols,
+    rows: layoutRows,
+    spritesRef: sprites,
+  }
+  return canvas
 }
 
 export function renderTileGrid(
@@ -51,16 +188,23 @@ export function renderTileGrid(
   canvasWidth?: number,
   canvasHeight?: number,
 ): void {
-  const s = TILE_SIZE * zoom
-  const useSpriteFloors = hasFloorSprites()
-  const useHerringbone = usesGeneratedFloor()
   const tmRows = tileMap.length
   const tmCols = tmRows > 0 ? tileMap[0].length : 0
   const layoutCols = cols ?? tmCols
+  const layoutRows = tmRows
 
-  // Viewport culling: only iterate tiles whose bounding box overlaps the canvas.
-  // Without this, a 64×64 grid (4096 tiles) is touched every frame even when
-  // most tiles sit far off-screen — a large CPU cost on every rAF tick.
+  // Fast path: blit the cached bake of the whole tile grid.
+  const baked = getBakedFloor(tileMap, tileColors, layoutCols, layoutRows, zoom)
+  if (baked) {
+    ctx.drawImage(baked, offsetX, offsetY)
+    return
+  }
+
+  // Fallback (very large grids): per-tile rendering with viewport culling.
+  const s = TILE_SIZE * zoom
+  const useSpriteFloors = hasFloorSprites()
+  const useHerringbone = usesGeneratedFloor()
+
   let firstRow = 0
   let lastRow = tmRows
   let firstCol = 0
@@ -72,60 +216,69 @@ export function renderTileGrid(
     lastRow = Math.min(tmRows, Math.ceil((canvasHeight - offsetY) / s))
   }
 
-  // Floor tiles + wall base color
   for (let r = firstRow; r < lastRow; r++) {
     for (let c = firstCol; c < lastCol; c++) {
-      const tile = tileMap[r][c]
-
-      // Skip VOID and WINDOW tiles entirely (transparent at the tile pass —
-      // WINDOW renders its own sprite later via getWallInstances, on top of
-      // the outdoor layer which has already been drawn).
-      if (tile === TileType.VOID || tile === TileType.WINDOW) continue
-
-      if (tile === TileType.WALL || !useSpriteFloors) {
-        // Wall tiles or fallback: solid color
-        if (tile === TileType.WALL) {
-          const colorIdx = r * layoutCols + c
-          const wallColor = tileColors?.[colorIdx]
-          ctx.fillStyle = wallColor ? wallColorToHex(wallColor) : WALL_COLOR
-        } else {
-          ctx.fillStyle = FALLBACK_FLOOR_COLOR
-        }
-        ctx.fillRect(offsetX + c * s, offsetY + r * s, s, s)
-        continue
-      }
-
-      // Floor tile: get colorized sprite
-      const colorIdx = r * layoutCols + c
-      const color = tileColors?.[colorIdx] ?? { h: 0, s: 0, b: 0, c: 0 }
-
-      let sprite
-      if (useHerringbone) {
-        // Procedural herringbone: compute adjacency bitmask so tiles adjacent
-        // to walls/void get a straight-plank border along that edge.
-        let mask = 0
-        if (isNonFloor(tileMap, r - 1, c, tmRows, tmCols)) mask |= 1  // N
-        if (isNonFloor(tileMap, r, c + 1, tmRows, tmCols)) mask |= 2  // E
-        if (isNonFloor(tileMap, r + 1, c, tmRows, tmCols)) mask |= 4  // S
-        if (isNonFloor(tileMap, r, c - 1, tmRows, tmCols)) mask |= 8  // W
-        sprite = getColorizedHerringboneSprite(r, c, mask, color)
-      } else {
-        sprite = getColorizedFloorSprite(tile, color)
-      }
-      const cached = getCachedSprite(sprite, zoom)
-      ctx.drawImage(cached, offsetX + c * s, offsetY + r * s)
+      drawTileToContext(
+        ctx, tileMap, r, c, layoutCols, tmRows, tmCols, tileColors, zoom,
+        offsetX + c * s, offsetY + r * s, useSpriteFloors, useHerringbone, s,
+      )
     }
   }
-
 }
 
-interface ZDrawable {
+/**
+ * Z-sorted draw entry. Stored in a module-level pool so renderScene allocates
+ * zero closures and zero entry objects per frame — only the references in
+ * `activeDrawables` grow with the working set, which is amortized O(1).
+ */
+type SpriteData = ReturnType<typeof getCharacterSprite>
+
+const DRAW_IMAGE = 0
+const DRAW_IMAGE_ALPHA = 1
+const DRAW_MATRIX = 2
+
+interface Drawable {
   zY: number
-  draw: (ctx: CanvasRenderingContext2D) => void
+  kind: 0 | 1 | 2
+  cached: HTMLCanvasElement | null
+  drawX: number
+  drawY: number
+  alpha: number
+  ch: Character | null
+  spriteData: SpriteData | null
+}
+
+const drawablePool: Drawable[] = []
+const activeDrawables: Drawable[] = []
+let poolCursor = 0
+
+function acquireDrawable(): Drawable {
+  let item = drawablePool[poolCursor]
+  if (!item) {
+    item = {
+      zY: 0,
+      kind: DRAW_IMAGE,
+      cached: null,
+      drawX: 0,
+      drawY: 0,
+      alpha: 1,
+      ch: null,
+      spriteData: null,
+    }
+    drawablePool[poolCursor] = item
+  }
+  poolCursor++
+  activeDrawables.push(item)
+  return item
+}
+
+function compareDrawables(a: Drawable, b: Drawable): number {
+  return a.zY - b.zY
 }
 
 export function renderScene(
   ctx: CanvasRenderingContext2D,
+  walls: FurnitureInstance[],
   furniture: FurnitureInstance[],
   characters: Character[],
   offsetX: number,
@@ -135,108 +288,121 @@ export function renderScene(
   hoveredAgentId: number | null,
   cats?: Cat[],
 ): void {
-  const drawables: ZDrawable[] = []
+  // Reset frame state — references are released, but pool entries are reused
+  // so the next acquireDrawable() finds an existing struct to overwrite.
+  activeDrawables.length = 0
+  poolCursor = 0
 
-  // Furniture
-  for (const f of furniture) {
+  // Walls + furniture share the same draw shape. Iterate them in two passes
+  // instead of concatenating into a fresh array each frame.
+  for (let i = 0; i < walls.length; i++) {
+    const f = walls[i]
     const cached = getCachedSprite(f.sprite, zoom)
-    const fx = offsetX + f.x * zoom
-    const fy = offsetY + f.y * zoom
-    drawables.push({
-      zY: f.zY,
-      draw: (c) => {
-        c.drawImage(cached, fx, fy)
-      },
-    })
+    const d = acquireDrawable()
+    d.zY = f.zY
+    d.kind = DRAW_IMAGE
+    d.cached = cached
+    d.drawX = offsetX + f.x * zoom
+    d.drawY = offsetY + f.y * zoom
+    d.alpha = 1
+  }
+  for (let i = 0; i < furniture.length; i++) {
+    const f = furniture[i]
+    const cached = getCachedSprite(f.sprite, zoom)
+    const d = acquireDrawable()
+    d.zY = f.zY
+    d.kind = DRAW_IMAGE
+    d.cached = cached
+    d.drawX = offsetX + f.x * zoom
+    d.drawY = offsetY + f.y * zoom
+    d.alpha = 1
   }
 
   // Characters
-  for (const ch of characters) {
+  for (let i = 0; i < characters.length; i++) {
+    const ch = characters[i]
     const sprites = getCharacterSprites(ch.palette, ch.hueShift)
     const spriteData = getCharacterSprite(ch, sprites)
     const cached = getCachedSprite(spriteData, zoom)
-    // Sitting offset: shift character down when seated (not at activity spots)
     const sittingOffset = ch.state === CharacterState.TYPE && !ch.atActivitySpot ? CHARACTER_SITTING_OFFSET_PX : 0
-    // Anchor at bottom-center of character — round to integer device pixels
     const drawX = Math.round(offsetX + ch.x * zoom - cached.width / 2)
     const drawY = Math.round(offsetY + (ch.y + sittingOffset) * zoom - cached.height)
-
-    // Sort characters by bottom of their tile (not center) so they render
-    // in front of same-row furniture (e.g. chairs) but behind furniture
-    // at lower rows (e.g. desks, bookshelves that occlude from below).
     const charZY = ch.y + TILE_SIZE / 2 + CHARACTER_Z_SORT_OFFSET
 
-    // Matrix spawn/despawn effect — skip outline, use per-pixel rendering
     if (ch.matrixEffect) {
-      const mDrawX = drawX
-      const mDrawY = drawY
-      const mSpriteData = spriteData
-      const mCh = ch
-      drawables.push({
-        zY: charZY,
-        draw: (c) => {
-          renderMatrixEffect(c, mCh, mSpriteData, mDrawX, mDrawY, zoom)
-        },
-      })
+      const d = acquireDrawable()
+      d.zY = charZY
+      d.kind = DRAW_MATRIX
+      d.cached = null
+      d.drawX = drawX
+      d.drawY = drawY
+      d.alpha = 1
+      d.ch = ch
+      d.spriteData = spriteData
       continue
     }
 
-    // White outline: full opacity for selected, 50% for hover
     const isSelected = selectedAgentId !== null && ch.id === selectedAgentId
     const isHovered = hoveredAgentId !== null && ch.id === hoveredAgentId
     if (isSelected || isHovered) {
-      const outlineAlpha = isSelected ? SELECTED_OUTLINE_ALPHA : HOVERED_OUTLINE_ALPHA
       const outlineData = getOutlineSprite(spriteData)
       const outlineCached = getCachedSprite(outlineData, zoom)
-      const olDrawX = drawX - zoom  // 1 sprite-pixel offset, scaled
-      const olDrawY = drawY - zoom  // outline follows sitting offset via drawY
-      drawables.push({
-        zY: charZY - OUTLINE_Z_SORT_OFFSET, // sort just before character
-        draw: (c) => {
-          c.save()
-          c.globalAlpha = outlineAlpha
-          c.drawImage(outlineCached, olDrawX, olDrawY)
-          c.restore()
-        },
-      })
+      const d = acquireDrawable()
+      d.zY = charZY - OUTLINE_Z_SORT_OFFSET
+      d.kind = DRAW_IMAGE_ALPHA
+      d.cached = outlineCached
+      d.drawX = drawX - zoom
+      d.drawY = drawY - zoom
+      d.alpha = isSelected ? SELECTED_OUTLINE_ALPHA : HOVERED_OUTLINE_ALPHA
     }
 
-    drawables.push({
-      zY: charZY,
-      draw: (c) => {
-        c.drawImage(cached, drawX, drawY)
-      },
-    })
+    const d = acquireDrawable()
+    d.zY = charZY
+    d.kind = DRAW_IMAGE
+    d.cached = cached
+    d.drawX = drawX
+    d.drawY = drawY
+    d.alpha = 1
   }
 
   // Cats
   if (cats) {
-    for (const cat of cats) {
-      const dirIdx = cat.dir as number // DOWN=0, LEFT=1, RIGHT=2, UP=3
-      const frameIdx = cat.state === 'walk' ? cat.frame % 3 : 1 // idle uses middle frame
+    for (let i = 0; i < cats.length; i++) {
+      const cat = cats[i]
+      const dirIdx = cat.dir as number
+      const frameIdx = cat.state === 'walk' ? cat.frame % 3 : 1
       const spriteData = cat.sprites.walk[dirIdx]?.[frameIdx]
       if (!spriteData) continue
 
-      // Flip left sprites from right sprites if needed (LEFT=1 uses same data)
       const cached = getCachedSprite(spriteData, zoom)
-      const drawX = Math.round(offsetX + cat.x * zoom - cached.width / 2)
-      const drawY = Math.round(offsetY + cat.y * zoom - cached.height)
-      const catZY = cat.y + TILE_SIZE / 2
-
-      drawables.push({
-        zY: catZY,
-        draw: (c) => {
-          c.drawImage(cached, drawX, drawY)
-        },
-      })
+      const d = acquireDrawable()
+      d.zY = cat.y + TILE_SIZE / 2
+      d.kind = DRAW_IMAGE
+      d.cached = cached
+      d.drawX = Math.round(offsetX + cat.x * zoom - cached.width / 2)
+      d.drawY = Math.round(offsetY + cat.y * zoom - cached.height)
+      d.alpha = 1
     }
   }
 
-  // Sort by Y (lower = in front = drawn later)
-  drawables.sort((a, b) => a.zY - b.zY)
+  activeDrawables.sort(compareDrawables)
 
-  for (const d of drawables) {
-    d.draw(ctx)
+  for (let i = 0; i < activeDrawables.length; i++) {
+    const d = activeDrawables[i]
+    if (d.kind === DRAW_IMAGE) {
+      if (d.cached) ctx.drawImage(d.cached, d.drawX, d.drawY)
+    } else if (d.kind === DRAW_IMAGE_ALPHA) {
+      if (d.cached) {
+        ctx.globalAlpha = d.alpha
+        ctx.drawImage(d.cached, d.drawX, d.drawY)
+        ctx.globalAlpha = 1
+      }
+    } else {
+      // DRAW_MATRIX
+      if (d.ch && d.spriteData) {
+        renderMatrixEffect(ctx, d.ch, d.spriteData, d.drawX, d.drawY, zoom)
+      }
+    }
   }
 }
 
@@ -436,18 +602,17 @@ export function renderFrame(
     renderSeatIndicators(ctx, selection.seats, selection.characters, selection.selectedAgentId, selection.hoveredTile, offsetX, offsetY, zoom)
   }
 
-  // Build wall instances for z-sorting with furniture and characters
+  // Build wall instances for z-sorting with furniture and characters.
+  // getWallInstances caches by tile-map / tile-colors / sprite-set identity,
+  // so this is effectively free unless the layout actually changed.
   const wallInstances = hasWallSprites()
     ? getWallInstances(tileMap, tileColors, layoutCols)
-    : []
-  const allFurniture = wallInstances.length > 0
-    ? [...wallInstances, ...furniture]
-    : furniture
+    : EMPTY_INSTANCES
 
   // Draw walls + furniture + characters (z-sorted)
   const selectedId = selection?.selectedAgentId ?? null
   const hoveredId = selection?.hoveredAgentId ?? null
-  renderScene(ctx, allFurniture, characters, offsetX, offsetY, zoom, selectedId, hoveredId, cats)
+  renderScene(ctx, wallInstances, furniture, characters, offsetX, offsetY, zoom, selectedId, hoveredId, cats)
 
   // Project labels above rooms (after scene so walls don't cover them)
   if (rooms) {

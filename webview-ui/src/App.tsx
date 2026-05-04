@@ -4,7 +4,7 @@ import { OfficeCanvas } from './office/components/OfficeCanvas.js'
 import { ToolOverlay } from './office/components/ToolOverlay.js'
 import { vscode } from './vscodeApi.js'
 import { useExtensionMessages } from './hooks/useExtensionMessages.js'
-import { PULSE_ANIMATION_DURATION_SEC, ZOOM_DEFAULT_DPR_FACTOR } from './constants.js'
+import { PULSE_ANIMATION_DURATION_SEC, ZOOM_DEFAULT_DPR_FACTOR, MAX_DEVICE_PIXEL_RATIO } from './constants.js'
 import { ZoomControls } from './components/ZoomControls.js'
 import { BottomToolbar } from './components/BottomToolbar.js'
 import { DebugView } from './components/DebugView.js'
@@ -23,7 +23,8 @@ function getOfficeState(): OfficeState {
 }
 
 function defaultZoom(): number {
-  return Math.round(ZOOM_DEFAULT_DPR_FACTOR * (typeof devicePixelRatio === 'number' ? devicePixelRatio : 1))
+  const dpr = typeof devicePixelRatio === 'number' ? devicePixelRatio : 1
+  return Math.round(ZOOM_DEFAULT_DPR_FACTOR * Math.min(dpr, MAX_DEVICE_PIXEL_RATIO))
 }
 
 function App() {

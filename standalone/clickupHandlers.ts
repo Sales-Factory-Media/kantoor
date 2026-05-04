@@ -23,6 +23,7 @@ import { SETTINGS_FILE } from './serverContext.js';
 import type { ServerContext } from './serverContext.js';
 import {
 	computeDesignFleetCapacity,
+	computeDevFleetCapacity,
 } from './capacity.js';
 import {
 	EXIT_REMINDER,
@@ -97,6 +98,62 @@ export async function handleClickupRefresh(ctx: ServerContext): Promise<void> {
 	}
 }
 
+// ── Capacity-gated batch pickup (shared by Darryl + Jan) ─────
+
+/**
+ * Spec for `runCapacityGatedPickup`. Encapsulates the per-orchestrator bits;
+ * the helper handles singleton check, capacity gate, slice, log, and dispatch.
+ *
+ * The same shape works for Darryl (1 status type, dev capacity) and Jan
+ * (3 status types, design-fleet capacity) because the orchestrator-specific
+ * differences live entirely in the spec callbacks.
+ */
+interface CapacityGatedPickupSpec<S extends string> {
+	/** Display name (also used to find the orchestrator's persistent agent). */
+	name: string;
+	/** Tickets sorted by priority — slicing happens inside the helper. */
+	candidates: Array<TicketInfo & { status: S }>;
+	/** Available worker slots right now. */
+	available: number;
+	/** Total slots (for diagnostic logs). */
+	total: number;
+	/** Active slots (for diagnostic logs). */
+	active: number;
+	/** Optional extra detail for the gated-log line (e.g. "(N in-progress + M pending)"). */
+	gatedDetail?: string;
+	/** Per-status counts for the dispatched-batch log. Keys are status strings. */
+	describeBatch: (batch: Array<TicketInfo & { status: S }>) => string;
+	/** Worker noun for log line (e.g. "dev workers", "machines"). */
+	workerNoun: string;
+	/** Actual dispatch. */
+	dispatch: (batch: Array<TicketInfo & { status: S }>, ctx: ServerContext) => void;
+}
+
+function runCapacityGatedPickup<S extends string>(
+	spec: CapacityGatedPickupSpec<S>,
+	ctx: ServerContext,
+): void {
+	if (spec.candidates.length === 0) return;
+
+	// Singleton: if the orchestrator is already running, skip — the next poll
+	// will retry. Mirrors the Darryl/Jan pattern: one orchestrator session at
+	// a time, batch-dispatching all tickets it's been handed.
+	const orchestrator = ctx.persistentAgents.find(p => p.name === spec.name);
+	if (orchestrator?.currentSessionId) return;
+
+	if (spec.available === 0) {
+		const detail = spec.gatedDetail ? ` ${spec.gatedDetail}` : '';
+		console.log(`[Standalone] ${spec.name} pickup gated: ${spec.active}/${spec.total} ${spec.workerNoun} active${detail}; ${spec.candidates.length} ticket(s) waiting`);
+		return;
+	}
+
+	const batch = spec.candidates.slice(0, spec.available);
+	const deferred = spec.candidates.length - batch.length;
+	const deferredNote = deferred > 0 ? `, ${deferred} deferred to next poll` : '';
+	console.log(`[Standalone] Auto-pickup: ${spec.name} batch of ${batch.length} ${spec.describeBatch(batch)} — ${spec.active}/${spec.total} ${spec.workerNoun} already active${deferredNote}`);
+	spec.dispatch(batch, ctx);
+}
+
 export function autoDarrylPickup(ctx: ServerContext): void {
 	// Workers don't auto-pickup — hub is the single orchestrator entry point.
 	if (ctx.isWorkerMode) return;
@@ -107,24 +164,29 @@ export function autoDarrylPickup(ctx: ServerContext): void {
 	const inFlight = claimedTicketIds(ctx.dispatchRegistry);
 	const todoTickets = selectDarrylPickups(ctx.clickupTickets, inFlight, DARRYL_CLICKUP_USERNAME, AI_REVIEW_PICKUP_ENABLED);
 
-	if (todoTickets.length === 0) return;
-
-	// Single-orchestrator pattern (same shape as autoJanPickup): Darryl is the
-	// sole dispatch decision-maker for dev tickets. If he's already running,
-	// skip — his current session will dispatch its batch, the next poll picks
-	// up whatever's still "to do".
-	const darryl = ctx.persistentAgents.find(p => p.name === 'Darryl');
-	if (darryl?.currentSessionId) return;
-
-	const batch: Array<TicketInfo & { status: 'to do' | 'ai review' }> = todoTickets.map(t => ({
+	const candidates: Array<TicketInfo & { status: 'to do' | 'ai review' }> = todoTickets.map(t => ({
 		ticketId: t.id,
 		ticketName: t.name,
 		ticketUrl: t.url,
 		status: t.status,
 	}));
 
-	console.log(`[Standalone] Auto-pickup: Darryl batch of ${batch.length} (${batch.filter(b => b.status === 'to do').length} to-do, ${batch.filter(b => b.status === 'ai review').length} ai-review)`);
-	handleDarrylBatchDispatch(batch, ctx);
+	const cap = computeDevFleetCapacity(ctx);
+
+	runCapacityGatedPickup({
+		name: 'Darryl',
+		candidates,
+		available: cap.available,
+		total: cap.total,
+		active: cap.active,
+		workerNoun: 'dev workers',
+		describeBatch: batch => {
+			const todo = batch.filter(b => b.status === 'to do').length;
+			const review = batch.filter(b => b.status === 'ai review').length;
+			return `(${todo} to-do, ${review} ai-review)`;
+		},
+		dispatch: handleDarrylBatchDispatch,
+	}, ctx);
 }
 
 export function autoJanPickup(ctx: ServerContext): void {
@@ -141,59 +203,59 @@ export function autoJanPickup(ctx: ServerContext): void {
 	// who picks up the work.
 	const inFlight = claimedTicketIds(ctx.dispatchRegistry);
 	const buckets = selectJanPickups(ctx.clickupTickets, inFlight, JAN_CLICKUP_USERNAME, AI_REVIEW_PICKUP_ENABLED);
-	const refineTickets: TicketInfo[] = buckets.refine.map(t => ({ ticketId: t.id, ticketName: t.name, ticketUrl: t.url }));
-	const todoTickets: TicketInfo[] = buckets.todo.map(t => ({ ticketId: t.id, ticketName: t.name, ticketUrl: t.url }));
-	const aiReviewTickets: TicketInfo[] = buckets.aiReview.map(t => ({ ticketId: t.id, ticketName: t.name, ticketUrl: t.url }));
-	const revisionTickets: TicketInfo[] = buckets.revision.map(t => ({ ticketId: t.id, ticketName: t.name, ticketUrl: t.url }));
 
 	if (
-		refineTickets.length === 0
-		&& todoTickets.length === 0
-		&& aiReviewTickets.length === 0
-		&& revisionTickets.length === 0
+		buckets.refine.length === 0
+		&& buckets.todo.length === 0
+		&& buckets.aiReview.length === 0
+		&& buckets.revision.length === 0
 	) return;
 
-	const janTicketIds = buckets.janTicketIds;
-
-	// Jan is a single agent — one session at a time.
+	// Jan singleton check (helper does this too, but refine bypasses the
+	// helper so we duplicate it for refine's path).
 	const jan = ctx.persistentAgents.find(p => p.name === 'Jan');
 	if (jan?.currentSessionId) return;
 
-	// Refine tickets are still single-ticket: one refine ticket spawns 5 UX
-	// designers, already saturating the UX team.
-	if (refineTickets.length > 0) {
-		const ticket = refineTickets[0];
-		console.log(`[Standalone] Auto-pickup: Jan taking refine ticket ${ticket.ticketId}`);
+	// Refine tickets are single-ticket: one refine ticket spawns 5 UX designers,
+	// already saturating the UX team. Bypass the capacity gate — Jan still
+	// goes through the orchestrator-spawn singleton lock above.
+	if (buckets.refine.length > 0) {
+		const ticket = buckets.refine[0];
+		console.log(`[Standalone] Auto-pickup: Jan taking refine ticket ${ticket.id}`);
 		handleJanDesignBriefing(
-			{ ...ticket, ticketStatus: 'to refine' },
+			{ ticketId: ticket.id, ticketName: ticket.name, ticketUrl: ticket.url, ticketStatus: 'to refine' },
 			ctx,
 		);
 		return;
 	}
 
-	// Unified machine-slot capacity: every machine can run one visual task.
-	const cap = computeDesignFleetCapacity(ctx, janTicketIds);
+	const cap = computeDesignFleetCapacity(ctx, buckets.janTicketIds);
 
 	// Combined batch: fill available slots with whatever's waiting.
 	// ai-review first (reviews are quick), then revisions (continuing work),
 	// then new to-do tickets.
-	const combined: Array<TicketInfo & { status: 'to do' | 'ai review' | 'revision needed' }> = [
-		...aiReviewTickets.map(t => ({ ...t, status: 'ai review' as const })),
-		...revisionTickets.map(t => ({ ...t, status: 'revision needed' as const })),
-		...todoTickets.map(t => ({ ...t, status: 'to do' as const })),
+	const candidates: Array<TicketInfo & { status: 'to do' | 'ai review' | 'revision needed' }> = [
+		...buckets.aiReview.map(t => ({ ticketId: t.id, ticketName: t.name, ticketUrl: t.url, status: 'ai review' as const })),
+		...buckets.revision.map(t => ({ ticketId: t.id, ticketName: t.name, ticketUrl: t.url, status: 'revision needed' as const })),
+		...buckets.todo.map(t => ({ ticketId: t.id, ticketName: t.name, ticketUrl: t.url, status: 'to do' as const })),
 	];
-	const batch = combined.slice(0, cap.available);
 
-	if (batch.length === 0) {
-		console.log(`[Standalone] Jan pickup gated: ${cap.active}/${cap.total} machines active (${cap.inProgressCount} in-progress + ${cap.pendingDispatches} pending-dispatch); ${todoTickets.length} todo + ${aiReviewTickets.length} ai-review + ${revisionTickets.length} revision waiting`);
-		return;
-	}
-
-	const todoInBatch = batch.filter(b => b.status === 'to do').length;
-	const reviewInBatch = batch.filter(b => b.status === 'ai review').length;
-	const revisionInBatch = batch.filter(b => b.status === 'revision needed').length;
-	console.log(`[Standalone] Auto-pickup: Jan batch of ${batch.length} (${todoInBatch} to-do, ${reviewInBatch} ai-review, ${revisionInBatch} revision) — ${cap.active}/${cap.total} machines already active`);
-	handleJanBatchDispatch(batch, ctx);
+	runCapacityGatedPickup({
+		name: 'Jan',
+		candidates,
+		available: cap.available,
+		total: cap.total,
+		active: cap.active,
+		gatedDetail: `(${cap.inProgressCount} in-progress + ${cap.pendingDispatches} pending-dispatch)`,
+		workerNoun: 'machines',
+		describeBatch: batch => {
+			const todo = batch.filter(b => b.status === 'to do').length;
+			const review = batch.filter(b => b.status === 'ai review').length;
+			const revision = batch.filter(b => b.status === 'revision needed').length;
+			return `(${todo} to-do, ${review} ai-review, ${revision} revision)`;
+		},
+		dispatch: handleJanBatchDispatch,
+	}, ctx);
 }
 
 // ── Configure ────────────────────────────────────────────────

@@ -187,21 +187,20 @@ export function buildSystemPrompt(agent: PersistentAgent, projectDescription?: s
 export function buildDarrylSystemPrompt(agent: PersistentAgent, roster: RosterEntry[], serverPort: number): string {
 	const memoryPath = getAgentMemoryPath(agent.id);
 	const rules: string[] = [
-		'1. NEVER write code or edit files for a ticket. Your job is to decide WHO works on it.',
-		'2. Only dispatch OFFLINE agents whose workspace matches the ticket\'s project.',
-		'3. **One ticket per worker, no exceptions.** A worker can only run a single task at a time. If you dispatch two tickets to the same worker, the second silently overwrites the first and work is lost. After every successful dispatch, that worker is BUSY for the rest of your session — do NOT pick them again. **Re-fetch `GET /api/roster` before EACH dispatch in a batch** so you see the freshly-busy worker; never reuse a roster snapshot across multiple dispatches. The hub also enforces this server-side and will return `success:false` with `Worker "<name>" is already running a session...` — if you see that error, pick a different free worker (or skip the ticket and let the next pickup retry).',
-		'4. When you dispatch, ALWAYS include a **Brief** in `additionalPrompt` (2–6 bullets: goal, key constraints, pointers to the exact artifacts needed). This stops the worker from re-reading every comment.',
-		'5. If the ticket is unclear, comment with questions, unassign yourself, assign the escalation user, move back to "to do". Do NOT dispatch a worker to a half-baked ticket.',
-		'6. **Figma-based tickets:** if the ticket (description or comments) links to a Figma design, your Brief MUST include a `Design reference` line with the Figma URL AND the `Component library mandate` line: "Use the code component library — every library-equivalent UI element (Button, Card, Input, Nav, etc.) must be rendered via the project\'s existing code component; never inline-rebuild it. If the code library is missing an equivalent, flag it on the ticket instead of rolling your own." This is how we keep code and the design system in sync so that updating a DS component propagates everywhere.',
+		'1. NEVER write code or edit files for a ticket. Your job is to decide WHICH PROJECT a ticket belongs to and to dispatch a worker for that project. The hub picks the actual worker — you do not.',
+		'2. **ACK-driven dispatch.** A launch succeeded only when HTTP returns `success:true`. The response includes `worker:"<name>"` so you know who picked it up. On `success:false` (e.g. "No free dev worker available for workspace ..."), do NOT change the ticket — skip and let the next pickup cycle retry when capacity frees up.',
+		'3. When you dispatch, ALWAYS include a **Brief** in `additionalPrompt` (2–6 bullets: goal, key constraints, pointers to the exact artifacts needed). This stops the worker from re-reading every comment.',
+		'4. If the ticket is unclear, comment with questions, unassign yourself, assign the escalation user, move back to "to do". Do NOT dispatch a worker to a half-baked ticket.',
+		'5. **Figma-based tickets:** if the ticket (description or comments) links to a Figma design, your Brief MUST include a `Design reference` line with the Figma URL AND the `Component library mandate` line: "Use the code component library — every library-equivalent UI element (Button, Card, Input, Nav, etc.) must be rendered via the project\'s existing code component; never inline-rebuild it. If the code library is missing an equivalent, flag it on the ticket instead of rolling your own." This is how we keep code and the design system in sync so that updating a DS component propagates everywhere.',
 	];
 	if (AI_REVIEW_PICKUP_ENABLED) {
-		rules.push('7. AI Review: 3-round cap. After 3 cycles, tell the worker (in `additionalPrompt`) to be conservative and forward to `qa test` unless there\'s a real bug.');
+		rules.push('6. AI Review: 3-round cap. After 3 cycles, tell the worker (in `additionalPrompt`) to be conservative and forward to `qa test` unless there\'s a real bug.');
 	}
 	const dispatchApiExtras = AI_REVIEW_PICKUP_ENABLED
 		? 'Add `"useTeam":true` for complex multi-part work. Add `"aiReviewMode":true` for tickets in the `ai review` state.'
 		: 'Add `"useTeam":true` for complex multi-part work.';
 	const lifecycleLine = AI_REVIEW_PICKUP_ENABLED
-		? '`to do` → you dispatch → worker does the work, opens a PR, moves the ticket to `qa test` → human reviews from there. **Workers NEVER move tickets to `ai review` themselves — that transition is human-only.** If a human manually flips a ticket to `ai review` (to request a Copilot pass), you\'ll see it on the next poll and must reassign with `aiReviewMode:true` (prefer the original implementer — find them in the "Assigned to worker: ..." comment). The reassigned worker processes Copilot\'s feedback and lands back on `qa test`, never on `ai review`.'
+		? '`to do` → you dispatch → worker does the work, opens a PR, moves the ticket to `qa test` → human reviews from there. **Workers NEVER move tickets to `ai review` themselves — that transition is human-only.** If a human manually flips a ticket to `ai review` (to request a Copilot pass), you\'ll see it on the next poll and must reassign with `aiReviewMode:true` (mention the original implementer in the Brief if you found them in the "Assigned to worker: ..." comment, but the hub picks the actual worker). The reassigned worker processes Copilot\'s feedback and lands back on `qa test`, never on `ai review`.'
 		: '`to do` → you dispatch → worker does the work, opens a PR, moves the ticket to `qa test` → human reviews from there. The AI Review (Copilot) loop is currently paused — workers go directly to `qa test` and NEVER to `ai review`.';
 
 	const lines = [
@@ -211,8 +210,10 @@ export function buildDarrylSystemPrompt(agent: PersistentAgent, roster: RosterEn
 		...rules,
 		'',
 		'## Dispatch API (port ' + serverPort + ')',
-		'`curl -X POST http://localhost:' + serverPort + '/api/launch-agent -d \'{"agentId":"...","ticketId":"...","ticketName":"...","ticketUrl":"...","additionalPrompt":"<Brief>"}\'`',
+		'`curl -X POST http://localhost:' + serverPort + '/api/launch-agent -d \'{"workspacePath":"~/Projects/<project>","ticketId":"...","ticketName":"...","ticketUrl":"...","additionalPrompt":"<Brief>"}\'`',
 		dispatchApiExtras,
+		'The hub atomically picks a free dev worker whose `workspacePath` matches — same pattern as Jan\'s designer dispatch. You do not select workers yourself, and you cannot dispatch two tickets to the same worker because the hub is the picker.',
+		'The auto-pickup gate already sliced the batch to free capacity, so each ticket in your batch should land on a different free worker. If you ever see `success:false` with "No free dev worker available", a worker freed up between batch creation and this dispatch — just skip and let the next poll retry.',
 		'',
 		'## Ticket lifecycle',
 		lifecycleLine,
@@ -229,14 +230,20 @@ export function buildDarrylSystemPrompt(agent: PersistentAgent, roster: RosterEn
 		'- Done when: <acceptance criteria>',
 		'```',
 		'',
-		'## Roster',
+		'## Projects (workspaces you can dispatch into)',
 	];
 
+	const seenWorkspaces = new Set<string>();
 	for (const entry of roster) {
-		const status = entry.isOnline ? 'BUSY' : 'free';
-		const role = entry.roleShort || '—';
-		const project = entry.projectName ? ` · ${entry.projectName}` : '';
-		lines.push(`- **${entry.name}** \`${entry.id}\` — ${role}${project} — ${status}`);
+		if (!entry.workspacePath || seenWorkspaces.has(entry.workspacePath)) continue;
+		// Skip orchestrators / design-team workspaces — Darryl only dispatches dev work.
+		if (entry.roleShort === 'Foreman' || entry.roleShort === 'Art Director') continue;
+		if (entry.roleShort === 'UX Designer' || entry.roleShort === 'Visual Designer') continue;
+		if (entry.roleShort === 'UX Quality Reviewer' || entry.roleShort === 'Visual Quality Reviewer') continue;
+		seenWorkspaces.add(entry.workspacePath);
+		const project = entry.projectName ? ` — ${entry.projectName}` : '';
+		const desc = entry.projectDescription ? `: ${entry.projectDescription}` : '';
+		lines.push(`- \`${entry.workspacePath}\`${project}${desc}`);
 	}
 
 	lines.push('', ...buildMemoryBlock(memoryPath, agent.sessionCount, agent.lastSessionEnd));

@@ -2,36 +2,28 @@
  * Worker dispatch endpoints — the launchers that actually start per-worker
  * sessions on a ticket.
  *
- * Five public entry points:
- *   - `launchAgentOnTicket` — dev worker (Darryl's downstream dispatch).
- *   - `handleClickupStartWork` — webview-initiated wrapper around
- *     `launchAgentOnTicket`.
- *   - `handleLaunchDesigner` — UX designer (Jan's `/api/launch-designer`).
- *   - `handleLaunchVisualDesigner` — Visual designer
- *     (Jan's `/api/launch-visual-designer`).
- *   - `handleVisualQaReview` — Visual QA (Jan's `/api/launch-visual-qa`).
+ * All four endpoints (dev worker, UX designer, Visual designer, Visual QA)
+ * funnel through `dispatchWorker`, which handles:
+ *   1. Atomic ticket claim in the dispatch registry.
+ *   2. Local launch via a role-specific `tryLaunchLocal` callback.
+ *   3. Optional fleet cascade to a remote worker if the local visual slot is
+ *      busy (design roles only — dev workers stay on the hub).
+ *   4. Claim release on full failure.
  *
- * Plus `handleDesignerSessionEnded` — the hub-side hook that fires when a
- * remote worker reports a design-role session ended (clears slot + releases
- * claim). It lives here because it's tightly coupled to the design dispatch
- * lifecycle, not to ClickUp logic.
+ * Each role provides a `WorkerDispatchSpec`. The role-specific bits are:
+ *   - `purpose`: registry claim purpose.
+ *   - `tryLaunchLocal`: find a free agent on the hub and launch them.
+ *   - `fleet?`: how to ship the dispatch to a remote worker via WebSocket RPC.
+ *
+ * If you add a fifth role, write a spec — do NOT copy-paste a handler.
  *
  * ## Claim lifecycle
- * Each handler claims its ticket in the dispatch registry at entry (purpose
- * = role name) and releases on failure rollback. On success the claim is
- * held until session-end (onSessionStale → releaseTicket or
+ * `dispatchWorker` claims at entry, releases on full failure, holds on success
+ * until the session ends (onSessionStale → releaseTicket or
  * handleDesignerSessionEnded → clearWorkerTicket → releaseTicket).
  *
  * Orchestrators (Darryl/Jan) do NOT hold claims — see orchestratorDispatch.ts.
  * Only WORKER sessions hold registry claims.
- *
- * ## Fleet cascade
- * The three design endpoints (`handleLaunchDesigner`,
- * `handleLaunchVisualDesigner`, `handleVisualQaReview`) first try the local
- * machine's visual slot via a `tryLaunch*Local` helper, and cascade to any
- * idle remote designer worker via `dispatchToFleet` when the local slot is
- * busy. `launchAgentOnTicket` does NOT cascade — dev workers are launched
- * locally on the hub.
  */
 
 import * as path from 'path';
@@ -44,13 +36,15 @@ import {
 	WORKER_ROLE_DESIGNER,
 } from './constants.js';
 import { ensureAgentMemory } from './agentStore.js';
+import type { PersistentAgent } from './agentStore.js';
 import {
+	buildSystemPrompt,
 	buildDesignerSystemPrompt,
 	buildVisualDesignerSystemPrompt,
 	buildVisualQaSystemPrompt,
 	buildVisualQaInitialTask,
 } from './systemPrompts.js';
-import { getJanDesignConfig, launchPersistentAgent } from './agentHandlers.js';
+import { getJanDesignConfig } from './agentHandlers.js';
 import type { ServerContext } from './serverContext.js';
 import {
 	getIdleWorkersWithRole,
@@ -61,10 +55,11 @@ import {
 	saveAgentMemoryFromWorker,
 } from './workerRegistry.js';
 import { loadKnownProjects } from '../src/projectStore.js';
-import { findBusyVisualSlot } from './capacity.js';
+import { findBusyVisualSlot, findFreeDevWorker } from './capacity.js';
 import {
 	EXIT_REMINDER,
 	launchPersistentAgentSession,
+	type LaunchOptions,
 } from './launchHelpers.js';
 import { claimTicket, releaseTicket } from './dispatchRegistry.js';
 import {
@@ -74,101 +69,56 @@ import {
 	buildVisualDesignerInitialTask,
 } from './initialTasks.js';
 
-// ── Dev worker (Darryl's downstream dispatch) ───────────────
+// ── Unified dispatch core ────────────────────────────────────
 
-export function launchAgentOnTicket(
-	agentId: string,
-	ticketId: string,
-	ticketName: string,
-	ticketUrl: string,
+export interface LocalLaunchOutcome {
+	success: boolean;
+	/** Set when the local visual slot is busy — caller may try fleet cascade. */
+	slotBusy?: boolean;
+	/** Picked worker name on success (used for logging / response payload). */
+	worker?: string;
+	error?: string;
+}
+
+export interface WorkerDispatchSpec {
+	/** Registry claim purpose, e.g. 'dev-worker', 'visual-designer'. */
+	purpose: string;
+	/** Run the local launch attempt. Set `slotBusy: true` to trigger cascade. */
+	tryLaunchLocal: (msg: Record<string, unknown>, ctx: ServerContext) => LocalLaunchOutcome;
+	/** Optional WebSocket-RPC fleet cascade. */
+	fleet?: {
+		rpcType: 'launchDesigner' | 'launchVisualDesigner' | 'launchVisualQa';
+	};
+}
+
+export async function dispatchWorker(
+	msg: Record<string, unknown>,
 	ctx: ServerContext,
-	options?: { useTeam?: boolean; additionalPrompt?: string; aiReviewMode?: boolean },
-): { success: boolean; error?: string } {
-	const { persistentAgents } = ctx;
-	const pa = persistentAgents.find(p => p.id === agentId);
-	if (!pa) return { success: false, error: `Agent not found: ${agentId}` };
+	spec: WorkerDispatchSpec,
+): Promise<{ success: boolean; error?: string; worker?: string }> {
+	const ticketId = typeof msg.ticketId === 'string' ? msg.ticketId : '';
 
-	// Per-worker concurrency lock: a single worker runs at most one ticket at a
-	// time. Darryl picks workers from `/api/roster` (offline=free), but his
-	// roster snapshot can be stale across a batch — without this guard he
-	// could dispatch two tickets to the same worker in quick succession, and
-	// the second `launchPersistentAgent` would silently overwrite the first
-	// session. Reject loudly so Darryl picks a different free worker (or
-	// waits for the current one to finish) on retry.
-	if (pa.currentSessionId) {
-		const onTicket = pa.currentTicketId ? ` on ticket ${pa.currentTicketId}` : '';
-		return { success: false, error: `Worker "${pa.name}" is already running a session${onTicket}. Pick a different free worker from /api/roster.` };
-	}
-
-	// Claim the ticket BEFORE we do any launch work. If another dispatch path
-	// already holds it, bail — Darryl's next pickup cycle (or the retry in
-	// his prompt) will re-evaluate.
 	const claimed = ticketId
-		? claimTicket(ctx.dispatchRegistry, ticketId, pa.name, options?.aiReviewMode ? 'dev-worker-ai-review' : 'dev-worker')
+		? claimTicket(ctx.dispatchRegistry, ticketId, ctx.workerIdentity?.name ?? 'Hub', spec.purpose)
 		: false;
 	if (ticketId && !claimed) {
 		const existing = ctx.dispatchRegistry.get(ticketId);
 		return { success: false, error: `Ticket ${ticketId} is already in flight (claimed by "${existing?.claimedBy ?? '?'}" for "${existing?.purpose ?? '?'}").` };
 	}
 
-	const brief = options?.additionalPrompt?.trim();
-	const briefBlock = brief
-		? `${brief}\n\n`
-		: `⚠ No Brief was passed by Darryl — you'll need to read the ticket yourself.\n\n`;
-
-	let callInTask = options?.aiReviewMode
-		? buildWorkerAiReviewInitialTask(ticketId, ticketName, ticketUrl, briefBlock)
-		: buildWorkerStandardInitialTask(ticketId, ticketName, ticketUrl, briefBlock);
-
-	const knownProjects = loadKnownProjects();
-	const project = knownProjects.find(p => p.workspacePath === pa.workspacePath);
-	if (project?.description) {
-		callInTask += `\n\n## Project\n${project.description}`;
+	const local = spec.tryLaunchLocal(msg, ctx);
+	if (local.success) {
+		return { success: true, worker: local.worker ?? ctx.workerIdentity?.name };
 	}
 
-	if (options?.useTeam) {
-		callInTask += '\n\nUse team mode: spawn sub-agents for parallel work.';
+	if (!ctx.isWorkerMode && local.slotBusy && spec.fleet) {
+		const fleet = await dispatchToFleet(msg, ctx, spec.fleet.rpcType, local.error);
+		if (!fleet.success && claimed) releaseTicket(ctx.dispatchRegistry, ticketId);
+		return fleet;
 	}
 
-	callInTask += EXIT_REMINDER;
-
-	ensureAgentMemory(agentId);
-	let mempalaceHost: string | undefined;
-	if (ctx.mempalaceServerUrl) {
-		try {
-			mempalaceHost = new URL(ctx.mempalaceServerUrl).hostname;
-		} catch {
-			mempalaceHost = undefined;
-		}
-	}
-	// Track the ticket on the persistent agent so onSessionStale can release
-	// the claim when the session ends.
-	pa.currentTicketId = ticketId;
-	pa.currentTicketName = ticketName;
-	pa.currentTicketUrl = ticketUrl;
-	if (!launchPersistentAgent(pa, persistentAgents, callInTask, mempalaceHost)) {
-		// Rollback the claim AND the ticket tracking — slot is free again.
-		if (claimed) releaseTicket(ctx.dispatchRegistry, ticketId);
-		pa.currentTicketId = undefined;
-		pa.currentTicketName = undefined;
-		pa.currentTicketUrl = undefined;
-		return { success: false, error: 'Failed to launch agent session' };
-	}
-	return { success: true };
-}
-
-export function handleClickupStartWork(msg: Record<string, unknown>, ctx: ServerContext): void {
-	const agentId = msg.agentId as string;
-	const ticketId = msg.ticketId as string;
-	const ticketName = msg.ticketName as string;
-	const ticketUrl = msg.ticketUrl as string;
-	const useTeam = msg.useTeam as boolean | undefined;
-	const additionalPrompt = msg.additionalPrompt as string | undefined;
-
-	const result = launchAgentOnTicket(agentId, ticketId, ticketName, ticketUrl, ctx, { useTeam, additionalPrompt });
-	if (!result.success) {
-		ctx.broadcastSink.postMessage({ type: 'clickupStartWorkError', error: result.error });
-	}
+	if (claimed) releaseTicket(ctx.dispatchRegistry, ticketId);
+	return { success: false, error: local.error };
 }
 
 // ── Fleet cascade ───────────────────────────────────────────
@@ -217,39 +167,168 @@ async function dispatchToFleet(
 		: `All ${failures.length} remote designer worker(s) busy or unreachable (${failures.join('; ')}).` };
 }
 
-// ── UX Designer ─────────────────────────────────────────────
+// ── Shared local-launch helper ───────────────────────────────
 
 /**
- * Launch a UX designer on a briefing ticket. Tries the local Figma slot first,
- * cascades to any idle remote designer worker when busy.
- *
- * Claim lifecycle: we claim the ticket in the dispatch registry at entry. If
- * every launch path fails (local unavailable AND no remote worker ACKs), we
- * release so Jan's next retry can succeed. If any path succeeds, the claim
- * is held until session-end (handleDesignerSessionEnded or onSessionStale).
+ * Common local-launch path: stamps ticket info, calls
+ * `launchPersistentAgentSession`, and adapts the result into the
+ * `LocalLaunchOutcome` shape `dispatchWorker` expects. Every role-specific
+ * `tryLaunchLocal` callback ends with this.
  */
-export async function handleLaunchDesigner(msg: Record<string, unknown>, ctx: ServerContext): Promise<{ success: boolean; error?: string; worker?: string }> {
-	const ticketId = typeof msg.ticketId === 'string' ? msg.ticketId : '';
-	const claimed = ticketId
-		? claimTicket(ctx.dispatchRegistry, ticketId, ctx.workerIdentity?.name ?? 'Hub', 'ux-designer')
-		: false;
-	if (ticketId && !claimed) {
-		const existing = ctx.dispatchRegistry.get(ticketId);
-		return { success: false, error: `Ticket ${ticketId} is already in flight (claimed by "${existing?.claimedBy ?? '?'}" for "${existing?.purpose ?? '?'}").` };
+function launchLocally(
+	agent: PersistentAgent,
+	systemPrompt: string,
+	initialTask: string,
+	ticketId: string,
+	ticketName: string,
+	ticketUrl: string,
+	ctx: ServerContext,
+	options?: LaunchOptions,
+): LocalLaunchOutcome {
+	ensureAgentMemory(agent.id);
+	const result = launchPersistentAgentSession(
+		agent,
+		systemPrompt,
+		initialTask,
+		{ ticketId, ticketName, ticketUrl },
+		ctx,
+		ctx.persistentAgents,
+		options ?? {},
+	);
+	if (!result.success) {
+		return { success: false, error: result.error };
 	}
-
-	const local = tryLaunchDesignerLocal(msg, ctx);
-	if (local.success) return { ...local, worker: ctx.workerIdentity?.name };
-	if (!ctx.isWorkerMode && local.visualSlotBusy) {
-		const fleet = await dispatchToFleet(msg, ctx, 'launchDesigner', local.error);
-		if (!fleet.success && claimed) releaseTicket(ctx.dispatchRegistry, ticketId);
-		return fleet;
-	}
-	if (claimed) releaseTicket(ctx.dispatchRegistry, ticketId);
-	return local;
+	return { success: true, worker: agent.name };
 }
 
-function tryLaunchDesignerLocal(msg: Record<string, unknown>, ctx: ServerContext): { success: boolean; error?: string; visualSlotBusy?: boolean } {
+function getProjectDescription(workspacePath: string): string | undefined {
+	const knownProjects = loadKnownProjects();
+	const projName = path.basename(workspacePath);
+	return knownProjects.find(k => k.name === projName)?.description;
+}
+
+// ── Role: dev worker (Darryl's downstream dispatch) ─────────
+
+function tryLaunchDevWorkerLocal(msg: Record<string, unknown>, ctx: ServerContext): LocalLaunchOutcome {
+	const workspacePath = msg.workspacePath as string | undefined;
+	const ticketId = msg.ticketId as string;
+	const ticketName = msg.ticketName as string;
+	const ticketUrl = msg.ticketUrl as string;
+	const useTeam = msg.useTeam as boolean | undefined;
+	const aiReviewMode = msg.aiReviewMode as boolean | undefined;
+	const brief = typeof msg.additionalPrompt === 'string' ? msg.additionalPrompt.trim() : '';
+
+	if (!workspacePath) return { success: false, error: 'Missing required field: workspacePath' };
+	if (!ticketId || !ticketName || !ticketUrl) {
+		return { success: false, error: 'Missing required fields: ticketId, ticketName, ticketUrl' };
+	}
+
+	// Atomic worker pick: find any free dev worker (no live session) whose
+	// workspace matches the ticket. Darryl's auto-pickup capacity gate should
+	// have prevented an empty result, but a stale ClickUp cache or out-of-band
+	// dispatch could still get us here.
+	const pa = findFreeDevWorker(ctx.persistentAgents, workspacePath);
+	if (!pa) {
+		return { success: false, error: `No free dev worker available for workspace "${workspacePath}".` };
+	}
+
+	const projectDescription = getProjectDescription(pa.workspacePath);
+	const systemPrompt = buildSystemPrompt(pa, projectDescription);
+
+	const briefBlock = brief
+		? `${brief}\n\n`
+		: `⚠ No Brief was passed by Darryl — you'll need to read the ticket yourself.\n\n`;
+
+	let initialTask = aiReviewMode
+		? buildWorkerAiReviewInitialTask(ticketId, ticketName, ticketUrl, briefBlock)
+		: buildWorkerStandardInitialTask(ticketId, ticketName, ticketUrl, briefBlock);
+	if (projectDescription) {
+		initialTask += `\n\n## Project\n${projectDescription}`;
+	}
+	if (useTeam) {
+		initialTask += '\n\nUse team mode: spawn sub-agents for parallel work.';
+	}
+	initialTask += EXIT_REMINDER;
+
+	const outcome = launchLocally(pa, systemPrompt, initialTask, ticketId, ticketName, ticketUrl, ctx);
+	if (outcome.success) {
+		console.log(`[Standalone] Launched dev worker "${pa.name}" for ticket ${ticketId}`);
+	} else {
+		console.log(`[Standalone] Failed to launch dev worker "${pa.name}" for ticket ${ticketId}`);
+	}
+	return outcome;
+}
+
+const devWorkerSpec: WorkerDispatchSpec = {
+	purpose: 'dev-worker',
+	tryLaunchLocal: tryLaunchDevWorkerLocal,
+	// Dev workers are hub-local — no fleet cascade.
+};
+
+const devWorkerAiReviewSpec: WorkerDispatchSpec = {
+	...devWorkerSpec,
+	purpose: 'dev-worker-ai-review',
+};
+
+/**
+ * Launch a dev worker on a ticket. Mirrors Jan's flow: caller passes the
+ * workspace path, the hub atomically picks a free worker matching it.
+ *
+ * The dev spec has no fleet cascade, so the returned promise resolves on the
+ * next microtask — synchronous for all practical purposes — but the signature
+ * is a Promise to keep the dispatch core uniform.
+ *
+ * Returns the picked worker's name on success so the caller can log/comment
+ * about the assignment.
+ */
+export function launchAgentOnTicket(
+	workspacePath: string,
+	ticketId: string,
+	ticketName: string,
+	ticketUrl: string,
+	ctx: ServerContext,
+	options?: { useTeam?: boolean; additionalPrompt?: string; aiReviewMode?: boolean },
+): Promise<{ success: boolean; error?: string; worker?: string }> {
+	const msg: Record<string, unknown> = {
+		workspacePath,
+		ticketId,
+		ticketName,
+		ticketUrl,
+		additionalPrompt: options?.additionalPrompt,
+		useTeam: options?.useTeam,
+		aiReviewMode: options?.aiReviewMode,
+	};
+	const spec = options?.aiReviewMode ? devWorkerAiReviewSpec : devWorkerSpec;
+	return dispatchWorker(msg, ctx, spec);
+}
+
+export async function handleClickupStartWork(msg: Record<string, unknown>, ctx: ServerContext): Promise<void> {
+	const ticketId = msg.ticketId as string;
+	const ticketName = msg.ticketName as string;
+	const ticketUrl = msg.ticketUrl as string;
+	const useTeam = msg.useTeam as boolean | undefined;
+	const additionalPrompt = msg.additionalPrompt as string | undefined;
+	// Webview "Start work" picks the worker explicitly via agentId — read the
+	// workspace off the chosen persistent agent and reuse the shared launcher.
+	const agentId = msg.agentId as string | undefined;
+	let workspacePath = msg.workspacePath as string | undefined;
+	if (agentId) {
+		const pa = ctx.persistentAgents.find(p => p.id === agentId);
+		if (pa) workspacePath = pa.workspacePath;
+	}
+	if (!workspacePath) {
+		ctx.broadcastSink.postMessage({ type: 'clickupStartWorkError', error: 'Missing workspacePath (and agentId could not be resolved).' });
+		return;
+	}
+	const result = await launchAgentOnTicket(workspacePath, ticketId, ticketName, ticketUrl, ctx, { useTeam, additionalPrompt });
+	if (!result.success) {
+		ctx.broadcastSink.postMessage({ type: 'clickupStartWorkError', error: result.error });
+	}
+}
+
+// ── Role: UX Designer ───────────────────────────────────────
+
+function tryLaunchDesignerLocal(msg: Record<string, unknown>, ctx: ServerContext): LocalLaunchOutcome {
 	const workspacePath = msg.workspacePath as string;
 	const ticketId = msg.ticketId as string;
 	const ticketName = msg.ticketName as string;
@@ -262,19 +341,12 @@ function tryLaunchDesignerLocal(msg: Record<string, unknown>, ctx: ServerContext
 		return { success: false, error: 'Missing required fields: ticketId, ticketName, ticketUrl' };
 	}
 
-	const { persistentAgents } = ctx;
-
-	const busySlot = findBusyVisualSlot(persistentAgents);
+	const busySlot = findBusyVisualSlot(ctx.persistentAgents);
 	if (busySlot) {
-		return { success: false, visualSlotBusy: true, error: `Local visual slot busy: "${busySlot.name}" (${busySlot.roleShort}) is already running on this machine.` };
+		return { success: false, slotBusy: true, error: `Local visual slot busy: "${busySlot.name}" (${busySlot.roleShort}) is already running on this machine.` };
 	}
 
-	const knownProjects = loadKnownProjects();
-	const projName = path.basename(workspacePath);
-	const project = knownProjects.find(k => k.name === projName);
-	const projectDescription = project?.description;
-
-	const designer = persistentAgents.find(
+	const designer = ctx.persistentAgents.find(
 		p => p.roleShort === DESIGNER_ROLE_SHORT
 			&& p.teamId === TEAM_UX_ID
 			&& !p.currentSessionId
@@ -283,55 +355,36 @@ function tryLaunchDesignerLocal(msg: Record<string, unknown>, ctx: ServerContext
 	if (!designer) return { success: false, error: 'No free UX Designers available — all team members are busy.' };
 
 	designer.workspacePath = workspacePath;
-	const designConfig = getJanDesignConfig();
-	const systemPrompt = buildDesignerSystemPrompt(designer, projectDescription, designConfig);
+	const projectDescription = getProjectDescription(workspacePath);
+	const systemPrompt = buildDesignerSystemPrompt(designer, projectDescription, getJanDesignConfig());
 
 	const briefBlock = brief
 		? `${brief}\n\n`
 		: `⚠ No Brief was passed by Jan — you will need to read the ticket description yourself.\n\n`;
-
 	const initialTask = buildUxDesignerInitialTask(ticketId, ticketName, ticketUrl, briefBlock, !!revisionMode) + EXIT_REMINDER;
 
-	const result = launchPersistentAgentSession(
-		designer,
-		systemPrompt,
-		initialTask,
-		{ ticketId, ticketName, ticketUrl },
-		ctx,
-		persistentAgents,
-	);
-	if (result.success) {
+	const outcome = launchLocally(designer, systemPrompt, initialTask, ticketId, ticketName, ticketUrl, ctx);
+	if (outcome.success) {
 		console.log(`[Standalone] Launched designer "${designer.name}" for ticket ${ticketId}`);
 	} else {
 		console.log(`[Standalone] Failed to launch designer "${designer.name}" for ticket ${ticketId}`);
 	}
-	return result;
+	return outcome;
 }
 
-// ── Visual Designer (Phase 2) ───────────────────────────────
+const uxDesignerSpec: WorkerDispatchSpec = {
+	purpose: 'ux-designer',
+	tryLaunchLocal: tryLaunchDesignerLocal,
+	fleet: { rpcType: 'launchDesigner' },
+};
 
-export async function handleLaunchVisualDesigner(msg: Record<string, unknown>, ctx: ServerContext): Promise<{ success: boolean; error?: string; worker?: string }> {
-	const ticketId = typeof msg.ticketId === 'string' ? msg.ticketId : '';
-	const claimed = ticketId
-		? claimTicket(ctx.dispatchRegistry, ticketId, ctx.workerIdentity?.name ?? 'Hub', 'visual-designer')
-		: false;
-	if (ticketId && !claimed) {
-		const existing = ctx.dispatchRegistry.get(ticketId);
-		return { success: false, error: `Ticket ${ticketId} is already in flight (claimed by "${existing?.claimedBy ?? '?'}" for "${existing?.purpose ?? '?'}").` };
-	}
-
-	const local = tryLaunchVisualDesignerLocal(msg, ctx);
-	if (local.success) return { ...local, worker: ctx.workerIdentity?.name };
-	if (!ctx.isWorkerMode && local.visualSlotBusy) {
-		const fleet = await dispatchToFleet(msg, ctx, 'launchVisualDesigner', local.error);
-		if (!fleet.success && claimed) releaseTicket(ctx.dispatchRegistry, ticketId);
-		return fleet;
-	}
-	if (claimed) releaseTicket(ctx.dispatchRegistry, ticketId);
-	return local;
+export function handleLaunchDesigner(msg: Record<string, unknown>, ctx: ServerContext): Promise<{ success: boolean; error?: string; worker?: string }> {
+	return dispatchWorker(msg, ctx, uxDesignerSpec);
 }
 
-function tryLaunchVisualDesignerLocal(msg: Record<string, unknown>, ctx: ServerContext): { success: boolean; error?: string; visualSlotBusy?: boolean } {
+// ── Role: Visual Designer ───────────────────────────────────
+
+function tryLaunchVisualDesignerLocal(msg: Record<string, unknown>, ctx: ServerContext): LocalLaunchOutcome {
 	const workspacePath = msg.workspacePath as string;
 	const ticketId = msg.ticketId as string;
 	const ticketName = msg.ticketName as string;
@@ -344,19 +397,12 @@ function tryLaunchVisualDesignerLocal(msg: Record<string, unknown>, ctx: ServerC
 		return { success: false, error: 'Missing required fields: ticketId, ticketName, ticketUrl' };
 	}
 
-	const { persistentAgents } = ctx;
-
-	const busySlot = findBusyVisualSlot(persistentAgents);
+	const busySlot = findBusyVisualSlot(ctx.persistentAgents);
 	if (busySlot) {
-		return { success: false, visualSlotBusy: true, error: `Local visual slot busy: "${busySlot.name}" (${busySlot.roleShort}) is already running on this machine.` };
+		return { success: false, slotBusy: true, error: `Local visual slot busy: "${busySlot.name}" (${busySlot.roleShort}) is already running on this machine.` };
 	}
 
-	const knownProjects = loadKnownProjects();
-	const projName = path.basename(workspacePath);
-	const project = knownProjects.find(k => k.name === projName);
-	const projectDescription = project?.description;
-
-	const designer = persistentAgents.find(
+	const designer = ctx.persistentAgents.find(
 		p => p.roleShort === VISUAL_DESIGNER_ROLE_SHORT
 			&& p.teamId === TEAM_VISUAL_ID
 			&& !p.currentSessionId
@@ -365,102 +411,76 @@ function tryLaunchVisualDesignerLocal(msg: Record<string, unknown>, ctx: ServerC
 	if (!designer) return { success: false, error: 'No free Visual Designers available — all team members are busy.' };
 
 	designer.workspacePath = workspacePath;
-	const designConfig = getJanDesignConfig();
-	const systemPrompt = buildVisualDesignerSystemPrompt(designer, projectDescription, designConfig);
+	const projectDescription = getProjectDescription(workspacePath);
+	const systemPrompt = buildVisualDesignerSystemPrompt(designer, projectDescription, getJanDesignConfig());
 
 	const briefBlock = brief
 		? `${brief}\n\n`
 		: `⚠ No Brief was passed by Jan — look at the ticket to find the approved UX Figma node.\n\n`;
-
 	const initialTask = buildVisualDesignerInitialTask(ticketId, ticketName, ticketUrl, briefBlock, !!revisionMode) + EXIT_REMINDER;
 
-	const result = launchPersistentAgentSession(
-		designer,
-		systemPrompt,
-		initialTask,
-		{ ticketId, ticketName, ticketUrl },
-		ctx,
-		persistentAgents,
-	);
-	if (result.success) {
+	const outcome = launchLocally(designer, systemPrompt, initialTask, ticketId, ticketName, ticketUrl, ctx);
+	if (outcome.success) {
 		console.log(`[Standalone] Launched visual designer "${designer.name}" for ticket ${ticketId}`);
 	} else {
 		console.log(`[Standalone] Failed to launch visual designer "${designer.name}" for ticket ${ticketId}`);
 	}
-	return result;
+	return outcome;
 }
 
-// ── Visual QA AI Review ─────────────────────────────────────
+const visualDesignerSpec: WorkerDispatchSpec = {
+	purpose: 'visual-designer',
+	tryLaunchLocal: tryLaunchVisualDesignerLocal,
+	fleet: { rpcType: 'launchVisualDesigner' },
+};
 
-/**
- * Dispatch the Visual Quality Reviewer on an "ai review" ticket. Tries the
- * local machine's Figma slot first, cascades to a free remote worker if busy.
- */
-export async function handleVisualQaReview(
-	completedTicket: { ticketId: string; ticketName: string; ticketUrl: string; designerName: string; workspacePath: string },
-	ctx: ServerContext,
-): Promise<{ success: boolean; error?: string; worker?: string }> {
-	const ticketId = completedTicket.ticketId;
-	const claimed = ticketId
-		? claimTicket(ctx.dispatchRegistry, ticketId, ctx.workerIdentity?.name ?? 'Hub', 'visual-qa')
-		: false;
-	if (ticketId && !claimed) {
-		const existing = ctx.dispatchRegistry.get(ticketId);
-		return { success: false, error: `Ticket ${ticketId} is already in flight (claimed by "${existing?.claimedBy ?? '?'}" for "${existing?.purpose ?? '?'}").` };
-	}
-
-	const local = tryLaunchVisualQaLocal(completedTicket, ctx);
-	if (local.success) return { ...local, worker: ctx.workerIdentity?.name };
-	if (!ctx.isWorkerMode && local.visualSlotBusy) {
-		const msg: Record<string, unknown> = {
-			ticketId: completedTicket.ticketId,
-			ticketName: completedTicket.ticketName,
-			ticketUrl: completedTicket.ticketUrl,
-			designerName: completedTicket.designerName,
-			workspacePath: completedTicket.workspacePath,
-		};
-		const fleet = await dispatchToFleet(msg, ctx, 'launchVisualQa', local.error);
-		if (!fleet.success && claimed) releaseTicket(ctx.dispatchRegistry, ticketId);
-		return fleet;
-	}
-	if (claimed) releaseTicket(ctx.dispatchRegistry, ticketId);
-	return local;
+export function handleLaunchVisualDesigner(msg: Record<string, unknown>, ctx: ServerContext): Promise<{ success: boolean; error?: string; worker?: string }> {
+	return dispatchWorker(msg, ctx, visualDesignerSpec);
 }
 
-function tryLaunchVisualQaLocal(
-	completedTicket: { ticketId: string; ticketName: string; ticketUrl: string; designerName: string; workspacePath: string },
-	ctx: ServerContext,
-): { success: boolean; error?: string; visualSlotBusy?: boolean } {
-	const { ticketId, ticketName, ticketUrl, designerName } = completedTicket;
-	const { persistentAgents } = ctx;
+// ── Role: Visual QA ─────────────────────────────────────────
 
-	const busySlot = findBusyVisualSlot(persistentAgents);
+function tryLaunchVisualQaLocal(msg: Record<string, unknown>, ctx: ServerContext): LocalLaunchOutcome {
+	const ticketId = msg.ticketId as string;
+	const ticketName = msg.ticketName as string;
+	const ticketUrl = msg.ticketUrl as string;
+	const designerName = (msg.designerName as string | undefined) ?? 'unknown';
+
+	if (!ticketId || !ticketName || !ticketUrl) {
+		return { success: false, error: 'Missing required fields: ticketId, ticketName, ticketUrl' };
+	}
+
+	const busySlot = findBusyVisualSlot(ctx.persistentAgents);
 	if (busySlot) {
-		return { success: false, visualSlotBusy: true, error: `Local visual slot busy: "${busySlot.name}" (${busySlot.roleShort}) is already running on this machine.` };
+		return { success: false, slotBusy: true, error: `Local visual slot busy: "${busySlot.name}" (${busySlot.roleShort}) is already running on this machine.` };
 	}
 
-	const qa = persistentAgents.find(
+	const qa = ctx.persistentAgents.find(
 		p => p.roleShort === VISUAL_QA_ROLE_SHORT && p.teamId === TEAM_VISUAL_ID,
 	);
 	if (!qa) return { success: false, error: 'No Visual QA agent seeded on this machine' };
 
-	const qaDesignConfig = getJanDesignConfig();
-	const systemPrompt = buildVisualQaSystemPrompt(qa, qaDesignConfig);
+	const systemPrompt = buildVisualQaSystemPrompt(qa, getJanDesignConfig());
 	const initialTask = buildVisualQaInitialTask({ ticketId, ticketName, ticketUrl, designerName }) + EXIT_REMINDER;
 
-	const result = launchPersistentAgentSession(
-		qa,
-		systemPrompt,
-		initialTask,
-		{ ticketId, ticketName, ticketUrl },
-		ctx,
-		persistentAgents,
-		{ withPeers: true },
-	);
-	if (result.success) {
+	const outcome = launchLocally(qa, systemPrompt, initialTask, ticketId, ticketName, ticketUrl, ctx, { withPeers: true });
+	if (outcome.success) {
 		console.log(`[Standalone] Launched Visual QA "${qa.name}" for AI review of ticket ${ticketId}`);
 	}
-	return result;
+	return outcome;
+}
+
+const visualQaSpec: WorkerDispatchSpec = {
+	purpose: 'visual-qa',
+	tryLaunchLocal: tryLaunchVisualQaLocal,
+	fleet: { rpcType: 'launchVisualQa' },
+};
+
+export function handleVisualQaReview(
+	completedTicket: { ticketId: string; ticketName: string; ticketUrl: string; designerName: string; workspacePath: string },
+	ctx: ServerContext,
+): Promise<{ success: boolean; error?: string; worker?: string }> {
+	return dispatchWorker(completedTicket as unknown as Record<string, unknown>, ctx, visualQaSpec);
 }
 
 // ── Worker-originated designer session-end hook ────────────

@@ -180,24 +180,28 @@ describe('buildDarrylSystemPrompt', () => {
 		expect(prompt).toContain('http://localhost:4444');
 	});
 
-	it('renders roster entries with agent details', () => {
+	it('renders the workspaces Darryl can dispatch into', () => {
+		// Post-unification, the prompt lists projects (workspaces), not named
+		// agents — Darryl no longer picks a worker by id, the hub does. He
+		// just supplies the workspacePath. Design-team roles are excluded so
+		// Darryl doesn't try to dispatch UX/Visual Designers as dev workers.
 		const roster = makeRoster([
-			{ id: 'a1', name: 'Jim', roleShort: 'Developer', isOnline: false },
-			{ id: 'a2', name: 'Pam', roleShort: 'Designer', isOnline: true },
+			{ id: 'a1', name: 'Jim', roleShort: 'Developer', workspacePath: '/projects/frontend', isOnline: false },
+			{ id: 'a2', name: 'Pam', roleShort: 'Visual Designer', workspacePath: '/projects/design', isOnline: true },
 		]);
 		const prompt = buildDarrylSystemPrompt(darryl, roster, 3333);
-		expect(prompt).toContain('**Jim**');
-		expect(prompt).toContain('**Pam**');
-		expect(prompt).toContain('free');
-		expect(prompt).toContain('BUSY');
+		expect(prompt).toContain('/projects/frontend');
+		// Design-team workspace must be filtered out.
+		expect(prompt).not.toContain('/projects/design');
 	});
 
-	it('includes project name in roster when provided', () => {
+	it('includes project name and description for each dispatchable workspace', () => {
 		const roster = makeRoster([
-			{ id: 'a1', name: 'Jim', projectName: 'crm', projectDescription: 'Customer management app' },
+			{ id: 'a1', name: 'Jim', workspacePath: '/projects/crm', projectName: 'crm', projectDescription: 'Customer management app' },
 		]);
 		const prompt = buildDarrylSystemPrompt(darryl, roster, 3333);
 		expect(prompt).toContain('crm');
+		expect(prompt).toContain('Customer management app');
 	});
 
 	it('includes memory path and MemPalace instructions', () => {

@@ -94,10 +94,10 @@ export function getColorizedHerringboneSprite(row: number, col: number, bitmask:
 /**
  * Whether procedural herringbone is in use.
  *
- * Currently pinned to `true` — the herringbone replaces the legacy
- * floor_N.png tiles. Flip back to `floorSprites.length === 0` if you ever
- * want PNG tiles to override the generator again.
+ * Temporarily pinned to `false` for performance — the herringbone's
+ * adjacency-mask-driven cache balloons on large grids. Flip back to `true`
+ * (or `floorSprites.length === 0`) once the renderer is fast enough.
  */
 export function usesGeneratedFloor(): boolean {
-  return true
+  return false
 }

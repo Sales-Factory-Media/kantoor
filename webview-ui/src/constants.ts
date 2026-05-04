@@ -33,6 +33,14 @@ export const MATRIX_TRAIL_MID_THRESHOLD = 0.33
 export const MATRIX_TRAIL_DIM_THRESHOLD = 0.66
 
 // ── Rendering ────────────────────────────────────────────────
+/**
+ * Cap used wherever we read `window.devicePixelRatio` for canvas backing
+ * stores or zoom-default sizing. Pinned to 1 because the per-frame work in
+ * the office canvas scales with backing-store pixel count and Retina (DPR=2)
+ * was the primary bottleneck on Apple machines. Bump back to 2+ if/when the
+ * renderer is fast enough to handle it.
+ */
+export const MAX_DEVICE_PIXEL_RATIO = 1
 export const CHARACTER_SITTING_OFFSET_PX = 6
 export const CHARACTER_Z_SORT_OFFSET = 0.5
 export const OUTLINE_Z_SORT_OFFSET = 0.001

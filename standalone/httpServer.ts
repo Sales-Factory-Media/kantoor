@@ -43,15 +43,24 @@ function handleApiRoster(res: http.ServerResponse, ctx: ServerContext): void {
 	res.end(JSON.stringify({ roster }));
 }
 
-function handleApiLaunchAgent(json: Record<string, unknown>, res: http.ServerResponse, ctx: ServerContext): void {
-	const agentId = json.agentId as string | undefined;
+async function handleApiLaunchAgent(json: Record<string, unknown>, res: http.ServerResponse, ctx: ServerContext): Promise<void> {
 	const ticketId = json.ticketId as string | undefined;
 	const ticketName = json.ticketName as string | undefined;
 	const ticketUrl = json.ticketUrl as string | undefined;
+	let workspacePath = json.workspacePath as string | undefined;
 
-	if (!agentId || !ticketId || !ticketName || !ticketUrl) {
+	// Back-compat: accept agentId and resolve it to its workspacePath. New
+	// callers (Darryl) should pass workspacePath directly so the hub picks the
+	// worker — same pattern as Jan's /api/launch-visual-designer.
+	const agentId = json.agentId as string | undefined;
+	if (!workspacePath && agentId) {
+		const pa = ctx.persistentAgents.find(p => p.id === agentId);
+		if (pa) workspacePath = pa.workspacePath;
+	}
+
+	if (!workspacePath || !ticketId || !ticketName || !ticketUrl) {
 		res.writeHead(400);
-		res.end(JSON.stringify({ error: 'Missing required fields: agentId, ticketId, ticketName, ticketUrl' }));
+		res.end(JSON.stringify({ error: 'Missing required fields: workspacePath, ticketId, ticketName, ticketUrl' }));
 		return;
 	}
 
@@ -59,10 +68,10 @@ function handleApiLaunchAgent(json: Record<string, unknown>, res: http.ServerRes
 	const additionalPrompt = json.additionalPrompt as string | undefined;
 	const aiReviewMode = json.aiReviewMode as boolean | undefined;
 
-	const result = launchAgentOnTicket(agentId, ticketId, ticketName, ticketUrl, ctx, { useTeam, additionalPrompt, aiReviewMode });
+	const result = await launchAgentOnTicket(workspacePath, ticketId, ticketName, ticketUrl, ctx, { useTeam, additionalPrompt, aiReviewMode });
 	if (result.success) {
 		res.writeHead(200);
-		res.end(JSON.stringify({ success: true }));
+		res.end(JSON.stringify({ success: true, worker: result.worker }));
 	} else {
 		res.writeHead(400);
 		res.end(JSON.stringify({ success: false, error: result.error }));
@@ -223,11 +232,11 @@ export function createHttpServer(ctx: ServerContext): http.Server {
 						req.destroy();
 					}
 				});
-				req.on('end', () => {
+				req.on('end', async () => {
 					if (exceeded) return;
 					try {
 						const json = JSON.parse(body) as Record<string, unknown>;
-						handleApiLaunchAgent(json, res, ctx);
+						await handleApiLaunchAgent(json, res, ctx);
 					} catch {
 						res.writeHead(400);
 						res.end(JSON.stringify({ error: 'Invalid JSON' }));

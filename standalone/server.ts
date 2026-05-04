@@ -251,7 +251,7 @@ const messageHandlers: Record<string, (ws: WebSocket, msg: Record<string, unknow
 	clickupRefresh: (_ws, _msg, ctx) => { handleClickupRefresh(ctx).catch(() => {}); },
 	clickupStartWork: (_ws, msg, ctx) => {
 		if (rejectIfWorker(ctx, 'clickupStartWork')) return;
-		handleClickupStartWork(msg, ctx);
+		handleClickupStartWork(msg, ctx).catch(() => {});
 	},
 	clickupConfigure: (_ws, msg, ctx) => handleClickupConfigure(msg, ctx),
 	startConference: (_ws, msg, ctx) => handleStartConference(msg, ctx),

@@ -6,7 +6,7 @@ import type { SelectionRenderState } from '../engine/renderer.js'
 import { startGameLoop } from '../engine/gameLoop.js'
 import { renderFrame } from '../engine/renderer.js'
 import { TILE_SIZE } from '../types.js'
-import { CAMERA_FOLLOW_LERP, CAMERA_FOLLOW_SNAP_THRESHOLD, ZOOM_MIN, ZOOM_MAX, ZOOM_SCROLL_THRESHOLD, PAN_MARGIN_FRACTION, KEY_PAN_SPEED } from '../../constants.js'
+import { CAMERA_FOLLOW_LERP, CAMERA_FOLLOW_SNAP_THRESHOLD, ZOOM_MIN, ZOOM_MAX, ZOOM_SCROLL_THRESHOLD, PAN_MARGIN_FRACTION, KEY_PAN_SPEED, MAX_DEVICE_PIXEL_RATIO } from '../../constants.js'
 import { unlockAudio } from '../../notificationSound.js'
 
 interface OfficeCanvasProps {
@@ -53,7 +53,7 @@ export function OfficeCanvas({ officeState, onClick, zoom, onZoomChange, panRef 
     const container = containerRef.current
     if (!canvas || !container) return
     const rect = container.getBoundingClientRect()
-    const dpr = window.devicePixelRatio || 1
+    const dpr = Math.min(window.devicePixelRatio || 1, MAX_DEVICE_PIXEL_RATIO)
     canvas.width = Math.round(rect.width * dpr)
     canvas.height = Math.round(rect.height * dpr)
     canvas.style.width = `${rect.width}px`
@@ -78,13 +78,9 @@ export function OfficeCanvas({ officeState, onClick, zoom, onZoomChange, panRef 
       }
     })
 
-    // Generate outdoor area
-    const layout = officeState.getLayout()
-    if (!officeState.outdoor) {
-      loadAndGenerateOutdoor('assets/outdoor/summer-forest.png', layout.cols, layout.rows).then(outdoor => {
-        if (outdoor) officeState.outdoor = outdoor
-      })
-    }
+    // Outdoor/forest rendering temporarily disabled — too expensive per frame.
+    // Re-enable by restoring the loadAndGenerateOutdoor call.
+    void loadAndGenerateOutdoor
 
     const stop = startGameLoop(canvas, {
       update: (dt) => {
@@ -159,7 +155,7 @@ export function OfficeCanvas({ officeState, onClick, zoom, onZoomChange, panRef 
       const canvas = canvasRef.current
       if (!canvas) return null
       const rect = canvas.getBoundingClientRect()
-      const dpr = window.devicePixelRatio || 1
+      const dpr = Math.min(window.devicePixelRatio || 1, MAX_DEVICE_PIXEL_RATIO)
       const cssX = clientX - rect.left
       const cssY = clientY - rect.top
       const deviceX = cssX * dpr
@@ -188,7 +184,7 @@ export function OfficeCanvas({ officeState, onClick, zoom, onZoomChange, panRef 
     (e: React.MouseEvent) => {
       // Handle drag-to-pan (middle-mouse or left-click drag)
       if (isPanningRef.current) {
-        const dpr = window.devicePixelRatio || 1
+        const dpr = Math.min(window.devicePixelRatio || 1, MAX_DEVICE_PIXEL_RATIO)
         const dx = (e.clientX - panStartRef.current.mouseX) * dpr
         const dy = (e.clientY - panStartRef.current.mouseY) * dpr
         // Only start panning after a small drag threshold to avoid interfering with clicks
@@ -362,7 +358,7 @@ export function OfficeCanvas({ officeState, onClick, zoom, onZoomChange, panRef 
           }
         }
       } else {
-        const dpr = window.devicePixelRatio || 1
+        const dpr = Math.min(window.devicePixelRatio || 1, MAX_DEVICE_PIXEL_RATIO)
         officeState.cameraFollowId = null
         panRef.current = clampPan(
           panRef.current.x - e.deltaX * dpr,

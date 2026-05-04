@@ -13,10 +13,57 @@ import {
 	VISUAL_DESIGNER_ROLE_SHORT,
 	VISUAL_QA_ROLE_SHORT,
 	WORKER_ROLE_DESIGNER,
+	WORKER_ROLE_DEV,
 	DEFAULT_WORKER_ROLES,
+	DARRYL_ROLE_SHORT,
+	JAN_ROLE_SHORT,
+	PM_ROLE_SHORT,
+	UX_PM_ROLE_SHORT,
+	UX_QA_ROLE_SHORT,
+	VISUAL_PM_ROLE_SHORT,
 } from './constants.js';
 import type { PersistentAgent } from './agentStore.js';
 import type { ServerContext } from './serverContext.js';
+
+/**
+ * Dev workers are the persistent agents Darryl dispatches to. They are
+ * distinguished by exclusion: anything that isn't an orchestrator (Darryl /
+ * Jan) and isn't a design-team role. User-defined custom roles count as dev
+ * workers by default.
+ */
+const NON_DEV_ROLES = new Set<string>([
+	DARRYL_ROLE_SHORT,
+	JAN_ROLE_SHORT,
+	DESIGNER_ROLE_SHORT,
+	VISUAL_DESIGNER_ROLE_SHORT,
+	UX_QA_ROLE_SHORT,
+	VISUAL_QA_ROLE_SHORT,
+	PM_ROLE_SHORT,
+	UX_PM_ROLE_SHORT,
+	VISUAL_PM_ROLE_SHORT,
+]);
+
+export function isDevWorker(pa: PersistentAgent): boolean {
+	if (pa.retired) return false;
+	return !NON_DEV_ROLES.has(pa.roleShort);
+}
+
+/**
+ * Find a free dev worker matching the given workspace path. Atomic — meant to
+ * be called inside the dispatch entry point so the hub picks the worker
+ * instead of a stale-roster orchestrator. Mirrors the
+ * `handleLaunchVisualDesigner` pattern (find first eligible designer).
+ */
+export function findFreeDevWorker(
+	persistentAgents: PersistentAgent[],
+	workspacePath: string,
+): PersistentAgent | undefined {
+	return persistentAgents.find(p =>
+		isDevWorker(p)
+		&& !p.currentSessionId
+		&& p.workspacePath === workspacePath,
+	);
+}
 
 /**
  * Find the agent currently occupying THIS machine's visual-task slot, if any.
@@ -115,5 +162,56 @@ export function computeDesignFleetCapacity(
 		available: Math.max(0, total - active),
 		inProgressCount,
 		pendingDispatches,
+	};
+}
+
+// ── Dev fleet (Darryl's pickup) ─────────────────────────────
+
+export interface DevFleetCapacity {
+	/** Free dev workers that can take a new ticket right now. */
+	available: number;
+	/** Total dev workers (free + busy) — for log/diagnostic output. */
+	total: number;
+	/** How many are currently running a session. */
+	active: number;
+}
+
+/**
+ * Compute available dev-worker capacity for Darryl's batch pickup. Mirrors
+ * `computeDesignFleetCapacity`: count machines that can run a dev ticket and
+ * how many slots are free right now. Used to slice Darryl's batch so we never
+ * hand him more tickets than there are free workers — same gate Jan uses on
+ * her side.
+ *
+ * Counts:
+ *   - persistent dev workers on the hub (one slot per agent — they share the
+ *     hub machine but each runs its own iTerm session sequentially).
+ *   - remote workers advertising the 'dev' role (one ticket per worker).
+ *
+ * Active = persistent agents with a live `currentSessionId` + remote workers
+ * holding a `currentTicketId`.
+ */
+export function computeDevFleetCapacity(ctx: ServerContext): DevFleetCapacity {
+	let total = 0;
+	let active = 0;
+
+	for (const pa of ctx.persistentAgents) {
+		if (!isDevWorker(pa)) continue;
+		total++;
+		if (pa.currentSessionId) active++;
+	}
+
+	for (const worker of ctx.workers.values()) {
+		const roles = worker.roles ?? [];
+		// Empty roles array = legacy worker, treat as dev-capable.
+		if (roles.length !== 0 && !roles.includes(WORKER_ROLE_DEV)) continue;
+		total++;
+		if (worker.currentTicketId) active++;
+	}
+
+	return {
+		total,
+		active,
+		available: Math.max(0, total - active),
 	};
 }

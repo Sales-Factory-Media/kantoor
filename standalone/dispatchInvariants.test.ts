@@ -311,7 +311,7 @@ describe('invariant 2: no ticket is dispatched twice', () => {
 // ── Invariant 4: orchestrator spawn never self-blocks worker dispatch ──
 
 describe('invariant 4: Darryl\'s spawn does not self-block his own /api/launch-agent', () => {
-	it('autoDarrylPickup leaves the registry empty so Darryl can dispatch a worker on the same ticket', () => {
+	it('autoDarrylPickup leaves the registry empty so Darryl can dispatch a worker on the same ticket', async () => {
 		// Regression test for the "darryl-dispatch" stuck-claim bug. Before
 		// unification, autoDarrylPickup grabbed a "Hub / darryl-dispatch" claim
 		// on the ticket it was about to hand to Darryl. That claim was held
@@ -336,7 +336,7 @@ describe('invariant 4: Darryl\'s spawn does not self-block his own /api/launch-a
 		// Simulate Darryl (inside his session) calling /api/launch-agent on T-1.
 		// Must succeed — the old bug made this return success:false with
 		// "already in flight (claimed by Hub for darryl-dispatch)".
-		const result = launchAgentOnTicket('worker-1', 'T-1', 'Task T-1', 'https://clickup.test/T-1', ctx);
+		const result = await launchAgentOnTicket('~/project', 'T-1', 'Task T-1', 'https://clickup.test/T-1', ctx);
 		expect(result.success).toBe(true);
 		expect(result.error).toBeUndefined();
 	});
@@ -345,15 +345,43 @@ describe('invariant 4: Darryl\'s spawn does not self-block his own /api/launch-a
 // ── Invariant 4b: per-worker concurrency lock ─────────────────
 
 describe('invariant 4b: a worker only runs one ticket at a time', () => {
-	it('launchAgentOnTicket rejects a second dispatch to the same worker even with a different ticket', () => {
-		// Regression test for the "Darryl dispatches multiple tickets to the
-		// same worker" bug. Darryl picks workers from /api/roster (offline=
-		// free), but his roster snapshot can be stale across a batch — without
-		// this guard he can dispatch ticket A → Worker X, then ticket B →
-		// Worker X, and the second launchPersistentAgent silently overwrites
-		// the first session. The fix is a per-agent currentSessionId check at
-		// the entry of launchAgentOnTicket. If this test fails, the dual-
-		// dispatch bug is back.
+	it('launchAgentOnTicket dispatches each call to a DIFFERENT free worker in the same workspace', async () => {
+		// Mirrors Jan's `handleLaunchVisualDesigner` pattern: caller passes
+		// workspacePath and the hub picks a free worker atomically. Two back-
+		// to-back calls for the same workspace must land on two DIFFERENT
+		// workers (each one becomes busy after its dispatch sets
+		// currentSessionId), never the same worker twice.
+		const ctx = makeTestCtx({
+			persistentAgents: [
+				{ id: 'worker-1', name: 'Worker A', roleShort: 'Dev', roleFull: '', workspacePath: '~/project' },
+				{ id: 'worker-2', name: 'Worker B', roleShort: 'Dev', roleFull: '', workspacePath: '~/project' },
+			],
+		});
+
+		const first = await launchAgentOnTicket('~/project', 'T-1', 'Task T-1', 'https://clickup.test/T-1', ctx);
+		expect(first.success).toBe(true);
+		const firstWorker = first.worker;
+		expect(firstWorker).toBeTruthy();
+
+		const second = await launchAgentOnTicket('~/project', 'T-2', 'Task T-2', 'https://clickup.test/T-2', ctx);
+		expect(second.success).toBe(true);
+		expect(second.worker).toBeTruthy();
+		expect(second.worker).not.toBe(firstWorker);
+
+		// Both workers are now busy with their respective tickets.
+		const ticketsByName = Object.fromEntries(
+			ctx.persistentAgents.map(p => [p.name, p.currentTicketId]),
+		);
+		expect(ticketsByName['Worker A']).toBeTruthy();
+		expect(ticketsByName['Worker B']).toBeTruthy();
+		expect(ticketsByName['Worker A']).not.toBe(ticketsByName['Worker B']);
+	});
+
+	it('launchAgentOnTicket rejects when no free worker matches the workspace', async () => {
+		// All dev workers in this workspace are busy → no free worker → reject
+		// loudly so Darryl skips the ticket and the next pickup cycle retries.
+		// The new ticket must NOT be claimed in the registry (otherwise the
+		// next cycle would skip it forever).
 		const ctx = makeTestCtx({
 			persistentAgents: [
 				{
@@ -362,43 +390,39 @@ describe('invariant 4b: a worker only runs one ticket at a time', () => {
 					roleShort: 'Dev',
 					roleFull: '',
 					workspacePath: '~/project',
+					currentSessionId: 'already-busy',
 				},
 			],
 		});
 
-		// First dispatch — should succeed and mark the worker busy.
-		const first = launchAgentOnTicket('worker-1', 'T-1', 'Task T-1', 'https://clickup.test/T-1', ctx);
-		expect(first.success).toBe(true);
-		expect(ctx.persistentAgents[0].currentSessionId).toBeTruthy();
-
-		// Second dispatch on a DIFFERENT ticket but the SAME worker — must
-		// reject with a busy-worker error and must NOT claim the new ticket
-		// (otherwise the registry would block the next pickup cycle from
-		// retrying T-2 on a free worker).
-		const second = launchAgentOnTicket('worker-1', 'T-2', 'Task T-2', 'https://clickup.test/T-2', ctx);
-		expect(second.success).toBe(false);
-		expect(second.error).toMatch(/already running a session/i);
+		const result = await launchAgentOnTicket('~/project', 'T-2', 'Task T-2', 'https://clickup.test/T-2', ctx);
+		expect(result.success).toBe(false);
+		expect(result.error).toMatch(/no free dev worker/i);
 		expect(isTicketClaimed(ctx.dispatchRegistry, 'T-2')).toBe(false);
 	});
 
-	it('a second dispatch to the same worker does not overwrite the first session id', () => {
-		// Defense-in-depth assertion: even after the rejection in the test
-		// above, the worker's currentSessionId must still be the one from
-		// dispatch #1 (not undefined, not a fresh UUID).
+	it('a second dispatch in the same workspace does not overwrite the first worker\'s session', async () => {
+		// Defense-in-depth: dispatch #1 picks Worker A, dispatch #2 picks
+		// Worker B. Worker A's session id must survive untouched.
 		const ctx = makeTestCtx({
 			persistentAgents: [
-				{ id: 'worker-1', name: 'Worker', roleShort: 'Dev', roleFull: '', workspacePath: '~/project' },
+				{ id: 'worker-1', name: 'Worker A', roleShort: 'Dev', roleFull: '', workspacePath: '~/project' },
+				{ id: 'worker-2', name: 'Worker B', roleShort: 'Dev', roleFull: '', workspacePath: '~/project' },
 			],
 		});
 
-		launchAgentOnTicket('worker-1', 'T-1', 'Task T-1', 'https://clickup.test/T-1', ctx);
-		const sessionAfterFirst = ctx.persistentAgents[0].currentSessionId;
-		expect(sessionAfterFirst).toBeTruthy();
-
-		launchAgentOnTicket('worker-1', 'T-2', 'Task T-2', 'https://clickup.test/T-2', ctx);
-		expect(ctx.persistentAgents[0].currentSessionId).toBe(sessionAfterFirst);
-		// Ticket tracking from dispatch #1 is also preserved.
+		await launchAgentOnTicket('~/project', 'T-1', 'Task T-1', 'https://clickup.test/T-1', ctx);
+		const sessionA = ctx.persistentAgents[0].currentSessionId;
+		expect(sessionA).toBeTruthy();
 		expect(ctx.persistentAgents[0].currentTicketId).toBe('T-1');
+
+		await launchAgentOnTicket('~/project', 'T-2', 'Task T-2', 'https://clickup.test/T-2', ctx);
+		// Worker A's session id is unchanged, T-1 is still its ticket.
+		expect(ctx.persistentAgents[0].currentSessionId).toBe(sessionA);
+		expect(ctx.persistentAgents[0].currentTicketId).toBe('T-1');
+		// Worker B picked up T-2.
+		expect(ctx.persistentAgents[1].currentSessionId).toBeTruthy();
+		expect(ctx.persistentAgents[1].currentTicketId).toBe('T-2');
 	});
 });
 
