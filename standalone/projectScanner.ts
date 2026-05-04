@@ -198,9 +198,17 @@ export class ProjectScanner {
 			const files = fs.readdirSync(dirPath).filter(f => f.endsWith('.jsonl'));
 			for (const f of files) {
 				const fullPath = path.join(dirPath, f);
-				if (!proj.knownFiles.has(fullPath)) {
-					proj.knownFiles.add(fullPath);
-					// New file appeared — treat it as a just-started live session.
+				if (proj.knownFiles.has(fullPath)) continue;
+				proj.knownFiles.add(fullPath);
+				const sessionId = path.basename(f, '.jsonl');
+				// Only promote to `liveFiles` (and fire `onNewSession`) when ps aux
+				// has already seen the process. If Claude is still starting up, we
+				// defer to `checkStale` which will promote on the next tick once
+				// `ps aux` catches up. Otherwise the next stale-check would mistake
+				// the still-starting session for a dead one and clear the persistent
+				// agent's `currentSessionId` — which is exactly what made Darryl
+				// dispatch every subsequent ticket back to the same worker.
+				if (this.liveSessionIds.has(sessionId)) {
 					proj.liveFiles.add(fullPath);
 					this.callbacks.onNewSession(dirPath, fullPath, proj.name);
 				}
@@ -212,10 +220,19 @@ export class ProjectScanner {
 
 	private checkStale(): void {
 		for (const proj of this.projects.values()) {
-			// Only consider files we've previously reported as live. Without this
-			// guard every historical JSONL in ~/.claude/projects is fired at
-			// every tick (even ones whose process died long ago), and each fire
-			// triggers an `offlineAgents` broadcast — saturating the WS channel.
+			// Promote: any known file whose process is now visible in ps aux but
+			// hasn't been reported live yet (e.g. Claude finished starting between
+			// the file appearing on disk and the next ps-aux refresh).
+			for (const filePath of proj.knownFiles) {
+				if (proj.liveFiles.has(filePath)) continue;
+				const sessionId = path.basename(filePath, '.jsonl');
+				if (this.liveSessionIds.has(sessionId)) {
+					proj.liveFiles.add(filePath);
+					this.callbacks.onNewSession(proj.dir, filePath, proj.name);
+				}
+			}
+			// Demote: files we've previously reported live whose process has
+			// since disappeared. Fire `onSessionStale` exactly once per file.
 			for (const filePath of [...proj.liveFiles]) {
 				const sessionId = path.basename(filePath, '.jsonl');
 				if (!this.liveSessionIds.has(sessionId)) {

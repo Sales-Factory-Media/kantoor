@@ -23,7 +23,20 @@ import {
 	VISUAL_PM_ROLE_SHORT,
 } from './constants.js';
 import type { PersistentAgent } from './agentStore.js';
+import { expandHome } from './agentStore.js';
 import type { ServerContext } from './serverContext.js';
+
+/**
+ * Compare two workspace paths in a tilde-tolerant way. Persistent-agent
+ * records have historically stored workspace paths in either collapsed
+ * (`~/Projects/foo`) or expanded (`/Users/.../Projects/foo`) form depending on
+ * how the agent was created (CLI vs webview "Hire" form vs older versions).
+ * Direct `===` comparison fails when the two sides disagree on which form to
+ * use. Always normalize via `expandHome` before comparing.
+ */
+function samePath(a: string, b: string): boolean {
+	return expandHome(a) === expandHome(b);
+}
 
 /**
  * Dev workers are the persistent agents Darryl dispatches to. They are
@@ -61,7 +74,7 @@ export function findFreeDevWorker(
 	return persistentAgents.find(p =>
 		isDevWorker(p)
 		&& !p.currentSessionId
-		&& p.workspacePath === workspacePath,
+		&& samePath(p.workspacePath, workspacePath),
 	);
 }
 
