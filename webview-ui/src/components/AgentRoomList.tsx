@@ -99,7 +99,13 @@ export function AgentRoomList({
     vscode.postMessage({ type: 'focusAgent', id })
   }
 
-  const regularRooms = [...roomGroups.entries()].filter(([, g]) => !g.isSpecialRoom)
+  const regularRooms = [...roomGroups.entries()]
+    .filter(([, g]) => !g.isSpecialRoom)
+    .sort(([a], [b]) => {
+      if (!a) return 1
+      if (!b) return -1
+      return a.localeCompare(b, undefined, { sensitivity: 'base' })
+    })
   const specialRooms = [...roomGroups.entries()].filter(([, g]) => g.isSpecialRoom)
 
   return (
