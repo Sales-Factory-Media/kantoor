@@ -97,9 +97,14 @@ end run`;
 export function launchAgentSession(
 	sessionId: string, cwd: string, systemPrompt: string,
 	initialPrompt?: string,
-	options?: { mcpConfigPath?: string; extraFlags?: string[] }
+	options?: { mcpConfigPath?: string; extraFlags?: string[]; noFocus?: boolean }
 ): boolean {
 	try {
+		// `activate` brings iTerm2 to the front and steals focus from whatever the
+		// user is currently working in. For tabs spawned by Jan/Darryl auto-pickup
+		// cycles we skip activation so the new tab opens silently in the
+		// background.
+		const activateLine = options?.noFocus ? '' : 'activate';
 		const script = `
 on run argv
 	set sid to item 1 of argv
@@ -120,7 +125,7 @@ on run argv
 		set cmd to cmd & " " & quoted form of initialPrompt
 	end if
 	tell application "iTerm2"
-		activate
+		${activateLine}
 		if (count of windows) = 0 then
 			create window with default profile
 			tell current session of current window

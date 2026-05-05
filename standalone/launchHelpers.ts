@@ -44,6 +44,13 @@ export interface LaunchOptions {
 	 * can message peers. Used by Visual QA to ping the designer.
 	 */
 	withPeers?: boolean;
+	/**
+	 * If true, the new iTerm2 tab opens without bringing iTerm2 to the front.
+	 * Defaults to true here because every caller of `launchPersistentAgentSession`
+	 * is an auto-dispatch path (Jan/Darryl orchestrator batches, worker dispatch,
+	 * legacy Jan briefing) and those should not interrupt the user.
+	 */
+	noFocus?: boolean;
 }
 
 export interface LaunchResult {
@@ -94,12 +101,13 @@ export function launchPersistentAgentSession(
 		: mempalaceConfigPath;
 
 	const cwd = expandHome(agent.workspacePath || '~');
+	const noFocus = options.noFocus ?? true;
 	const launched = launchAgentSession(
 		newSessionId,
 		cwd,
 		systemPrompt,
 		initialTask,
-		{ mcpConfigPath, extraFlags: ['--permission-mode', 'auto'] },
+		{ mcpConfigPath, extraFlags: ['--permission-mode', 'auto'], noFocus },
 	);
 
 	if (launched) {
