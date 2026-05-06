@@ -342,15 +342,15 @@ describe('invariant 4: Darryl\'s spawn does not self-block his own /api/launch-a
 	});
 });
 
-// ── Invariant 4b: per-worker concurrency lock ─────────────────
+// ── Invariant 4b: per-machine dev slot lock ───────────────────
 
-describe('invariant 4b: a worker only runs one ticket at a time', () => {
-	it('launchAgentOnTicket dispatches each call to a DIFFERENT free worker in the same workspace', async () => {
-		// Mirrors Jan's `handleLaunchVisualDesigner` pattern: caller passes
-		// workspacePath and the hub picks a free worker atomically. Two back-
-		// to-back calls for the same workspace must land on two DIFFERENT
-		// workers (each one becomes busy after its dispatch sets
-		// currentSessionId), never the same worker twice.
+describe('invariant 4b: only one dev ticket per machine at a time', () => {
+	it('first dispatch lands locally; second cascades because the local slot is busy', async () => {
+		// Per-machine slot lock (findBusyDevSlot): once a dev worker on this
+		// machine has a currentSessionId, further local launches return
+		// slotBusy and the dispatcher cascades to a remote worker. With no
+		// remote workers connected, the second dispatch must fail loudly
+		// rather than piling onto the same machine.
 		const ctx = makeTestCtx({
 			persistentAgents: [
 				{ id: 'worker-1', name: 'Worker A', roleShort: 'Dev', roleFull: '', workspacePath: '~/project' },
@@ -360,28 +360,21 @@ describe('invariant 4b: a worker only runs one ticket at a time', () => {
 
 		const first = await launchAgentOnTicket('~/project', 'T-1', 'Task T-1', 'https://clickup.test/T-1', ctx);
 		expect(first.success).toBe(true);
-		const firstWorker = first.worker;
-		expect(firstWorker).toBeTruthy();
+		expect(first.worker).toBeTruthy();
 
 		const second = await launchAgentOnTicket('~/project', 'T-2', 'Task T-2', 'https://clickup.test/T-2', ctx);
-		expect(second.success).toBe(true);
-		expect(second.worker).toBeTruthy();
-		expect(second.worker).not.toBe(firstWorker);
-
-		// Both workers are now busy with their respective tickets.
-		const ticketsByName = Object.fromEntries(
-			ctx.persistentAgents.map(p => [p.name, p.currentTicketId]),
-		);
-		expect(ticketsByName['Worker A']).toBeTruthy();
-		expect(ticketsByName['Worker B']).toBeTruthy();
-		expect(ticketsByName['Worker A']).not.toBe(ticketsByName['Worker B']);
+		expect(second.success).toBe(false);
+		expect(second.error).toMatch(/local dev slot busy/i);
+		expect(second.error).toMatch(/no idle remote/i);
+		// T-2 must be released so the next pickup cycle can retry once a
+		// machine frees up.
+		expect(isTicketClaimed(ctx.dispatchRegistry, 'T-2')).toBe(false);
 	});
 
-	it('launchAgentOnTicket rejects when no free worker matches the workspace', async () => {
-		// All dev workers in this workspace are busy → no free worker → reject
-		// loudly so Darryl skips the ticket and the next pickup cycle retries.
-		// The new ticket must NOT be claimed in the registry (otherwise the
-		// next cycle would skip it forever).
+	it('rejects when the local slot is busy and no idle remote workers are connected', async () => {
+		// Single dev worker, already busy → local slot busy → cascade tries
+		// fleet, finds no remote workers, returns failure. The new ticket
+		// must NOT be claimed (otherwise the next cycle would skip it forever).
 		const ctx = makeTestCtx({
 			persistentAgents: [
 				{
@@ -397,13 +390,14 @@ describe('invariant 4b: a worker only runs one ticket at a time', () => {
 
 		const result = await launchAgentOnTicket('~/project', 'T-2', 'Task T-2', 'https://clickup.test/T-2', ctx);
 		expect(result.success).toBe(false);
-		expect(result.error).toMatch(/no free dev worker/i);
+		expect(result.error).toMatch(/local dev slot busy/i);
 		expect(isTicketClaimed(ctx.dispatchRegistry, 'T-2')).toBe(false);
 	});
 
-	it('a second dispatch in the same workspace does not overwrite the first worker\'s session', async () => {
-		// Defense-in-depth: dispatch #1 picks Worker A, dispatch #2 picks
-		// Worker B. Worker A's session id must survive untouched.
+	it('a second dispatch does not overwrite the first worker\'s session', async () => {
+		// Defense-in-depth: dispatch #1 picks Worker A. Dispatch #2 hits the
+		// per-machine slot lock and fails (no remote fleet). Worker A's session
+		// id and ticket must survive untouched, and Worker B must remain idle.
 		const ctx = makeTestCtx({
 			persistentAgents: [
 				{ id: 'worker-1', name: 'Worker A', roleShort: 'Dev', roleFull: '', workspacePath: '~/project' },
@@ -416,13 +410,15 @@ describe('invariant 4b: a worker only runs one ticket at a time', () => {
 		expect(sessionA).toBeTruthy();
 		expect(ctx.persistentAgents[0].currentTicketId).toBe('T-1');
 
-		await launchAgentOnTicket('~/project', 'T-2', 'Task T-2', 'https://clickup.test/T-2', ctx);
+		const second = await launchAgentOnTicket('~/project', 'T-2', 'Task T-2', 'https://clickup.test/T-2', ctx);
+		expect(second.success).toBe(false);
 		// Worker A's session id is unchanged, T-1 is still its ticket.
 		expect(ctx.persistentAgents[0].currentSessionId).toBe(sessionA);
 		expect(ctx.persistentAgents[0].currentTicketId).toBe('T-1');
-		// Worker B picked up T-2.
-		expect(ctx.persistentAgents[1].currentSessionId).toBeTruthy();
-		expect(ctx.persistentAgents[1].currentTicketId).toBe('T-2');
+		// Worker B was NOT clobbered — it stays idle because the local slot
+		// was already taken by Worker A.
+		expect(ctx.persistentAgents[1].currentSessionId).toBeUndefined();
+		expect(ctx.persistentAgents[1].currentTicketId).toBeUndefined();
 	});
 });
 

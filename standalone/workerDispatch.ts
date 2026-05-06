@@ -56,7 +56,8 @@ import {
 	saveAgentMemoryFromWorker,
 } from './workerRegistry.js';
 import { loadKnownProjects } from '../src/projectStore.js';
-import { findBusyDevSlot, findBusyVisualSlot, findFreeDevWorker } from './capacity.js';
+import { findBusyDevSlot, findBusyVisualSlot, findFreeDevWorker, isDevWorker } from './capacity.js';
+import { expandHome } from './agentStore.js';
 import {
 	EXIT_REMINDER,
 	launchPersistentAgentSession,
@@ -78,6 +79,14 @@ export interface LocalLaunchOutcome {
 	slotBusy?: boolean;
 	/** Picked worker name on success (used for logging / response payload). */
 	worker?: string;
+	/**
+	 * The persistent-agent id this dispatch is targeting, when known. The
+	 * dev-worker spec sets this even on slotBusy outcomes so the cascade can
+	 * tell the remote machine "use THIS agent" — workers can't always resolve
+	 * the right agent by workspace path alone (paths stored on the hub may not
+	 * normalize cleanly when the worker has a different home dir).
+	 */
+	agentId?: string;
 	error?: string;
 }
 
@@ -115,7 +124,11 @@ export async function dispatchWorker(
 	}
 
 	if (!ctx.isWorkerMode && local.slotBusy && spec.fleet) {
-		const fleet = await dispatchToFleet(msg, ctx, spec.fleet.rpcType, spec.fleet.role, local.error);
+		// Forward the chosen agentId (when the local handler knew which agent
+		// would have run) so the worker can look up the agent directly instead
+		// of re-resolving by workspace path.
+		const fleetMsg = local.agentId ? { ...msg, agentId: local.agentId } : msg;
+		const fleet = await dispatchToFleet(fleetMsg, ctx, spec.fleet.rpcType, spec.fleet.role, local.error);
 		if (!fleet.success && claimed) releaseTicket(ctx.dispatchRegistry, ticketId);
 		return fleet;
 	}
@@ -221,11 +234,43 @@ function tryLaunchDevWorkerLocal(msg: Record<string, unknown>, ctx: ServerContex
 	const ticketUrl = msg.ticketUrl as string;
 	const useTeam = msg.useTeam as boolean | undefined;
 	const aiReviewMode = msg.aiReviewMode as boolean | undefined;
+	const explicitAgentId = msg.agentId as string | undefined;
 	const brief = typeof msg.additionalPrompt === 'string' ? msg.additionalPrompt.trim() : '';
 
 	if (!workspacePath) return { success: false, error: 'Missing required field: workspacePath' };
 	if (!ticketId || !ticketName || !ticketUrl) {
 		return { success: false, error: 'Missing required fields: ticketId, ticketName, ticketUrl' };
+	}
+
+	// Resolve the canonical agent for this dispatch. When the hub cascades to a
+	// worker it pins a specific agent via msg.agentId; otherwise we fall back
+	// to the workspace-based pick. Looking up a busy-but-matching agent here
+	// (instead of returning early on the slot lock) means the cascade payload
+	// can carry the agent's id, which lets the remote machine bypass workspace
+	// matching entirely (paths stored on the hub may not normalize cleanly
+	// when the worker has a different home dir).
+	let pa = explicitAgentId
+		? ctx.persistentAgents.find(p => p.id === explicitAgentId && isDevWorker(p))
+		: undefined;
+	if (!pa) {
+		pa = findFreeDevWorker(ctx.persistentAgents, workspacePath);
+	}
+	if (!pa) {
+		// No FREE worker matches; check whether ANY dev worker exists for the
+		// workspace. If yes, we still need to surface slotBusy so the dispatcher
+		// cascades — but with the canonical agent's id attached.
+		const anyForWorkspace = ctx.persistentAgents.find(p =>
+			isDevWorker(p) && expandHome(p.workspacePath ?? '') === expandHome(workspacePath),
+		);
+		if (anyForWorkspace) {
+			return {
+				success: false,
+				slotBusy: true,
+				agentId: anyForWorkspace.id,
+				error: `Local dev slot busy: "${anyForWorkspace.name}" is already running on this machine.`,
+			};
+		}
+		return { success: false, error: `No free dev worker available for workspace "${workspacePath}".` };
 	}
 
 	// Per-machine dev slot lock — same shape as Jan's visual-slot lock. The
@@ -237,15 +282,9 @@ function tryLaunchDevWorkerLocal(msg: Record<string, unknown>, ctx: ServerContex
 		return {
 			success: false,
 			slotBusy: true,
+			agentId: pa.id,
 			error: `Local dev slot busy: "${busySlot.name}" is already running on this machine.`,
 		};
-	}
-
-	// Atomic worker pick: find any free dev worker (no live session) whose
-	// workspace matches the ticket.
-	const pa = findFreeDevWorker(ctx.persistentAgents, workspacePath);
-	if (!pa) {
-		return { success: false, error: `No free dev worker available for workspace "${workspacePath}".` };
 	}
 
 	const projectDescription = getProjectDescription(pa.workspacePath);
@@ -305,7 +344,7 @@ export function launchAgentOnTicket(
 	ticketName: string,
 	ticketUrl: string,
 	ctx: ServerContext,
-	options?: { useTeam?: boolean; additionalPrompt?: string; aiReviewMode?: boolean },
+	options?: { useTeam?: boolean; additionalPrompt?: string; aiReviewMode?: boolean; agentId?: string },
 ): Promise<{ success: boolean; error?: string; worker?: string }> {
 	const msg: Record<string, unknown> = {
 		workspacePath,
@@ -315,6 +354,7 @@ export function launchAgentOnTicket(
 		additionalPrompt: options?.additionalPrompt,
 		useTeam: options?.useTeam,
 		aiReviewMode: options?.aiReviewMode,
+		agentId: options?.agentId,
 	};
 	const spec = options?.aiReviewMode ? devWorkerAiReviewSpec : devWorkerSpec;
 	return dispatchWorker(msg, ctx, spec);
@@ -338,7 +378,7 @@ export async function handleClickupStartWork(msg: Record<string, unknown>, ctx: 
 		ctx.broadcastSink.postMessage({ type: 'clickupStartWorkError', error: 'Missing workspacePath (and agentId could not be resolved).' });
 		return;
 	}
-	const result = await launchAgentOnTicket(workspacePath, ticketId, ticketName, ticketUrl, ctx, { useTeam, additionalPrompt });
+	const result = await launchAgentOnTicket(workspacePath, ticketId, ticketName, ticketUrl, ctx, { useTeam, additionalPrompt, agentId });
 	if (!result.success) {
 		ctx.broadcastSink.postMessage({ type: 'clickupStartWorkError', error: result.error });
 	}

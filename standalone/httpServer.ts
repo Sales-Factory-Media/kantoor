@@ -68,7 +68,7 @@ async function handleApiLaunchAgent(json: Record<string, unknown>, res: http.Ser
 	const additionalPrompt = json.additionalPrompt as string | undefined;
 	const aiReviewMode = json.aiReviewMode as boolean | undefined;
 
-	const result = await launchAgentOnTicket(workspacePath, ticketId, ticketName, ticketUrl, ctx, { useTeam, additionalPrompt, aiReviewMode });
+	const result = await launchAgentOnTicket(workspacePath, ticketId, ticketName, ticketUrl, ctx, { useTeam, additionalPrompt, aiReviewMode, agentId });
 	if (result.success) {
 		res.writeHead(200);
 		res.end(JSON.stringify({ success: true, worker: result.worker }));

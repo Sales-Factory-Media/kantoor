@@ -10,7 +10,7 @@ import {
 } from './constants.js';
 import { WORKER_ASSIGNMENTS_FILE, SETTINGS_DIR } from './serverContext.js';
 import type { ServerContext, WorkerInfo, WorkerAssignment } from './serverContext.js';
-import { loadPersistentAgents, getAgentMemoryPath, ensureAgentMemory } from './agentStore.js';
+import { loadPersistentAgents, getAgentMemoryPath, ensureAgentMemory, collapseHome } from './agentStore.js';
 import type { PersistentAgent } from './agentStore.js';
 import { releaseTicket } from './dispatchRegistry.js';
 
@@ -70,8 +70,17 @@ export function registerWorker(
 
 	console.log(`[Hub] Worker registered: "${name}" (${hostname}) roles=[${roles.join(',')}]`);
 
-	// Send registration response with agents and clickup config
-	const agents = loadPersistentAgents();
+	// Send registration response with agents and clickup config. Collapse
+	// workspace paths using the HUB's home dir before shipping — otherwise an
+	// absolute hub path like "/Users/<hubUser>/Projects/foo" arrives at a
+	// worker with a different home dir, the worker's collapseHome can't
+	// touch it, and downstream samePath comparisons against "~/Projects/foo"
+	// (expanded with the worker's home) silently fail. Collapsing here means
+	// the worker always sees "~/Projects/foo".
+	const agents = loadPersistentAgents().map(a => ({
+		...a,
+		workspacePath: a.workspacePath ? collapseHome(a.workspacePath) : a.workspacePath,
+	}));
 	// Derive the hub's reachable address from the WebSocket's local address
 	// (the IP the worker actually connected to), falling back to os.hostname()
 	const socket = (ws as unknown as { _socket?: { localAddress?: string } })._socket;

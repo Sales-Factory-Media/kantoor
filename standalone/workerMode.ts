@@ -175,6 +175,7 @@ async function handleLaunchRpcFromHub(
 				useTeam: launchMsg.useTeam as boolean | undefined,
 				additionalPrompt: launchMsg.additionalPrompt as string | undefined,
 				aiReviewMode: launchMsg.aiReviewMode as boolean | undefined,
+				agentId: launchMsg.agentId as string | undefined,
 			},
 		);
 	}
