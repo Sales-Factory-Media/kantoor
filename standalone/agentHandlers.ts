@@ -160,7 +160,7 @@ export function handleLaunchAgent(msg: Record<string, unknown>, ctx: ServerConte
 		? `${callInTask}\n\nCreate an agent team to work on this. Break the work into parallel tasks and spawn teammates to handle them.`
 		: callInTask;
 	const task = teamTask
-		? teamTask + '\n\nWhen you have finished this work, run the `## Self-Exit` bash block from your system prompt to close your iTerm tab. Don\'t run it until everything is saved.'
+		? teamTask + '\n\nWhen you have finished this work, run the `## Self-Exit` bash block from your system prompt to close your iTerm tab. Don\'t run it until everything is saved and the mempalace updated.'
 		: undefined;
 	if (!launchPersistentAgent(pa, persistentAgents, task)) {
 		console.log(`[Standalone] Failed to launch agent session for ${pa.name}`);
