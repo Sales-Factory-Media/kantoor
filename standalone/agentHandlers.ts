@@ -16,7 +16,13 @@ import { readJson, writeJson, getOfflineAgents } from './serverHelpers.js';
 import { SEATS_FILE, SETTINGS_FILE } from './serverContext.js';
 import type { ServerContext } from './serverContext.js';
 
-// ── Launch helper (shared by agent handlers + clickup handlers) ─
+// ── Launch helper (manual UI launches only) ──────────────────
+// This helper is only used by the manual UI paths (handleLaunchAgent,
+// handleSaveAgentIdentity → launch). Manual launches pass the system prompt
+// with `includeSelfExit=false` because the user opened that tab themselves —
+// auto-closing it after the work would be surprising. Automated dispatchers
+// (Darryl/Jan orchestrators, workerDispatch) build their prompts directly
+// and keep the default self-exit block.
 export function launchPersistentAgent(pa: PersistentAgent, persistentAgents: PersistentAgent[], callInTask?: string, mempalaceHost?: string): boolean {
 	const newSessionId = crypto.randomUUID();
 	pa.currentSessionId = newSessionId;
@@ -24,7 +30,7 @@ export function launchPersistentAgent(pa: PersistentAgent, persistentAgents: Per
 
 	const knownProjects = loadKnownProjects();
 	const project = knownProjects.find(p => p.workspacePath === pa.workspacePath);
-	const prompt = buildSystemPrompt(pa, project?.description);
+	const prompt = buildSystemPrompt(pa, project?.description, false);
 	const cwd = expandHome(pa.workspacePath || '~');
 	const mcpConfigPath = ensureMempalaceMcpConfig(mempalaceHost);
 	console.log(`[Standalone] Launching agent "${pa.name}" with session ${newSessionId} in ${cwd}${callInTask ? ` with task: ${callInTask}` : ''}`);
@@ -153,12 +159,12 @@ export function handleLaunchAgent(msg: Record<string, unknown>, ctx: ServerConte
 		console.log(`[Standalone] Persistent agent ${agentId} not found`);
 		return;
 	}
-	const teamTask = useTeam && callInTask
+	// Manual call-in from the UI — no self-exit reminder. The user launched
+	// this tab and will decide when to close it; automated dispatchers handle
+	// the auto-close path themselves (see workerDispatch / orchestratorDispatch).
+	const task = useTeam && callInTask
 		? `${callInTask}\n\nCreate an agent team to work on this. Break the work into parallel tasks and spawn teammates to handle them.`
 		: callInTask;
-	const task = teamTask
-		? teamTask + '\n\nWhen you have finished this work, run the `## Self-Exit` bash block from your system prompt to close your iTerm tab. Don\'t run it until everything is saved and the mempalace updated.'
-		: undefined;
 	if (!launchPersistentAgent(pa, persistentAgents, task)) {
 		console.log(`[Standalone] Failed to launch agent session for ${pa.name}`);
 	}

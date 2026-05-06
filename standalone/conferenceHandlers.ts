@@ -45,8 +45,10 @@ export function handleStartConference(msg: Record<string, unknown>, ctx: ServerC
 	const knownProjects = loadKnownProjects();
 	const project1 = knownProjects.find(p => p.workspacePath === pa1.workspacePath);
 	const project2 = knownProjects.find(p => p.workspacePath === pa2.workspacePath);
-	const prompt1 = buildSystemPrompt(pa1, project1?.description) + buildConferencePrompt(pa1, pa2.name, topic);
-	const prompt2 = buildSystemPrompt(pa2, project2?.description) + buildConferencePrompt(pa2, pa1.name, topic);
+	// Conferences are user-triggered from the UI — skip the self-exit block so
+	// neither participant auto-closes its iTerm tab when the chat wraps up.
+	const prompt1 = buildSystemPrompt(pa1, project1?.description, false) + buildConferencePrompt(pa1, pa2.name, topic);
+	const prompt2 = buildSystemPrompt(pa2, project2?.description, false) + buildConferencePrompt(pa2, pa1.name, topic);
 	const initialPrompt1 = `Conference topic: ${topic}. Start NOW: call mcp__peers__list_peers with scope="machine" to find ${pa2.name}, then send_message with your introduction. Use ONLY MCP peer tools, NOT SendMessage/Agent.`;
 	const initialPrompt2 = `Conference topic: ${topic}. Start NOW: call mcp__peers__check_messages to see if ${pa1.name} has messaged you, then reply via mcp__peers__send_message. If no message yet, call mcp__peers__list_peers with scope="machine" to find them. Use ONLY MCP peer tools, NOT SendMessage/Agent.`;
 

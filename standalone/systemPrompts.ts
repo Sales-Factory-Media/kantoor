@@ -157,7 +157,12 @@ function buildMemoryBlock(roleShort: string | undefined, sessionCount?: number, 
 	return lines;
 }
 
-export function buildSystemPrompt(agent: PersistentAgent, projectDescription?: string): string {
+// `includeSelfExit` defaults to true so automated dispatchers (workerDispatch
+// for dev workers, conference, etc.) keep the self-close block. Manual UI
+// launches (handleLaunchAgent, handleSaveAgentIdentity → launchPersistentAgent,
+// handleStartConference) pass `false` because the user is driving — we never
+// want a hand-launched character to silently kill its own iTerm tab.
+export function buildSystemPrompt(agent: PersistentAgent, projectDescription?: string, includeSelfExit: boolean = true): string {
 	const lines = [
 		`You are ${agent.name}.`,
 	];
@@ -215,7 +220,9 @@ export function buildSystemPrompt(agent: PersistentAgent, projectDescription?: s
 		'4. If the code library genuinely lacks an equivalent for something the Figma uses, STOP and raise it in a ClickUp comment on the ticket (tag the design-system owner if you know who that is). Do NOT silently roll your own — a one-off inline component today is a visual-drift bug tomorrow.',
 		'5. If the Figma itself uses a plain frame where a library component obviously should have been used (designer oversight), flag it in the same comment — don\'t mirror the oversight in code.',
 	);
-	lines.push(...buildSelfExitBlock());
+	if (includeSelfExit) {
+		lines.push(...buildSelfExitBlock());
+	}
 	return lines.join('\n');
 }
 
