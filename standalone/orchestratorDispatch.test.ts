@@ -82,6 +82,7 @@ function makeCtx(persistentAgents: PersistentAgent[] = []): ServerContext {
 		clickupTimer: null,
 		isWorkerMode: false,
 		workerIdentity: { name: 'Hub', color: '#000', roles: ['dev', 'designer'] },
+		noLocalDev: false,
 		workers: new Map(),
 		workerAssignments: [],
 		pendingWorkerRequests: new Map(),

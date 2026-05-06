@@ -111,6 +111,7 @@ function makeTestCtx(overrides: TestCtxOverrides = {}): ServerContext {
 		clickupTimer: null,
 		isWorkerMode: overrides.isWorkerMode ?? false,
 		workerIdentity: { name: 'Hub', color: '#000', roles: overrides.hubRoles ?? ['dev', 'designer'] },
+		noLocalDev: false,
 		workers: overrides.workers ?? new Map(),
 		workerAssignments: [],
 		pendingWorkerRequests: new Map(),

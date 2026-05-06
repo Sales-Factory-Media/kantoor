@@ -218,10 +218,15 @@ export function computeDevFleetCapacity(ctx: ServerContext): DevFleetCapacity {
 	let total = 0;
 	let active = 0;
 
-	for (const pa of ctx.persistentAgents) {
-		if (!isDevWorker(pa)) continue;
-		total++;
-		if (pa.currentSessionId) active++;
+	// In --no-local-dev mode the hub never accepts a dev dispatch, so its
+	// persistent dev workers shouldn't inflate Darryl's batch size — capacity
+	// is purely the remote fleet.
+	if (!ctx.noLocalDev) {
+		for (const pa of ctx.persistentAgents) {
+			if (!isDevWorker(pa)) continue;
+			total++;
+			if (pa.currentSessionId) active++;
+		}
 	}
 
 	for (const worker of ctx.workers.values()) {

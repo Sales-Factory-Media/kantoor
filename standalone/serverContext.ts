@@ -94,6 +94,16 @@ export interface ServerContext {
 	// Multi-worker
 	isWorkerMode: boolean;
 	workerIdentity: WorkerIdentity | null;
+	/**
+	 * When true, the hub refuses to run dev (Darryl-dispatched) work locally
+	 * and always cascades to a remote worker — useful when the hub machine is
+	 * also being used for hands-on programming and the user doesn't want
+	 * Darryl-launched implementation sessions stealing focus or resources.
+	 *
+	 * Hub-only flag; ignored on remote workers (they accept whatever the hub
+	 * sends them).
+	 */
+	noLocalDev: boolean;
 	workers: Map<string, WorkerInfo>; // keyed by worker name
 	workerAssignments: WorkerAssignment[];
 	pendingWorkerRequests: Map<string, PendingWorkerRequest>; // keyed by requestId

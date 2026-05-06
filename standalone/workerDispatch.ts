@@ -242,6 +242,18 @@ function tryLaunchDevWorkerLocal(msg: Record<string, unknown>, ctx: ServerContex
 		return { success: false, error: 'Missing required fields: ticketId, ticketName, ticketUrl' };
 	}
 
+	// Hub running with --no-local-dev: short-circuit straight to fleet cascade.
+	// The hub machine is reserved for hands-on programming and must never host
+	// a Darryl-dispatched dev session. We don't carry an agentId so the remote
+	// worker resolves the agent off its own roster via workspacePath.
+	if (ctx.noLocalDev) {
+		return {
+			success: false,
+			slotBusy: true,
+			error: 'Hub is in --no-local-dev mode; delegating to a remote worker.',
+		};
+	}
+
 	// Resolve the canonical agent for this dispatch. When the hub cascades to a
 	// worker it pins a specific agent via msg.agentId; otherwise we fall back
 	// to the workspace-based pick. Looking up a busy-but-matching agent here

@@ -71,12 +71,13 @@ import { startWorkerMode, stopWorkerMode, reportDesignerSessionEndedToHub, repor
 
 // ── CLI argument parsing ────────────────────────────────────
 
-function parseCliArgs(): { hubUrl: string | null; name: string | null; color: string | null; roles: string[] | null } {
+function parseCliArgs(): { hubUrl: string | null; name: string | null; color: string | null; roles: string[] | null; noLocalDev: boolean } {
 	const args = process.argv.slice(2);
 	let hubUrl: string | null = null;
 	let name: string | null = null;
 	let color: string | null = null;
 	let roles: string[] | null = null;
+	let noLocalDev = false;
 
 	for (const arg of args) {
 		if (arg.startsWith('--hub=')) hubUrl = arg.slice('--hub='.length);
@@ -85,6 +86,7 @@ function parseCliArgs(): { hubUrl: string | null; name: string | null; color: st
 		else if (arg.startsWith('--roles=')) {
 			roles = arg.slice('--roles='.length).split(',').map(r => r.trim()).filter(r => r.length > 0);
 		}
+		else if (arg === '--no-local-dev') noLocalDev = true;
 	}
 
 	// Also check env vars as fallback
@@ -92,8 +94,11 @@ function parseCliArgs(): { hubUrl: string | null; name: string | null; color: st
 	if (!roles && process.env.WORKER_ROLES) {
 		roles = process.env.WORKER_ROLES.split(',').map(r => r.trim()).filter(r => r.length > 0);
 	}
+	if (!noLocalDev && process.env.NO_LOCAL_DEV && process.env.NO_LOCAL_DEV !== '0' && process.env.NO_LOCAL_DEV.toLowerCase() !== 'false') {
+		noLocalDev = true;
+	}
 
-	return { hubUrl, name, color, roles };
+	return { hubUrl, name, color, roles, noLocalDev };
 }
 
 function loadOrCreateWorkerIdentity(
@@ -396,6 +401,10 @@ async function main(): Promise<void> {
 		// Multi-worker
 		isWorkerMode,
 		workerIdentity,
+		// Hub-only: when true, Darryl never runs dev work on this machine and
+		// always cascades to a remote worker. Ignored when this process is itself
+		// a worker (workers accept whatever the hub dispatches).
+		noLocalDev: !isWorkerMode && cliArgs.noLocalDev,
 		workers: new Map(),
 		workerAssignments: isWorkerMode ? [] : loadAssignments(),
 		pendingWorkerRequests: new Map(),
@@ -625,6 +634,9 @@ async function main(): Promise<void> {
 		console.log(`  Listening on http://${listenHost === '0.0.0.0' ? 'localhost' : listenHost}:${SERVER_PORT}\n`);
 		if (isWorkerMode) {
 			console.log(`  Hub: ${cliArgs.hubUrl}\n`);
+		}
+		if (ctx.noLocalDev) {
+			console.log(`  Dev dispatch: workers-only (--no-local-dev) — Darryl will never run dev work on the hub.\n`);
 		}
 		console.log(`  Watching ~/.claude/projects/ for agent sessions...\n`);
 	});
