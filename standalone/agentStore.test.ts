@@ -26,13 +26,13 @@ vi.mock('./serverHelpers.js', () => ({
 import * as fs from 'fs';
 import {
 	pickRandomName,
-	getAgentMemoryPath,
 	ensureMempalaceMcpConfig,
 	mergeMcpConfigs,
 } from './agentStore.js';
 import {
 	buildSystemPrompt,
 	buildDarrylSystemPrompt,
+	skillsRoomForRole,
 } from './systemPrompts.js';
 import type { RosterEntry } from './systemPrompts.js';
 
@@ -117,12 +117,16 @@ describe('buildSystemPrompt', () => {
 		expect(prompt).not.toContain('Head of quality');
 	});
 
-	it('includes memory path and MemPalace instructions', () => {
-		const agent = makeAgent();
+	it('includes MemPalace + skills wing instructions', () => {
+		const agent = makeAgent({ roleShort: 'Manager' });
 		const prompt = buildSystemPrompt(agent);
-		expect(prompt).toContain('MEMORY.md');
 		expect(prompt).toContain('MemPalace');
 		expect(prompt).toContain('mempalace_search');
+		expect(prompt).toContain('wing="skills"');
+		// Skills room is derived from roleShort
+		expect(prompt).toContain('`manager`');
+		// And the markdown layer is gone
+		expect(prompt).not.toContain('MEMORY.md');
 	});
 
 	it('omits role line when both roleShort and roleFull are empty', () => {
@@ -204,11 +208,12 @@ describe('buildDarrylSystemPrompt', () => {
 		expect(prompt).toContain('Customer management app');
 	});
 
-	it('includes memory path and MemPalace instructions', () => {
+	it('includes MemPalace + skills wing instructions', () => {
 		const prompt = buildDarrylSystemPrompt(darryl, makeRoster(), 3333);
-		expect(prompt).toContain('MEMORY.md');
 		expect(prompt).toContain('MemPalace');
 		expect(prompt).toContain('mempalace_search');
+		expect(prompt).toContain('wing="skills"');
+		expect(prompt).not.toContain('MEMORY.md');
 	});
 
 	it('includes prominent rules section', () => {
@@ -218,10 +223,19 @@ describe('buildDarrylSystemPrompt', () => {
 	});
 });
 
-describe('getAgentMemoryPath', () => {
-	it('returns correct path for agent ID', () => {
-		const memPath = getAgentMemoryPath('abc-123');
-		expect(memPath).toBe('/mock-home/.pixel-agents/agents/abc-123/MEMORY.md');
+describe('skillsRoomForRole', () => {
+	it('lowercases and kebab-cases multi-word roles', () => {
+		expect(skillsRoomForRole('Visual Designer')).toBe('visual-designer');
+		expect(skillsRoomForRole('UX Quality Reviewer')).toBe('ux-quality-reviewer');
+	});
+
+	it('strips non-ascii characters', () => {
+		expect(skillsRoomForRole('Foreman!')).toBe('foreman');
+	});
+
+	it('falls back to "general" for empty/undefined roles', () => {
+		expect(skillsRoomForRole('')).toBe('general');
+		expect(skillsRoomForRole(undefined)).toBe('general');
 	});
 });
 

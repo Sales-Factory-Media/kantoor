@@ -1,11 +1,8 @@
 import * as os from 'os';
-import * as fs from 'fs';
 import { WebSocket } from 'ws';
 import {
 	loadPersistentAgents,
 	savePersistentAgents,
-	getAgentMemoryPath,
-	ensureAgentMemory,
 	collapseHome,
 } from './agentStore.js';
 import type { PersistentAgent } from './agentStore.js';
@@ -124,24 +121,7 @@ async function handleLaunchRpcFromHub(
 	const requestId = msg.requestId as string | undefined;
 	const payload = (msg.payload as Record<string, unknown>) ?? {};
 
-	// If the hub shipped agent memories alongside the launch, write them first so
-	// the designer we're about to spawn has up-to-date context.
-	const agentMemories = payload.agentMemories as Record<string, string> | undefined;
-	if (agentMemories) {
-		for (const [agentId, content] of Object.entries(agentMemories)) {
-			ensureAgentMemory(agentId);
-			fs.writeFileSync(getAgentMemoryPath(agentId), content, 'utf-8');
-		}
-		// Must use the setter — direct ctx.persistentAgents assignment leaves the
-		// closure variable in server.ts pointing at the old array, and then
-		// findPersistentAgentBySession can't find the session on stale-detection
-		// so the worker never tells the hub it's free.
-		ctx.setPersistentAgents(loadPersistentAgents());
-	}
-
-	// Strip memories before forwarding — the inner handlers don't expect them
 	const launchMsg: Record<string, unknown> = { ...payload };
-	delete launchMsg.agentMemories;
 
 	let result: { success: boolean; error?: string; worker?: string };
 	if (rpcType === 'launchDesigner') {
@@ -204,8 +184,6 @@ export function reportDesignerSessionEndedToHub(
 		ticketUrl: string;
 		designerName: string;
 		workspacePath: string;
-		updatedMemory?: string;
-		agentId?: string;
 	},
 	ctx: ServerContext,
 ): void {
@@ -228,9 +206,8 @@ export function reportTicketCompleteToHub(
 	ctx: ServerContext,
 ): void {
 	if (!ctx.hubWs || ctx.hubWs.readyState !== WebSocket.OPEN) return;
-	const updatedMemories = collectLocalMemories(ctx.persistentAgents);
 	try {
-		ctx.hubWs.send(JSON.stringify({ type: 'ticketComplete', ticketId, updatedMemories }));
+		ctx.hubWs.send(JSON.stringify({ type: 'ticketComplete', ticketId }));
 	} catch (err) {
 		console.error(`[Worker] Failed to report ticketComplete to hub:`, err);
 	}
@@ -269,7 +246,7 @@ function mergeAgents(hubAgents: PersistentAgent[]): void {
 
 	// Normalize workspace paths from hub (collapse absolute paths to ~/...)
 	// Also strip currentSessionId — hub sessions run on the hub, not on this worker.
-	// Workers retain agent memory via MEMORY.md files but always start fresh sessions.
+	// Workers always start fresh sessions; shared memory lives in MemPalace.
 	for (const agent of hubAgents) {
 		if (agent.workspacePath) {
 			agent.workspacePath = collapseHome(agent.workspacePath);
@@ -289,19 +266,6 @@ function mergeAgents(hubAgents: PersistentAgent[]): void {
 
 	savePersistentAgents(merged);
 	console.log(`[Worker] Merged agents: ${hubAgents.length} from hub + ${merged.length - hubAgents.length} local-only = ${merged.length} total`);
-}
-
-function collectLocalMemories(agents: PersistentAgent[]): Record<string, string> {
-	const memories: Record<string, string> = {};
-	for (const agent of agents) {
-		const memPath = getAgentMemoryPath(agent.id);
-		try {
-			if (fs.existsSync(memPath)) {
-				memories[agent.id] = fs.readFileSync(memPath, 'utf-8');
-			}
-		} catch { /* skip */ }
-	}
-	return memories;
 }
 
 export function stopWorkerMode(): void {

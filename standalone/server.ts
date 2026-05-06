@@ -1,6 +1,5 @@
 import * as path from 'path';
 import * as crypto from 'crypto';
-import * as fs from 'fs';
 import { WebSocketServer } from 'ws';
 import type { WebSocket } from 'ws';
 import type { MessageSink } from '../src/types.js';
@@ -12,9 +11,7 @@ import {
 	loadPersistentAgents,
 	savePersistentAgents,
 	pickRandomName,
-	ensureAgentMemory,
 	seedDesignTeams,
-	getAgentMemoryPath,
 } from './agentStore.js';
 import { buildOrganogram } from './organogram.js';
 import type { PersistentAgent } from './agentStore.js';
@@ -448,7 +445,6 @@ async function main(): Promise<void> {
 						currentSessionId: sessionId,
 					};
 					persistentAgents.push(pa);
-					ensureAgentMemory(pa.id);
 					savePersistentAgents(persistentAgents);
 					console.log(`[Standalone] Auto-persisted new agent "${pa.name}" (${pa.id}) for session ${sessionId}`);
 				}
@@ -510,13 +506,6 @@ async function main(): Promise<void> {
 					// On a remote worker: forward the session-end to the hub so Jan
 					// can pick up the next step (Visual QA for finished Visual
 					// Designer output, next revision for Jan-owned tickets).
-					let memoryContent: string | undefined;
-					try {
-						const memPath = getAgentMemoryPath(pa.id);
-						if (fs.existsSync(memPath)) {
-							memoryContent = fs.readFileSync(memPath, 'utf-8');
-						}
-					} catch { /* ignore */ }
 					reportDesignerSessionEndedToHub({
 						agentRole: pa.roleShort ?? '',
 						ticketId: completedTicket?.ticketId ?? '',
@@ -524,8 +513,6 @@ async function main(): Promise<void> {
 						ticketUrl: completedTicket?.ticketUrl ?? '',
 						designerName: pa.name,
 						workspacePath: pa.workspacePath,
-						updatedMemory: memoryContent,
-						agentId: pa.id,
 					}, ctx);
 				} else if (isWorkerMode && pa.name === 'Darryl' && completedTicket) {
 					// On a remote worker: Darryl's session for a hub-dispatched ticket

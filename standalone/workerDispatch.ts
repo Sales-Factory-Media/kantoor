@@ -36,7 +36,6 @@ import {
 	WORKER_ROLE_DESIGNER,
 	WORKER_ROLE_DEV,
 } from './constants.js';
-import { ensureAgentMemory } from './agentStore.js';
 import type { PersistentAgent } from './agentStore.js';
 import {
 	buildSystemPrompt,
@@ -49,11 +48,9 @@ import { getJanDesignConfig } from './agentHandlers.js';
 import type { ServerContext } from './serverContext.js';
 import {
 	getIdleWorkersWithRole,
-	collectAgentMemories,
 	broadcastWorkerStatus,
 	sendWorkerRequest,
 	clearWorkerTicket,
-	saveAgentMemoryFromWorker,
 } from './workerRegistry.js';
 import { loadKnownProjects } from '../src/projectStore.js';
 import { findBusyDevSlot, findBusyVisualSlot, findFreeDevWorker, isDevWorker } from './capacity.js';
@@ -160,9 +157,7 @@ async function dispatchToFleet(
 			: `Local ${noun} slot busy and no idle remote ${noun} workers connected — wait and retry.` };
 	}
 
-	// Ship agent memories so the agent spawned on the worker has up-to-date context
-	const agentMemories = collectAgentMemories(ctx.persistentAgents);
-	const rpcPayload = { ...msg, agentMemories };
+	const rpcPayload = { ...msg };
 
 	const failures: string[] = [];
 	for (const worker of remoteWorkers) {
@@ -203,7 +198,6 @@ function launchLocally(
 	ctx: ServerContext,
 	options?: LaunchOptions,
 ): LocalLaunchOutcome {
-	ensureAgentMemory(agent.id);
 	const result = launchPersistentAgentSession(
 		agent,
 		systemPrompt,
@@ -558,7 +552,7 @@ export function handleVisualQaReview(
 /**
  * Called on the hub when a remote worker reports that one of its design-role
  * sessions ended. Clears the worker slot and releases the dispatch claim via
- * `clearWorkerTicket`, and persists any updated agent memory shipped back.
+ * `clearWorkerTicket`.
  *
  * Does NOT trigger follow-up dispatch (no reactive auto-launch). Follow-up
  * work picks up on the next 3-min ClickUp poll or an explicit kantoor refresh.
@@ -570,16 +564,10 @@ export function handleDesignerSessionEnded(
 ): void {
 	const agentRole = msg.agentRole as string | undefined;
 	const ticketId = msg.ticketId as string | undefined;
-	const updatedMemory = msg.updatedMemory as string | undefined;
-	const agentId = msg.agentId as string | undefined;
 
 	// clearWorkerTicket releases the claim via the registry, clears the worker
 	// slot, and broadcasts status.
 	clearWorkerTicket(sourceWs, ctx);
-
-	if (agentId && updatedMemory) {
-		saveAgentMemoryFromWorker(agentId, updatedMemory);
-	}
 
 	if (!ticketId) {
 		console.log(`[Hub] Ignoring designerSessionEnded without ticketId (agentRole=${agentRole})`);

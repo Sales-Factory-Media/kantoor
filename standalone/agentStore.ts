@@ -73,9 +73,8 @@ export interface TeamDefinition {
 // PM roles removed 2026-04-22: Jan handles the project-management work herself
 // (writing UX briefings, dispatching designers) to reduce the number of concurrent
 // agents. Existing 'UX Project Manager' / 'Visual Project Manager' persistent
-// agents are retired in loadPersistentAgents(): they keep their MEMORY but are
-// tagged `retired: true` so seedDesignTeams won't recreate them and the launch
-// pickers ignore them.
+// agents are retired in loadPersistentAgents(): they are tagged `retired: true`
+// so seedDesignTeams won't recreate them and the launch pickers ignore them.
 export const TEAMS: Record<string, TeamDefinition> = {
 	[TEAM_UX_ID]: {
 		id: TEAM_UX_ID,
@@ -112,8 +111,7 @@ export function loadPersistentAgents(): PersistentAgent[] {
 			}
 			// Migration (2026-04-22): PM roles removed — Jan does the PM work herself.
 			// Tag existing PM agents as retired so they aren't picked by launchers or
-			// seeded back by seedDesignTeams, but keep them in the store to preserve
-			// their MEMORY.md history.
+			// seeded back by seedDesignTeams.
 			if (
 				(a.roleShort === UX_PM_ROLE_SHORT || a.roleShort === VISUAL_PM_ROLE_SHORT || a.roleShort === PM_ROLE_SHORT)
 				&& !a.retired
@@ -130,21 +128,6 @@ export function savePersistentAgents(agents: PersistentAgent[]): void {
 		fs.mkdirSync(SETTINGS_DIR, { recursive: true });
 	}
 	fs.writeFileSync(AGENTS_FILE, JSON.stringify(agents, null, 2), 'utf-8');
-}
-
-export function getAgentMemoryPath(agentId: string): string {
-	return path.join(AGENTS_DIR, agentId, 'MEMORY.md');
-}
-
-export function ensureAgentMemory(agentId: string): void {
-	const dir = path.join(AGENTS_DIR, agentId);
-	if (!fs.existsSync(dir)) {
-		fs.mkdirSync(dir, { recursive: true });
-	}
-	const memPath = getAgentMemoryPath(agentId);
-	if (!fs.existsSync(memPath)) {
-		fs.writeFileSync(memPath, '# Personal Scratchpad\n\nUse this for rough personal notes. MemPalace is the primary shared memory.\n', 'utf-8');
-	}
 }
 
 function normalizeUrlHost(host: string): string {

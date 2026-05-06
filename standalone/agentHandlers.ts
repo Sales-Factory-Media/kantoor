@@ -5,7 +5,6 @@ import { loadKnownProjects, removeKnownProjectByName, updateKnownProject } from 
 import { focusItermSession, launchItermSession, launchAgentSession } from './itermFocus.js';
 import {
 	savePersistentAgents,
-	ensureAgentMemory,
 	deleteAgentData,
 	expandHome,
 	ensureMempalaceMcpConfig,
@@ -114,7 +113,6 @@ export function handleSaveAgentIdentity(msg: Record<string, unknown>, ctx: Serve
 		persistentAgents.push(newAgent);
 	}
 
-	ensureAgentMemory(agentId);
 	savePersistentAgents(persistentAgents);
 	setPersistentAgents(persistentAgents);
 	console.log(`[Standalone] ${isNew ? 'Created' : 'Updated'} persistent agent: ${agentData.name} (${agentId})`);
@@ -155,7 +153,6 @@ export function handleLaunchAgent(msg: Record<string, unknown>, ctx: ServerConte
 		console.log(`[Standalone] Persistent agent ${agentId} not found`);
 		return;
 	}
-	ensureAgentMemory(agentId);
 	const teamTask = useTeam && callInTask
 		? `${callInTask}\n\nCreate an agent team to work on this. Break the work into parallel tasks and spawn teammates to handle them.`
 		: callInTask;

@@ -10,8 +10,7 @@ import {
 } from './constants.js';
 import { WORKER_ASSIGNMENTS_FILE, SETTINGS_DIR } from './serverContext.js';
 import type { ServerContext, WorkerInfo, WorkerAssignment } from './serverContext.js';
-import { loadPersistentAgents, getAgentMemoryPath, ensureAgentMemory, collapseHome } from './agentStore.js';
-import type { PersistentAgent } from './agentStore.js';
+import { loadPersistentAgents, collapseHome } from './agentStore.js';
 import { releaseTicket } from './dispatchRegistry.js';
 
 // ── Assignment persistence ──────────────────────────────────
@@ -257,12 +256,6 @@ export function handleTicketComplete(
 ): void {
 	const ticketId = msg.ticketId as string;
 
-	// Save updated memories back to hub
-	const updatedMemories = msg.updatedMemories as Record<string, string> | undefined;
-	if (updatedMemories) {
-		saveUpdatedMemories(updatedMemories);
-	}
-
 	// Update worker state
 	for (const worker of ctx.workers.values()) {
 		if (worker.ws === ws) {
@@ -317,12 +310,6 @@ export function clearWorkerTicket(ws: WebSocket, ctx: ServerContext): string | n
 	return null;
 }
 
-/** Write an agent memory file sent back from a worker. */
-export function saveAgentMemoryFromWorker(agentId: string, content: string): void {
-	ensureAgentMemory(agentId);
-	fs.writeFileSync(getAgentMemoryPath(agentId), content, 'utf-8');
-}
-
 // ── Assignment tracking ─────────────────────────────────────
 
 export function addAssignment(ctx: ServerContext, ticketId: string, ticketName: string, workerName: string, workerHost: string): void {
@@ -346,30 +333,6 @@ function markAssignment(ctx: ServerContext, ticketId: string, status: 'completed
 	}
 }
 
-// ── Memory sync ─────────────────────────────────────────────
-
-function saveUpdatedMemories(memories: Record<string, string>): void {
-	for (const [agentId, content] of Object.entries(memories)) {
-		ensureAgentMemory(agentId);
-		const memPath = getAgentMemoryPath(agentId);
-		fs.writeFileSync(memPath, content, 'utf-8');
-		console.log(`[Hub] Updated memory for agent ${agentId}`);
-	}
-}
-
-/** Collect memory content for all agents that might be needed */
-export function collectAgentMemories(agents: PersistentAgent[]): Record<string, string> {
-	const memories: Record<string, string> = {};
-	for (const agent of agents) {
-		const memPath = getAgentMemoryPath(agent.id);
-		try {
-			if (fs.existsSync(memPath)) {
-				memories[agent.id] = fs.readFileSync(memPath, 'utf-8');
-			}
-		} catch { /* skip */ }
-	}
-	return memories;
-}
 
 // ── Broadcast ───────────────────────────────────────────────
 

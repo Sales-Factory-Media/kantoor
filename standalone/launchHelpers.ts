@@ -3,9 +3,8 @@
  *
  * Every handler that dispatches a worker / designer / reviewer was doing the
  * same dance: pick an agent, stamp `currentSessionId` + ticket info, save,
- * `ensureAgentMemory`, resolve `cwd`, build mempalace MCP config, call
- * `launchAgentSession` with `--permission-mode auto`. Extracted here so the
- * dance lives in one place.
+ * resolve `cwd`, build mempalace MCP config, call `launchAgentSession` with
+ * `--permission-mode auto`. Extracted here so the dance lives in one place.
  */
 
 import * as crypto from 'crypto';
@@ -13,7 +12,6 @@ import { launchAgentSession } from './itermFocus.js';
 import {
 	expandHome,
 	savePersistentAgents,
-	ensureAgentMemory,
 	ensureMempalaceMcpConfig,
 	mergeMcpConfigs,
 } from './agentStore.js';
@@ -34,7 +32,7 @@ export interface TicketInfo {
  * agent's system prompt under "## Self-Exit" (buildSelfExitBlock).
  */
 export const EXIT_REMINDER =
-	'\n\nWhen you have finished this work (PR open, ticket status flipped, memory updated), ' +
+	'\n\nWhen you have finished this work (PR open, ticket status flipped, MemPalace updated), ' +
 	'run the `## Self-Exit` bash block from your system prompt to close your iTerm tab. ' +
 	'Don\'t run it until everything is saved — there is no coming back.';
 
@@ -62,9 +60,7 @@ export interface LaunchResult {
  * Launch a session for the given persistent agent against a specific ticket.
  *
  * Mutates the persistent agent: sets `currentSessionId` + ticket fields,
- * calls `savePersistentAgents` so the state survives server restarts, and
- * calls `ensureAgentMemory` so the memory file exists before the agent
- * tries to read it.
+ * calls `savePersistentAgents` so the state survives server restarts.
  *
  * On launch failure, rolls back `currentSessionId` so a retry can take the
  * slot.
@@ -84,7 +80,6 @@ export function launchPersistentAgentSession(
 	agent.currentTicketName = ticket.ticketName;
 	agent.currentTicketUrl = ticket.ticketUrl;
 	savePersistentAgents(persistentAgents);
-	ensureAgentMemory(agent.id);
 
 	let mempalaceHost: string | undefined;
 	if (ctx.mempalaceServerUrl) {
