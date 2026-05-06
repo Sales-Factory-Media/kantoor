@@ -64,6 +64,7 @@
     "import-tileset": "tsx scripts/import-tileset-cli.ts",
     "build:standalone": "node esbuild-standalone.js && npm run build:webview",
     "standalone": "node dist/standalone.js",
+    "standalone:no-local-dev": "node dist/standalone.js --no-local-dev",
     "test": "vitest run",
     "test:watch": "vitest"
   },
