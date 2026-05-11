@@ -76,13 +76,29 @@ export function getDotInfo(
   return null
 }
 
+// JAN_WORKSPACE on the server is the org-wide design workspace used by Jan,
+// QAs, and all designer roles. It is never registered as a project (it isn't
+// one), so it would never appear in any building's allowedPaths — but the
+// agents living there are org-wide and must show regardless of active
+// building. Match both the tilde form (how the server stores it) and any
+// expanded absolute form ending in /kantoor-workspace.
+const ORG_WIDE_WORKSPACE_SUFFIX = '/kantoor-workspace'
+const ORG_WIDE_WORKSPACE_TILDE = '~/Projects/kantoor-workspace'
+function isOrgWideWorkspace(workspacePath: string | undefined): boolean {
+  if (!workspacePath) return false
+  return workspacePath === ORG_WIDE_WORKSPACE_TILDE || workspacePath.endsWith(ORG_WIDE_WORKSPACE_SUFFIX)
+}
+
 /** Group live + offline agents by their room/project name.
  *
  *  Only projects in `knownProjects` (the active building's membership) are
  *  shown. Agents whose workspacePath isn't in that allowed set are skipped —
  *  their project belongs to another building. Special rooms (conference,
  *  garage, Foreman, Art Director, fillers) always show regardless of
- *  workspace path because they're not project-scoped.
+ *  workspace path because they're not project-scoped. Org-wide agents
+ *  (Jan, QAs, designers — workspace = kantoor-workspace) bypass the filter
+ *  for the same reason: they're staff of every building, not tied to one
+ *  building's project list.
  */
 export function groupByRoom(
   agents: number[],
@@ -120,19 +136,20 @@ export function groupByRoom(
     const g = ensure(kp.name)
     if (kp.workspacePath) g.workspacePath = kp.workspacePath
   }
-  // Add live agents — filter by allowed workspace paths.
+  // Add live agents — filter by allowed workspace paths, except org-wide
+  // staff (Jan, QAs, designers).
   for (const id of agents) {
     const ch = officeState.characters.get(id)
     if (!ch || ch.isSubagent) continue
-    if (ch.workspacePath && !allowedPaths.has(ch.workspacePath)) continue
+    if (ch.workspacePath && !isOrgWideWorkspace(ch.workspacePath) && !allowedPaths.has(ch.workspacePath)) continue
     const project = ch.projectName || ch.folderName || ''
     const g = ensure(project)
     g.liveAgents.push(id)
     if (ch.workspacePath && !g.workspacePath) g.workspacePath = ch.workspacePath
   }
-  // Add offline agents — filter by allowed workspace paths.
+  // Add offline agents — same filter rules as live agents.
   for (const agent of offlineAgents) {
-    if (agent.workspacePath && !allowedPaths.has(agent.workspacePath)) continue
+    if (agent.workspacePath && !isOrgWideWorkspace(agent.workspacePath) && !allowedPaths.has(agent.workspacePath)) continue
     const project = agent.projectName || 'Unknown'
     const g = ensure(project)
     g.offlineAgents.push(agent)

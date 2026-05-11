@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import * as crypto from 'crypto';
-import { eq } from 'drizzle-orm';
+import { eq, inArray, and, ne } from 'drizzle-orm';
 import {
 	MEMPALACE_SERVER_PORT,
 	DESIGNER_ROLE_SHORT,
@@ -150,11 +150,32 @@ function agentToRow(a: PersistentAgent, buildingId: string): typeof agentsTable.
 	};
 }
 
+/**
+ * Defensive: collapse a list of persistent agents to one-per-id, last-wins.
+ * The PK on `persistent_agents.id` is global (single column), so the same
+ * id appearing twice will trip a constraint violation on save. We've seen
+ * legacy data + race-prone seed paths leave duplicates in the in-memory
+ * cache; dedup here so the cache is always sane regardless of how it got
+ * loaded. Logs a warning when duplicates are found.
+ */
+export function dedupePersistentAgentsById(agents: PersistentAgent[]): PersistentAgent[] {
+	const byId = new Map<string, PersistentAgent>();
+	let droppedCount = 0;
+	for (const a of agents) {
+		if (byId.has(a.id)) droppedCount++;
+		byId.set(a.id, a);
+	}
+	if (droppedCount > 0) {
+		console.warn(`[agentStore] Dropped ${droppedCount} duplicate persistent agent(s) (same id).`);
+	}
+	return [...byId.values()];
+}
+
 export async function initAgentStore(): Promise<void> {
 	const db = getDb();
 	const buildingId = getActiveBuildingId();
 	const rows = await db.select().from(agentsTable).where(eq(agentsTable.buildingId, buildingId));
-	agentCache = rows.map(rowToAgent);
+	agentCache = dedupePersistentAgentsById(rows.map(rowToAgent));
 }
 
 /**
@@ -164,17 +185,56 @@ export async function initAgentStore(): Promise<void> {
 export async function loadPersistentAgentsForBuilding(buildingId: string): Promise<PersistentAgent[]> {
 	const db = getDb();
 	const rows = await db.select().from(agentsTable).where(eq(agentsTable.buildingId, buildingId));
-	return rows.map(rowToAgent);
+	return dedupePersistentAgentsById(rows.map(rowToAgent));
 }
+
+// Per-building save serializer. Concurrent fire-and-forget save calls
+// (e.g. scanner's onNewSession firing in rapid succession during boot)
+// would otherwise race each other's `DELETE buildingId=X; INSERT` and
+// produce PK-violation errors when the second insert hits rows the first
+// just wrote. Each building's saves are chained on a Promise.
+const saveQueues = new Map<string, Promise<unknown>>();
 
 /**
  * Direct DB write for a specific building. If `buildingId` is the active
  * building, the cache is also refreshed so subsequent loadPersistentAgents()
  * sees the changes.
+ *
+ * The PK on `persistent_agents.id` is global (single column). If any agent's
+ * id collides with a row in a DIFFERENT building, the insert would fail with
+ * a unique-constraint violation and abort the whole save. To stay resilient
+ * against legacy data corruption (cross-building id duplicates from earlier
+ * buggy versions), we filter such collisions out and log a warning; the
+ * surviving row in the other building is left untouched. The user can
+ * inspect/clean those up manually with the diagnostic SQL in the comment
+ * at the end of this file.
+ *
+ * All writes for the same building are serialized through a per-building
+ * Promise chain so concurrent calls cannot race each other.
  */
 export async function savePersistentAgentsForBuilding(buildingId: string, agents: PersistentAgent[]): Promise<void> {
+	const prev = saveQueues.get(buildingId) ?? Promise.resolve();
+	const next = prev
+		.catch(() => {})
+		.then(() => doSavePersistentAgentsForBuilding(buildingId, agents));
+	saveQueues.set(buildingId, next);
+	return next;
+}
+
+async function doSavePersistentAgentsForBuilding(buildingId: string, agents: PersistentAgent[]): Promise<void> {
 	const db = getDb();
-	const rows = agents.map(a => agentToRow(a, buildingId));
+	const deduped = dedupePersistentAgentsById(agents);
+	const colliding = await findCrossBuildingIdCollisions(db, buildingId, deduped.map(a => a.id));
+	const safe = colliding.size > 0
+		? deduped.filter(a => {
+			if (colliding.has(a.id)) {
+				console.warn(`[agentStore] Skipping save of agent ${a.id} ("${a.name}") — id already exists in another building. Run the cleanup SQL at the bottom of agentStore.ts.`);
+				return false;
+			}
+			return true;
+		})
+		: deduped;
+	const rows = safe.map(a => agentToRow(a, buildingId));
 	await db.transaction(async (tx) => {
 		await tx.delete(agentsTable).where(eq(agentsTable.buildingId, buildingId));
 		if (rows.length > 0) {
@@ -184,8 +244,30 @@ export async function savePersistentAgentsForBuilding(buildingId: string, agents
 		}
 	});
 	if (buildingId === tryGetActiveBuildingId()) {
-		agentCache = agents;
+		agentCache = safe;
 	}
+}
+
+async function findCrossBuildingIdCollisions(
+	db: ReturnType<typeof getDb>,
+	currentBuildingId: string,
+	candidateIds: string[],
+): Promise<Set<string>> {
+	if (candidateIds.length === 0) return new Set();
+	const colliding = new Set<string>();
+	// Chunk to stay well below Postgres' ~32k parameter limit.
+	for (let i = 0; i < candidateIds.length; i += 500) {
+		const slice = candidateIds.slice(i, i + 500);
+		const rows = await db
+			.select({ id: agentsTable.id })
+			.from(agentsTable)
+			.where(and(
+				inArray(agentsTable.id, slice),
+				ne(agentsTable.buildingId, currentBuildingId),
+			));
+		for (const r of rows) colliding.add(r.id);
+	}
+	return colliding;
 }
 
 export function loadPersistentAgents(): PersistentAgent[] {
@@ -193,27 +275,20 @@ export function loadPersistentAgents(): PersistentAgent[] {
 }
 
 export function savePersistentAgents(agents: PersistentAgent[]): void {
-	agentCache = agents;
+	const deduped = dedupePersistentAgentsById(agents);
+	agentCache = deduped;
 	const buildingId = tryGetActiveBuildingId();
 	if (!buildingId) {
 		// Not initialized (e.g. unit tests that exercise pure in-memory logic).
 		// Cache update happened above; durable write is skipped.
 		return;
 	}
-	const db = getDb();
-	const rows = agents.map(a => agentToRow(a, buildingId));
-	// Fire-and-forget: cache is the source of truth in memory; DB write is
-	// durable persistence. Errors are logged but don't block the caller.
+	// Fire-and-forget durable write — cache is the source of truth in memory.
+	// Errors are logged but don't block the caller. Delegate to the per-building
+	// path so the cross-building-collision defense applies here too.
 	(async () => {
 		try {
-			await db.transaction(async (tx) => {
-				await tx.delete(agentsTable).where(eq(agentsTable.buildingId, buildingId));
-				if (rows.length > 0) {
-					for (let i = 0; i < rows.length; i += 200) {
-						await tx.insert(agentsTable).values(rows.slice(i, i + 200));
-					}
-				}
-			});
+			await savePersistentAgentsForBuilding(buildingId, deduped);
 		} catch (err) {
 			console.error('[agentStore] Failed to persist agents:', err);
 		}
@@ -384,3 +459,42 @@ export function pickRandomName(existingAgents: PersistentAgent[]): string {
 	while (usedNames.has(`${base} ${suffix}`)) suffix++;
 	return `${base} ${suffix}`;
 }
+
+// ─────────────────────────────────────────────────────────────────────────
+// Diagnostic SQL for cross-building / duplicate-id agent corruption
+// ─────────────────────────────────────────────────────────────────────────
+//
+// Saves automatically skip ids that collide with rows in another building
+// (see `savePersistentAgentsForBuilding`). If you see those warnings, run
+// these against the database to inspect and clean up. The runtime will
+// always tolerate the corruption, but skipping means writes silently lose
+// the conflicting row's updates until the duplicate is resolved.
+//
+// 1. Find ids that exist in more than one building:
+//
+//     SELECT id, COUNT(*) AS cnt, array_agg(building_id::text) AS buildings,
+//            array_agg(name) AS names
+//     FROM persistent_agents
+//     GROUP BY id
+//     HAVING COUNT(*) > 1;
+//
+// 2. Inspect a specific id across buildings:
+//
+//     SELECT id, building_id, name, role_short, workspace_path,
+//            current_session_id, last_session_end
+//     FROM persistent_agents
+//     WHERE id = '<the-id>';
+//
+// 3. Delete the duplicate from whichever building doesn't own it
+//    (replace <building_id> with the building you want to clear FROM):
+//
+//     DELETE FROM persistent_agents
+//     WHERE id = '<the-id>' AND building_id = '<building_id>';
+//
+// 4. Find duplicate NAMES within a single building (different ids, same
+//    name — the "duplicate agents per project" symptom):
+//
+//     SELECT building_id, name, COUNT(*) AS cnt, array_agg(id) AS ids
+//     FROM persistent_agents
+//     GROUP BY building_id, name
+//     HAVING COUNT(*) > 1;

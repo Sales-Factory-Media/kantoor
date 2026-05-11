@@ -205,4 +205,28 @@ describe('groupByRoom', () => {
     expect(result.get('proj')?.liveAgents).toEqual([1]);
     expect(result.get('proj')?.workspacePath).toBe('/work/proj');
   });
+
+  it('shows org-wide staff (Jan/QA/designers) regardless of active building membership', () => {
+    // Workspace path uses the tilde form the server stores. allowedPaths is
+    // empty (no projects in the active building) — without the org-wide
+    // bypass, Jan would disappear.
+    const chars = new Map([
+      [1, { projectName: 'kantoor-workspace', folderName: 'kantoor-workspace', isSubagent: false, workspacePath: '~/Projects/kantoor-workspace' }],
+    ]);
+    const offline: OfflineAgent[] = [
+      { sessionId: 's-jan', projectName: 'kantoor-workspace', workspacePath: '~/Projects/kantoor-workspace' },
+    ];
+    const result = groupByRoom([1], makeOfficeState(chars), offline, []);
+    expect(result.get('kantoor-workspace')?.liveAgents).toEqual([1]);
+    expect(result.get('kantoor-workspace')?.offlineAgents).toHaveLength(1);
+  });
+
+  it('matches org-wide workspace in expanded absolute form too', () => {
+    // Some flows expand ~ before sending; ensure both forms pass the filter.
+    const offline: OfflineAgent[] = [
+      { sessionId: 's-qa', projectName: 'kantoor-workspace', workspacePath: '/Users/someone/Projects/kantoor-workspace' },
+    ];
+    const result = groupByRoom([], makeOfficeState(), offline, []);
+    expect(result.get('kantoor-workspace')?.offlineAgents).toHaveLength(1);
+  });
 });

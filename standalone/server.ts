@@ -15,6 +15,7 @@ import {
 	initAgentStore,
 	loadPersistentAgentsForBuilding,
 	savePersistentAgentsForBuilding,
+	expandHome,
 } from './agentStore.js';
 import { buildOrganogram } from './organogram.js';
 import type { PersistentAgent } from './agentStore.js';
@@ -480,6 +481,35 @@ async function main(): Promise<void> {
 				addKnownProject(projectName, workspacePath || projectDir);
 				const sessionId = path.basename(jsonlFile, '.jsonl');
 				let pa = findPersistentAgentBySession(sessionId);
+
+				// If no agent claims this exact sessionId, try to ADOPT an existing
+				// offline agent at the same workspace before minting a new one. This
+				// is the fix for the historical "duplicates per project" bug: prior
+				// behavior was to always create a new PersistentAgent on every fresh
+				// JSONL, leaving the offline-but-still-meaningful previous agent
+				// stranded. We pick the most-recently-active offline candidate; if
+				// none exists we fall through to the create branch. Same-name agents
+				// in *different* workspaces are intentionally not merged here — the
+				// user explicitly relies on e.g. Pam-at-projectA being distinct from
+				// Pam-at-projectB.
+				if (!pa && workspacePath) {
+					const targetWp = expandHome(workspacePath);
+					const candidates = persistentAgents.filter(p =>
+						!p.currentSessionId
+						&& !p.retired
+						&& p.workspacePath
+						&& expandHome(p.workspacePath) === targetWp,
+					);
+					candidates.sort((a, b) =>
+						(b.lastSessionEnd ?? '').localeCompare(a.lastSessionEnd ?? ''),
+					);
+					if (candidates.length > 0) {
+						pa = candidates[0];
+						pa.currentSessionId = sessionId;
+						savePersistentAgents(persistentAgents);
+						console.log(`[Standalone] Adopted existing agent "${pa.name}" (${pa.id}) for session ${sessionId} at ${workspacePath}`);
+					}
+				}
 
 				// Auto-persist newly discovered agents
 				if (!pa) {

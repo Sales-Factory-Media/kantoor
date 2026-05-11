@@ -115,18 +115,25 @@ function buildFigmaBridgeBlock(): string[] {
 	];
 }
 
-function buildMemoryBlock(roleShort: string | undefined, sessionCount?: number, lastSessionEnd?: string): string[] {
+function buildMemoryBlock(agentId: string, roleShort: string | undefined, sessionCount?: number, lastSessionEnd?: string): string[] {
 	const skillsRoom = skillsRoomForRole(roleShort);
 	const lines = [
 		'## MemPalace (your only memory layer)',
-		'MemPalace is the single source of truth for everything you might want to recall later — decisions, context, procedural recipes. There is no local scratchpad, no markdown file, no `/tmp` cache. If it\'s worth keeping, it goes in MemPalace.',
+		'MemPalace is the single source of truth for everything you might want to recall later — decisions, context, procedural recipes, and YOUR OWN per-agent learnings. There is no local scratchpad, no markdown file, no `/tmp` cache. If it\'s worth keeping, it goes in MemPalace.',
 		'',
 		'### Decisions & context (default destination)',
 		'- Before starting: `mcp__mempalace__mempalace_search` (decisions) + `mempalace_kg_query` (entities). Skim, don\'t deep-read.',
 		'- On significant decisions or surprising findings: `mempalace_add_drawer`. Never save secrets, routine changes, or session-only state.',
 		'',
+		'### Personal memory (your own room — survives across YOUR sessions)',
+		`Your personal room is \`wing="agents" room="${agentId}"\`. This is YOUR memory — distinct from team-wide decisions and role-shared skills. It persists across every session of yours, even across restarts and ticket pickups.`,
+		`- **Read at session start.** Before doing real work, run \`mempalace_search wing="agents" room="${agentId}"\` (an empty query lists everything in your room). Skim what past-you decided, learned, or got bitten by.`,
+		`- **Write at session end** (or whenever you discover something worth carrying forward to YOUR next session — workspace-specific quirks, conventions in this codebase, mistakes you made, who to ask about what). Use \`mempalace_add_drawer wing="agents" room="${agentId}"\`. Keep entries short and concrete.`,
+		'- **Scope rule:** if the learning is useful to *every* agent in your role, put it in the skills room below instead. If it would help *only future-you* (e.g. "the test runner in this repo needs `pnpm test --` not `npm test`"), put it in your personal room.',
+		'- **Don\'t save scaffolding.** Things already in this prompt aren\'t worth re-saving.',
+		'',
 		'### Skills wing (procedural recipes — `wing: "skills"`)',
-		`Your skills room is \`${skillsRoom}\`. Skills are short, agent-authored recipes for tasks that recur — the kind of "how to do X around here" knowledge that used to live scattered in scratchpads and chat history.`,
+		`Your skills room is \`${skillsRoom}\`. Skills are short, agent-authored recipes for tasks that recur — the kind of "how to do X around here" knowledge shared by every agent of your role.`,
 		`- **Read first.** Before non-trivial work, run \`mempalace_search query="<task in your own words>" wing="skills"\`. Also try \`room="${skillsRoom}"\` for role-specific recipes. If a matching skill exists, follow its steps before improvising.`,
 		`- **Write back.** When you finish work that involved a non-obvious procedure, a tricky pitfall, or a sequence others on your role would benefit from, file a skill with \`mempalace_add_drawer wing="skills" room="${skillsRoom}"\`. Use this drawer template (verbatim — keep the headers so search and future-you can find it):`,
 		'  ```',
@@ -143,7 +150,6 @@ function buildMemoryBlock(roleShort: string | undefined, sessionCount?: number, 
 		'  - <gotcha + why it bites>',
 		'  ```',
 		'- **Refine, don\'t duplicate.** If a skill exists but is wrong or incomplete, search for it, then add a NEW drawer that supersedes it — include `Supersedes: <prior title>` in the body. Never edit silently around an outdated recipe.',
-		'- **Don\'t save scaffolding.** Procedures already in your system prompt (open a PR, move to qa test, dispatch via /api/launch-agent) are NOT skills. Save things that surprised you, that you had to figure out, or that have a non-obvious pitfall.',
 		'',
 		'### Hard rules',
 		'- **Do NOT write notes, dispatch records, ticket plans, or any state you might want to recall later to `/tmp/` (or any temp dir).** Files in `/tmp` are invisible to teammates, lost between sessions, and untracked by the org. The only acceptable use of `/tmp` is a transient body file for a single shell command (e.g. `curl -d @/tmp/x.json` immediately followed by the curl) that you delete or stop caring about right after.',
@@ -151,8 +157,8 @@ function buildMemoryBlock(roleShort: string | undefined, sessionCount?: number, 
 	];
 	if (sessionCount && sessionCount > 0) {
 		lines.push(lastSessionEnd
-			? `- Returning agent — last session ended ${lastSessionEnd}. Check MemPalace (decisions wing + your \`${skillsRoom}\` skills room) for what the team did since.`
-			: `- Returning agent — check MemPalace (decisions wing + your \`${skillsRoom}\` skills room) for recent team activity.`);
+			? `- Returning agent — last session ended ${lastSessionEnd}. Check your personal room (\`wing="agents" room="${agentId}"\`) FIRST, then decisions wing + \`${skillsRoom}\` skills room for what the team did since.`
+			: `- Returning agent — check your personal room (\`wing="agents" room="${agentId}"\`) FIRST, then decisions wing + \`${skillsRoom}\` skills room for recent team activity.`);
 	}
 	return lines;
 }
@@ -179,7 +185,7 @@ export function buildSystemPrompt(agent: PersistentAgent, projectDescription?: s
 			projectDescription,
 		);
 	}
-	lines.push('', ...buildMemoryBlock(agent.roleShort, agent.sessionCount, agent.lastSessionEnd));
+	lines.push('', ...buildMemoryBlock(agent.id, agent.roleShort, agent.sessionCount, agent.lastSessionEnd));
 	lines.push(
 		'',
 		'## Git Conventions (Gitflow + ClickUp Integration)',
@@ -287,7 +293,7 @@ export function buildDarrylSystemPrompt(agent: PersistentAgent, roster: RosterEn
 		lines.push(`- \`${entry.workspacePath}\`${project}${desc}`);
 	}
 
-	lines.push('', ...buildMemoryBlock(agent.roleShort, agent.sessionCount, agent.lastSessionEnd));
+	lines.push('', ...buildMemoryBlock(agent.id, agent.roleShort, agent.sessionCount, agent.lastSessionEnd));
 	lines.push(...buildSelfExitBlock());
 	return lines.join('\n');
 }
@@ -356,7 +362,7 @@ export function buildJanSystemPrompt(agent: PersistentAgent, roster: RosterEntry
 		lines.push(`- **${entry.name}** \`${entry.id}\` — ${role}${project} — ${status}`);
 	}
 
-	lines.push('', ...buildMemoryBlock(agent.roleShort, agent.sessionCount, agent.lastSessionEnd));
+	lines.push('', ...buildMemoryBlock(agent.id, agent.roleShort, agent.sessionCount, agent.lastSessionEnd));
 	lines.push(...buildSelfExitBlock());
 	return lines.join('\n');
 }
@@ -396,7 +402,7 @@ export function buildDesignerSystemPrompt(agent: PersistentAgent, projectDescrip
 		lines.push('', '## Project', projectDescription);
 	}
 
-	lines.push('', ...buildMemoryBlock(agent.roleShort, agent.sessionCount, agent.lastSessionEnd));
+	lines.push('', ...buildMemoryBlock(agent.id, agent.roleShort, agent.sessionCount, agent.lastSessionEnd));
 	lines.push(...buildSelfExitBlock());
 	return lines.join('\n');
 }
@@ -479,7 +485,7 @@ export function buildVisualDesignerSystemPrompt(agent: PersistentAgent, projectD
 		lines.push('', '## Project', projectDescription);
 	}
 
-	lines.push('', ...buildMemoryBlock(agent.roleShort, agent.sessionCount, agent.lastSessionEnd));
+	lines.push('', ...buildMemoryBlock(agent.id, agent.roleShort, agent.sessionCount, agent.lastSessionEnd));
 	lines.push(...buildSelfExitBlock());
 	return lines.join('\n');
 }
@@ -576,7 +582,7 @@ export function buildVisualQaSystemPrompt(agent: PersistentAgent, designConfig?:
 		'```',
 		'',
 		...buildFigmaBridgeBlock(),
-		...buildMemoryBlock(agent.roleShort, agent.sessionCount, agent.lastSessionEnd),
+		...buildMemoryBlock(agent.id, agent.roleShort, agent.sessionCount, agent.lastSessionEnd),
 		...buildSelfExitBlock(),
 	];
 	return lines.join('\n');
@@ -605,7 +611,7 @@ export function buildUxQaSystemPrompt(agent: PersistentAgent): string {
 		'Note: AI Review for the UX team is NOT YET ENABLED. You exist as a team member in the organogram',
 		'and may be activated later. For now, no automated workflow will assign you tickets.',
 		'',
-		...buildMemoryBlock(agent.roleShort),
+		...buildMemoryBlock(agent.id, agent.roleShort),
 	];
 	return lines.join('\n');
 }
