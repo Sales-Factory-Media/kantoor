@@ -3,7 +3,7 @@ import * as crypto from 'crypto';
 import { WebSocketServer } from 'ws';
 import type { WebSocket } from 'ws';
 import type { MessageSink } from '../src/types.js';
-import { loadKnownProjects, addKnownProject } from '../src/projectStore.js';
+import { loadKnownProjects, addKnownProject, initProjectStore } from '../src/projectStore.js';
 import { SERVER_PORT, DESIGNER_ROLE_SHORT, VISUAL_DESIGNER_ROLE_SHORT, VISUAL_QA_ROLE_SHORT, JAN_ROLE_SHORT, DEFAULT_WORKER_ROLES } from './constants.js';
 import { ProjectScanner, decodeProjectHash, getLiveSessionIds } from './projectScanner.js';
 import { StandaloneAgentManager } from './standaloneAgentManager.js';
@@ -12,14 +12,23 @@ import {
 	savePersistentAgents,
 	pickRandomName,
 	seedDesignTeams,
+	initAgentStore,
+	loadPersistentAgentsForBuilding,
+	savePersistentAgentsForBuilding,
 } from './agentStore.js';
 import { buildOrganogram } from './organogram.js';
 import type { PersistentAgent } from './agentStore.js';
-import type { ClickUpConfig } from './clickupClient.js';
 import { readJson, writeJson, getOfflineAgents } from './serverHelpers.js';
-import { preloadAssets, SEATS_FILE, SETTINGS_FILE, WORKER_IDENTITY_FILE } from './serverContext.js';
+import { preloadAssets, WORKER_IDENTITY_FILE } from './serverContext.js';
 import type { ServerContext, WorkerIdentity } from './serverContext.js';
 import { createDispatchRegistry, releaseTicket } from './dispatchRegistry.js';
+import { runMigrations } from '../src/db/migrate.js';
+import { migrateLegacyJsonIntoDb } from '../src/db/migrateFromJson.js';
+import { initActiveBuilding, listBuildings, switchActiveBuilding } from '../src/db/activeBuilding.js';
+import { connectorForBuilding } from '../src/connectors/registry.js';
+import { initSeatStore, loadSeats } from '../src/db/seatStore.js';
+import { initSettingsStore, getAppSetting } from '../src/db/settingsStore.js';
+import { initWorkerAssignmentStore } from '../src/db/workerAssignmentStore.js';
 import {
 	handleFocusAgent,
 	handleSaveAgentSeats,
@@ -39,7 +48,16 @@ import {
 	handleClickupRefresh,
 	handleClickupConfigure,
 	handleJanDesignBriefing,
+	loadActiveClickupConfig,
 } from './clickupHandlers.js';
+import {
+	handleListBuildings,
+	handleSwitchBuilding,
+	handleCreateBuilding,
+	handleConfigureBuildingConnector,
+	handleListProjects,
+	handleSetProjectMembership,
+} from './buildingHandlers.js';
 import {
 	handleClickupStartWork,
 	handleLaunchDesigner,
@@ -162,7 +180,7 @@ function handleWebviewReady(ws: WebSocket, ctx: ServerContext): void {
 
 	// Build agent meta from persistent agents
 	const agentMeta: Record<string, Record<string, unknown>> = {};
-	const seatsData = readJson(SEATS_FILE) ?? {};
+	const seatsData = loadSeats();
 	for (const [sid, rawMeta] of Object.entries(seatsData)) {
 		agentMeta[sid] = rawMeta as Record<string, unknown>;
 	}
@@ -201,8 +219,7 @@ function handleWebviewReady(ws: WebSocket, ctx: ServerContext): void {
 	ws.send(JSON.stringify({ type: 'layoutLoaded', layout: null }));
 
 	// Send settings
-	const settings = readJson(SETTINGS_FILE);
-	const soundEnabled = settings?.soundEnabled !== false;
+	const soundEnabled = getAppSetting<boolean>('soundEnabled') !== false;
 	ws.send(JSON.stringify({ type: 'settingsLoaded', soundEnabled }));
 
 	// Send Jan's design config
@@ -220,6 +237,9 @@ function handleWebviewReady(ws: WebSocket, ctx: ServerContext): void {
 	if (ctx.clickupTickets.length > 0) {
 		ws.send(JSON.stringify({ type: 'clickupTickets', statuses: ctx.clickupTickets, nextFetchAt: ctx.clickupNextFetchAt }));
 	}
+
+	// Send building list + active building so the switcher knows what to render.
+	handleListBuildings(ws, ctx).catch(err => console.error('[Standalone] webviewReady listBuildings failed:', err));
 
 	// Check peers broker availability
 	fetch(PEERS_BROKER_URL + '/health')
@@ -255,7 +275,13 @@ const messageHandlers: Record<string, (ws: WebSocket, msg: Record<string, unknow
 		if (rejectIfWorker(ctx, 'clickupStartWork')) return;
 		handleClickupStartWork(msg, ctx).catch(() => {});
 	},
-	clickupConfigure: (_ws, msg, ctx) => handleClickupConfigure(msg, ctx),
+	clickupConfigure: (_ws, msg, ctx) => { handleClickupConfigure(msg, ctx).catch(err => console.error('[Standalone] clickupConfigure failed:', err)); },
+	listBuildings: (ws, _msg, ctx) => { handleListBuildings(ws, ctx).catch(err => console.error('[Standalone] listBuildings failed:', err)); },
+	switchBuilding: (_ws, msg, ctx) => { handleSwitchBuilding(msg, ctx).catch(err => console.error('[Standalone] switchBuilding failed:', err)); },
+	createBuilding: (_ws, msg, ctx) => { handleCreateBuilding(msg, ctx).catch(err => console.error('[Standalone] createBuilding failed:', err)); },
+	configureBuildingConnector: (_ws, msg, ctx) => { handleConfigureBuildingConnector(msg, ctx).catch(err => console.error('[Standalone] configureBuildingConnector failed:', err)); },
+	listProjects: (ws, _msg, ctx) => { handleListProjects(ws, ctx).catch(err => console.error('[Standalone] listProjects failed:', err)); },
+	setProjectMembership: (_ws, msg, ctx) => { handleSetProjectMembership(msg, ctx).catch(err => console.error('[Standalone] setProjectMembership failed:', err)); },
 	startConference: (_ws, msg, ctx) => handleStartConference(msg, ctx),
 	endConference: (_ws, msg, ctx) => handleEndConference(msg, ctx),
 	updateProjectDescription: (_ws, msg, ctx) => handleUpdateProjectDescription(msg, ctx),
@@ -326,6 +352,37 @@ async function main(): Promise<void> {
 	const isWorkerMode = !!cliArgs.hubUrl;
 	const workerIdentity = loadOrCreateWorkerIdentity(cliArgs.name, cliArgs.color, cliArgs.roles);
 
+	// ── Database setup ──────────────────────────────────────
+	// Apply pending Drizzle migrations, then run the one-shot JSON → DB
+	// import (idempotent — no-op if buildings already exist), then load
+	// the active building and prime in-memory caches for all stores.
+	await runMigrations();
+	await migrateLegacyJsonIntoDb();
+
+	// Seed each building's design teams BEFORE picking the active building,
+	// so PC (and any future building) has a full org chart waiting in the DB
+	// even if the user has never switched to it.
+	const allBuildings = await listBuildings();
+	for (const b of allBuildings) {
+		const beforeAgents = await loadPersistentAgentsForBuilding(b.id);
+		const working = [...beforeAgents];
+		const changed = seedDesignTeams(working);
+		if (changed) {
+			await savePersistentAgentsForBuilding(b.id, working);
+			console.log(`[Standalone] Seeded design teams for building "${b.slug}"${isWorkerMode ? ' [worker]' : ''}`);
+		}
+	}
+
+	const activeBuilding = await initActiveBuilding();
+	await Promise.all([
+		initAgentStore(),
+		initProjectStore(),
+		initSeatStore(),
+		initSettingsStore(),
+		initWorkerAssignmentStore(),
+	]);
+	const connector = connectorForBuilding(activeBuilding);
+
 	const assets = await preloadAssets();
 
 	const agentManager = new StandaloneAgentManager();
@@ -349,18 +406,8 @@ async function main(): Promise<void> {
 		savePersistentAgents(persistentAgents);
 	}
 
-	// ── Seed design teams (UX + Visual: 1 PM + 1 QA + 5 workers each) ──
-	// Runs on every machine (hub + workers). seedDesignTeams is idempotent —
-	// it only creates slots that don't already exist. Each machine ends up with
-	// its OWN local team roster (names/IDs distinct per machine), used by fleet
-	// dispatch: when the hub cascades a `launchVisualDesigner` / `launchVisualQa`
-	// RPC to a remote worker, that worker picks a free agent from its own
-	// local roster.
-	const seeded = seedDesignTeams(persistentAgents);
-	if (seeded) {
-		savePersistentAgents(persistentAgents);
-		console.log(`[Standalone] Seeded design teams (UX + Visual)${isWorkerMode ? ' [worker]' : ''}`);
-	}
+	// Note: design teams already seeded for every building above. The active
+	// building's roster is what's loaded into `persistentAgents` here.
 
 	// ── WebSocket broadcast sink (webview clients only) ──────
 	const webviewClients = new Set<WebSocket>();
@@ -379,10 +426,7 @@ async function main(): Promise<void> {
 	agentManager.setSink(broadcastSink);
 
 	// ── ClickUp integration ─────────────────────────────────
-	const settings = readJson(SETTINGS_FILE) as Record<string, unknown> | null;
-	const clickupConfig: ClickUpConfig | null = settings?.clickup
-		? settings.clickup as ClickUpConfig
-		: null;
+	const clickupConfig = await loadActiveClickupConfig();
 
 	// ── Server context (shared state for message handlers) ──
 	const ctx: ServerContext = {
@@ -395,6 +439,9 @@ async function main(): Promise<void> {
 		clickupTickets: [],
 		clickupNextFetchAt: null,
 		clickupTimer: null,
+		connector,
+		activeBuilding,
+		allBuildings,
 		// Multi-worker
 		isWorkerMode,
 		workerIdentity,

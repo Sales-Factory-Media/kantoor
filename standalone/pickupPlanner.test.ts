@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { selectDarrylPickups, selectJanPickups } from './pickupPlanner.js';
-import type { ClickUpStatusGroup, ClickUpTask } from './clickupClient.js';
+import type { ClickUpStatusGroup, ClickUpTask } from '../src/connectors/clickupClient.js';
 
 const DARRYL = 'Darryl Philbin';
 const JAN = 'Jan Levinson';

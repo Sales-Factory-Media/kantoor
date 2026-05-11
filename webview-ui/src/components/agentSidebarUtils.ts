@@ -76,7 +76,14 @@ export function getDotInfo(
   return null
 }
 
-/** Group live + offline agents by their room/project name */
+/** Group live + offline agents by their room/project name.
+ *
+ *  Only projects in `knownProjects` (the active building's membership) are
+ *  shown. Agents whose workspacePath isn't in that allowed set are skipped —
+ *  their project belongs to another building. Special rooms (conference,
+ *  garage, Foreman, Art Director, fillers) always show regardless of
+ *  workspace path because they're not project-scoped.
+ */
 export function groupByRoom(
   agents: number[],
   officeState: OfficeState,
@@ -88,26 +95,44 @@ export function groupByRoom(
     if (!groups.has(name)) groups.set(name, { liveAgents: [], offlineAgents: [] })
     return groups.get(name)!
   }
-  // Seed with rooms from officeState + known projects (with workspace paths)
+
+  // Sets of workspace paths AND project names that belong to the active
+  // building. RoomInfo carries only projectName, while live/offline agents
+  // carry workspacePath — we filter against whichever identifier the input
+  // provides. Special rooms (no project identity) always show.
+  const allowedPaths = new Set<string>()
+  const allowedNames = new Set<string>()
+  for (const kp of knownProjects) {
+    if (kp.workspacePath) allowedPaths.add(kp.workspacePath)
+    allowedNames.add(kp.name)
+  }
+
+  // Seed with special rooms from officeState. Skip non-special rooms whose
+  // projectName isn't in the active building — they'll only resurface if
+  // the user re-ticks the project.
   for (const room of officeState.rooms) {
+    const isSpecial = !!(room.isConferenceRoom || room.isGarage || room.isForeman || room.isArtDirector || room.isFiller)
+    if (!isSpecial && !allowedNames.has(room.projectName)) continue
     const g = ensure(room.projectName)
-    if (room.isConferenceRoom || room.isGarage || room.isForeman || room.isArtDirector || room.isFiller) g.isSpecialRoom = true
+    if (isSpecial) g.isSpecialRoom = true
   }
   for (const kp of knownProjects) {
     const g = ensure(kp.name)
     if (kp.workspacePath) g.workspacePath = kp.workspacePath
   }
-  // Add live agents
+  // Add live agents — filter by allowed workspace paths.
   for (const id of agents) {
     const ch = officeState.characters.get(id)
     if (!ch || ch.isSubagent) continue
+    if (ch.workspacePath && !allowedPaths.has(ch.workspacePath)) continue
     const project = ch.projectName || ch.folderName || ''
     const g = ensure(project)
     g.liveAgents.push(id)
     if (ch.workspacePath && !g.workspacePath) g.workspacePath = ch.workspacePath
   }
-  // Add offline agents
+  // Add offline agents — filter by allowed workspace paths.
   for (const agent of offlineAgents) {
+    if (agent.workspacePath && !allowedPaths.has(agent.workspacePath)) continue
     const project = agent.projectName || 'Unknown'
     const g = ensure(project)
     g.offlineAgents.push(agent)

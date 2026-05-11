@@ -11,8 +11,10 @@ import {
 import type { WebSocket } from 'ws';
 import type { StandaloneAgentManager } from './standaloneAgentManager.js';
 import type { PersistentAgent } from './agentStore.js';
-import type { ClickUpConfig, ClickUpStatusGroup } from './clickupClient.js';
+import type { ClickUpConfig, ClickUpStatusGroup } from '../src/connectors/clickupClient.js';
 import type { DispatchRegistry } from './dispatchRegistry.js';
+import type { ProjectConnector } from '../src/connectors/types.js';
+import type { Building } from '../src/db/schema.js';
 
 // ── Worker types ────────────────────────────────────────────
 export interface WorkerInfo {
@@ -91,6 +93,13 @@ export interface ServerContext {
 	clickupTickets: ClickUpStatusGroup[];
 	clickupNextFetchAt: number | null;
 	clickupTimer: ReturnType<typeof setInterval> | null;
+	/** Active building's connector. The polling loop uses this. Null if the
+	 *  building's connector_config is empty (e.g. PC before GitHub creds). */
+	connector: ProjectConnector | null;
+	/** Active building metadata exposed to the WS protocol. */
+	activeBuilding: Building | null;
+	/** All buildings — kept in sync with DB so the WS switcher can list them. */
+	allBuildings: Building[];
 	// Multi-worker
 	isWorkerMode: boolean;
 	workerIdentity: WorkerIdentity | null;

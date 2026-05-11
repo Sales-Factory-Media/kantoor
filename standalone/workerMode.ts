@@ -6,7 +6,7 @@ import {
 	collapseHome,
 } from './agentStore.js';
 import type { PersistentAgent } from './agentStore.js';
-import type { ClickUpConfig } from './clickupClient.js';
+import type { ClickUpConfig } from '../src/connectors/clickupClient.js';
 import { WORKER_HEARTBEAT_INTERVAL_MS, WORKER_RECONNECT_INTERVAL_MS, DEFAULT_WORKER_ROLES } from './constants.js';
 import {
 	handleLaunchDesigner,

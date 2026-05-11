@@ -186,11 +186,23 @@ describe('groupByRoom', () => {
     expect(result.get('Conference')?.isSpecialRoom).toBe(true);
   });
 
-  it('populates workspace path from live agents when not in known projects', () => {
+  it('hides agents whose project is not in the active building (multi-building filter)', () => {
+    // Live agent with workspacePath /work/proj, but knownProjects (== active
+    // building's membership) is empty. Expected: agent is filtered out.
     const chars = new Map([
       [1, { projectName: 'proj', folderName: 'proj', isSubagent: false, workspacePath: '/work/proj' }],
     ]);
     const result = groupByRoom([1], makeOfficeState(chars), [], []);
+    expect(result.has('proj')).toBe(false);
+  });
+
+  it('shows live agents whose project IS in the active building, and exposes their workspacePath', () => {
+    const chars = new Map([
+      [1, { projectName: 'proj', folderName: 'proj', isSubagent: false, workspacePath: '/work/proj' }],
+    ]);
+    const knownProjects: KnownProject[] = [{ name: 'proj', workspacePath: '/work/proj' }];
+    const result = groupByRoom([1], makeOfficeState(chars), [], knownProjects);
+    expect(result.get('proj')?.liveAgents).toEqual([1]);
     expect(result.get('proj')?.workspacePath).toBe('/work/proj');
   });
 });

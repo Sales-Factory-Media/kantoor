@@ -8,6 +8,7 @@ import { PULSE_ANIMATION_DURATION_SEC, ZOOM_DEFAULT_DPR_FACTOR, MAX_DEVICE_PIXEL
 import { recordAppRender } from './perfOverlay.ts'
 import { ZoomControls } from './components/ZoomControls.js'
 import { BottomToolbar } from './components/BottomToolbar.js'
+import { BuildingSwitcher } from './components/BuildingSwitcher.js'
 import { DebugView } from './components/DebugView.js'
 import { AgentSidebar } from './components/AgentSidebar.js'
 import { ForemanPanel } from './components/ForemanPanel.js'
@@ -30,7 +31,7 @@ function defaultZoom(): number {
 
 function App() {
   recordAppRender()
-  const { agents, selectedAgent, selectAgent, agentTools, agentStatuses, subagentTools, subagentCharacters, layoutReady, workspaceFolders, offlineAgents, knownProjects, saveAgentMeta, forgetAgent, clickupTickets, clickupConfigured, clickupListId, clickupNextFetchAt, workers, organogram, janDesignConfig } = useExtensionMessages(getOfficeState)
+  const { agents, selectedAgent, selectAgent, agentTools, agentStatuses, subagentTools, subagentCharacters, layoutReady, workspaceFolders, offlineAgents, knownProjects, saveAgentMeta, forgetAgent, clickupTickets, clickupConfigured, clickupListId, clickupNextFetchAt, workers, organogram, janDesignConfig, buildings, activeBuildingId, projectMemberships } = useExtensionMessages(getOfficeState)
 
   const [isDebugMode, setIsDebugMode] = useState(false)
   const [zoom, setZoom] = useState(defaultZoom)
@@ -91,6 +92,8 @@ function App() {
       />
 
       <ZoomControls zoom={zoom} onZoomChange={setZoom} isDebugMode={isDebugMode} onToggleDebugMode={handleToggleDebugMode} />
+
+      <BuildingSwitcher buildings={buildings} activeBuildingId={activeBuildingId} projects={projectMemberships} />
 
       {/* Vignette overlay */}
       <div

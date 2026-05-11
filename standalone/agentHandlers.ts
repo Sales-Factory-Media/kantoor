@@ -12,9 +12,10 @@ import {
 import type { PersistentAgent, DesignConfig } from './agentStore.js';
 import { DEFAULT_DESIGN_CONFIG } from './agentStore.js';
 import { buildSystemPrompt } from './systemPrompts.js';
-import { readJson, writeJson, getOfflineAgents } from './serverHelpers.js';
-import { SEATS_FILE, SETTINGS_FILE } from './serverContext.js';
+import { getOfflineAgents } from './serverHelpers.js';
 import type { ServerContext } from './serverContext.js';
+import { loadSeats, saveSeats } from '../src/db/seatStore.js';
+import { getAppSetting, setAppSetting } from '../src/db/settingsStore.js';
 
 // ── Launch helper (manual UI launches only) ──────────────────
 // This helper is only used by the manual UI paths (handleLaunchAgent,
@@ -65,7 +66,7 @@ export function handleSaveAgentSeats(msg: Record<string, unknown>, ctx: ServerCo
 			}
 		}
 	}
-	writeJson(SEATS_FILE, seats);
+	saveSeats(seats);
 
 	// Sync persistent agent metadata from seat saves
 	let changed = false;
@@ -188,10 +189,10 @@ export function handleForgetAgent(msg: Record<string, unknown>, ctx: ServerConte
 	// the character without waiting for the stale-process check). Has no effect
 	// when the agent is no longer running.
 	agentManager.removeSessionBySessionId(sessionId);
-	const seats = readJson(SEATS_FILE) as Record<string, unknown> | null;
-	if (seats && sessionId in seats) {
+	const seats = { ...loadSeats() };
+	if (sessionId in seats) {
 		delete seats[sessionId];
-		writeJson(SEATS_FILE, seats);
+		saveSeats(seats);
 	}
 	broadcastSink.postMessage({ type: 'offlineAgents', agents: getOfflineAgents(agentManager, persistentAgents) });
 }
@@ -222,13 +223,11 @@ export function handleRemoveRoom(msg: Record<string, unknown>, ctx: ServerContex
 }
 
 export function handleSetSoundEnabled(msg: Record<string, unknown>): void {
-	const settings = readJson(SETTINGS_FILE) ?? {};
-	writeJson(SETTINGS_FILE, { ...settings, soundEnabled: msg.enabled });
+	setAppSetting('soundEnabled', msg.enabled);
 }
 
 export function getJanDesignConfig(): DesignConfig {
-	const settings = readJson(SETTINGS_FILE) as Record<string, unknown> | null;
-	const saved = settings?.janDesignConfig as Partial<DesignConfig> | undefined;
+	const saved = getAppSetting<Partial<DesignConfig>>('janDesignConfig');
 	return {
 		figmaUrl: saved?.figmaUrl || DEFAULT_DESIGN_CONFIG.figmaUrl,
 		clickupDocUrl: saved?.clickupDocUrl || DEFAULT_DESIGN_CONFIG.clickupDocUrl,
@@ -247,8 +246,7 @@ export function handleSetJanDesignConfig(msg: Record<string, unknown>, ctx: Serv
 		examplesUrl: examplesUrl || DEFAULT_DESIGN_CONFIG.examplesUrl,
 	};
 
-	const settings = readJson(SETTINGS_FILE) ?? {};
-	writeJson(SETTINGS_FILE, { ...settings, janDesignConfig: config });
+	setAppSetting('janDesignConfig', config);
 	ctx.broadcastSink.postMessage({ type: 'janDesignConfigLoaded', config });
 }
 

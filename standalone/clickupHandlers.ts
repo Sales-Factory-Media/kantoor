@@ -16,11 +16,12 @@ import {
 	buildJanSystemPrompt,
 } from './systemPrompts.js';
 import { getJanDesignConfig } from './agentHandlers.js';
-import { fetchListTasks } from './clickupClient.js';
-import type { ClickUpConfig } from './clickupClient.js';
-import { readJson, writeJson } from './serverHelpers.js';
-import { SETTINGS_FILE } from './serverContext.js';
+import type { ClickUpConfig, ClickUpStatusGroup } from '../src/connectors/clickupClient.js';
 import type { ServerContext } from './serverContext.js';
+import {
+	getActiveBuildingConnectorConfig,
+	patchActiveBuildingConnectorConfig,
+} from '../src/db/settingsStore.js';
 import {
 	computeDesignFleetCapacity,
 	computeDevFleetCapacity,
@@ -52,9 +53,17 @@ import {
 
 export function startClickupPolling(ctx: ServerContext): void {
 	if (ctx.clickupTimer) return;
-	if (!ctx.clickupConfig) return;
-	console.log('[Standalone] Starting ClickUp polling...');
+	if (!ctx.connector || !ctx.connector.isConfigured()) return;
+	const label = ctx.activeBuilding?.name ?? 'building';
+	console.log(`[Standalone] Starting ${ctx.connector.type} polling for ${label}...`);
 	ctx.clickupTimer = setInterval(() => { handleClickupRefresh(ctx).catch(() => {}); }, CLICKUP_POLL_INTERVAL_MS);
+}
+
+export function stopClickupPolling(ctx: ServerContext): void {
+	if (ctx.clickupTimer) {
+		clearInterval(ctx.clickupTimer);
+		ctx.clickupTimer = null;
+	}
 }
 
 // ── Refresh & auto-pickup ────────────────────────────────────
@@ -81,17 +90,20 @@ export function runAutoPickupNow(ctx: ServerContext): void {
 let clickupRefreshInFlight = false;
 
 export async function handleClickupRefresh(ctx: ServerContext): Promise<void> {
-	if (!ctx.clickupConfig) return;
+	if (!ctx.connector || !ctx.connector.isConfigured()) return;
 	if (clickupRefreshInFlight) return;
 	clickupRefreshInFlight = true;
 	try {
-		const statuses = await fetchListTasks(ctx.clickupConfig);
+		// StatusGroup (connector) and ClickUpStatusGroup (legacy) have the same
+		// shape; cast for the in-context store until the rest of dispatch is
+		// migrated to the normalized types.
+		const statuses = await ctx.connector.fetchTickets() as unknown as ClickUpStatusGroup[];
 		ctx.clickupTickets = statuses;
 		ctx.clickupNextFetchAt = Date.now() + CLICKUP_POLL_INTERVAL_MS;
 		ctx.broadcastSink.postMessage({ type: 'clickupTickets', statuses, nextFetchAt: ctx.clickupNextFetchAt });
 		runAutoPickupNow(ctx);
 	} catch (err) {
-		console.error('[Standalone] ClickUp fetch error:', err);
+		console.error(`[Standalone] ${ctx.connector.type} fetch error:`, err);
 		ctx.broadcastSink.postMessage({ type: 'clickupError', error: String(err) });
 	} finally {
 		clickupRefreshInFlight = false;
@@ -260,29 +272,51 @@ export function autoJanPickup(ctx: ServerContext): void {
 
 // ── Configure ────────────────────────────────────────────────
 
-export function handleClickupConfigure(msg: Record<string, unknown>, ctx: ServerContext): void {
-	const settings = (readJson(SETTINGS_FILE) ?? {}) as { apiToken?: string; listId?: string };
-
+export async function handleClickupConfigure(msg: Record<string, unknown>, ctx: ServerContext): Promise<void> {
 	const apiToken = msg.apiToken as string | undefined;
 	const listId = msg.listId as string | undefined;
 
-	if (apiToken !== undefined) settings.apiToken = apiToken;
-	if (listId !== undefined) settings.listId = listId;
+	const patch: Record<string, unknown> = {};
+	if (apiToken !== undefined) patch.apiToken = apiToken;
+	if (listId !== undefined) patch.listId = listId;
 
-	writeJson(SETTINGS_FILE, settings);
+	const merged = await patchActiveBuildingConnectorConfig(patch);
+	const mergedToken = merged.apiToken as string | undefined;
+	const mergedListId = merged.listId as string | undefined;
 
-	if (!settings.apiToken || !settings.listId) {
+	// Rebuild the connector from the patched config so polling sees the change.
+	const { connectorForBuilding } = await import('../src/connectors/registry.js');
+	if (ctx.activeBuilding) {
+		const refreshed = { ...ctx.activeBuilding, connectorConfig: merged };
+		ctx.activeBuilding = refreshed;
+		ctx.connector = connectorForBuilding(refreshed);
+	}
+
+	if (!mergedToken || !mergedListId) {
 		ctx.clickupConfig = null;
 		ctx.broadcastSink.postMessage({ type: 'clickupConfigured', configured: false });
 		return;
 	}
 
-	const config: ClickUpConfig = { apiToken: settings.apiToken, listId: settings.listId };
+	const config: ClickUpConfig = { apiToken: mergedToken, listId: mergedListId };
 	ctx.clickupConfig = config;
 	ctx.broadcastSink.postMessage({ type: 'clickupConfigured', configured: true, listId: config.listId });
 
 	startClickupPolling(ctx);
 	handleClickupRefresh(ctx).catch(() => {});
+}
+
+/**
+ * Read the active building's connector config and return it as a ClickUpConfig
+ * if both fields are present. Used at server boot to populate ctx.clickupConfig
+ * from the DB instead of the legacy settings.json.
+ */
+export async function loadActiveClickupConfig(): Promise<ClickUpConfig | null> {
+	const cfg = await getActiveBuildingConnectorConfig();
+	const apiToken = cfg.apiToken as string | undefined;
+	const listId = cfg.listId as string | undefined;
+	if (!apiToken || !listId) return null;
+	return { apiToken, listId };
 }
 
 // ── Jan single-ticket design briefing (legacy webview message) ──

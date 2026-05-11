@@ -1,4 +1,3 @@
-import * as fs from 'fs';
 import * as os from 'os';
 import * as crypto from 'crypto';
 import type { WebSocket } from 'ws';
@@ -8,25 +7,19 @@ import {
 	WORKER_DISPATCH_TIMEOUT_MS,
 	DEFAULT_WORKER_ROLES,
 } from './constants.js';
-import { WORKER_ASSIGNMENTS_FILE, SETTINGS_DIR } from './serverContext.js';
 import type { ServerContext, WorkerInfo, WorkerAssignment } from './serverContext.js';
 import { loadPersistentAgents, collapseHome } from './agentStore.js';
 import { releaseTicket } from './dispatchRegistry.js';
+import { loadWorkerAssignments, saveWorkerAssignments } from '../src/db/workerAssignmentStore.js';
 
-// ── Assignment persistence ──────────────────────────────────
+// ── Assignment persistence (delegates to DB-backed store) ───
 
 export function loadAssignments(): WorkerAssignment[] {
-	try {
-		if (!fs.existsSync(WORKER_ASSIGNMENTS_FILE)) return [];
-		return JSON.parse(fs.readFileSync(WORKER_ASSIGNMENTS_FILE, 'utf-8')) as WorkerAssignment[];
-	} catch { return []; }
+	return loadWorkerAssignments();
 }
 
 export function saveAssignments(assignments: WorkerAssignment[]): void {
-	if (!fs.existsSync(SETTINGS_DIR)) {
-		fs.mkdirSync(SETTINGS_DIR, { recursive: true, mode: 0o700 });
-	}
-	fs.writeFileSync(WORKER_ASSIGNMENTS_FILE, JSON.stringify(assignments, null, 2), { encoding: 'utf-8', mode: 0o600 });
+	saveWorkerAssignments(assignments);
 }
 
 // ── Worker registration ─────────────────────────────────────

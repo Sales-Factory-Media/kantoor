@@ -2,14 +2,12 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import * as crypto from 'crypto';
+import { eq } from 'drizzle-orm';
 import {
 	MEMPALACE_SERVER_PORT,
 	DESIGNER_ROLE_SHORT,
 	VISUAL_DESIGNER_ROLE_SHORT,
-	PM_ROLE_SHORT,
-	UX_PM_ROLE_SHORT,
 	UX_QA_ROLE_SHORT,
-	VISUAL_PM_ROLE_SHORT,
 	VISUAL_QA_ROLE_SHORT,
 	TEAM_UX_ID,
 	TEAM_VISUAL_ID,
@@ -21,9 +19,11 @@ import {
 	DEFAULT_DESIGN_EXAMPLES_URL,
 } from './constants.js';
 import { writeJson } from './serverHelpers.js';
+import { getDb } from '../src/db/client.js';
+import { persistentAgents as agentsTable } from '../src/db/schema.js';
+import { getActiveBuildingId, tryGetActiveBuildingId } from '../src/db/activeBuilding.js';
 
 const SETTINGS_DIR = path.join(os.homedir(), '.pixel-agents');
-const AGENTS_FILE = path.join(SETTINGS_DIR, 'agents.json');
 const AGENTS_DIR = path.join(SETTINGS_DIR, 'agents');
 
 export interface DesignConfig {
@@ -96,38 +96,128 @@ export const TEAMS: Record<string, TeamDefinition> = {
 	},
 };
 
-export function loadPersistentAgents(): PersistentAgent[] {
-	try {
-		if (!fs.existsSync(AGENTS_FILE)) return [];
-		const agents = JSON.parse(fs.readFileSync(AGENTS_FILE, 'utf-8')) as PersistentAgent[];
-		// Migration: rename legacy 'Designer' role → 'UX Designer' and assign team
-		for (const a of agents) {
-			if (a.roleShort === 'Designer') {
-				a.roleShort = DESIGNER_ROLE_SHORT;
-			}
-			if (!a.teamId) {
-				if (a.roleShort === DESIGNER_ROLE_SHORT) a.teamId = TEAM_UX_ID;
-				else if (a.roleShort === VISUAL_DESIGNER_ROLE_SHORT) a.teamId = TEAM_VISUAL_ID;
-			}
-			// Migration (2026-04-22): PM roles removed — Jan does the PM work herself.
-			// Tag existing PM agents as retired so they aren't picked by launchers or
-			// seeded back by seedDesignTeams.
-			if (
-				(a.roleShort === UX_PM_ROLE_SHORT || a.roleShort === VISUAL_PM_ROLE_SHORT || a.roleShort === PM_ROLE_SHORT)
-				&& !a.retired
-			) {
-				a.retired = true;
+// In-memory cache of agents for the active building. Loaded once at boot via
+// initAgentStore(); subsequent loadPersistentAgents() calls return the cache.
+// Mutations go through savePersistentAgents() which rewrites the cache and
+// flushes the full set to the DB (matches the previous JSON-write-everything
+// pattern; we can switch to per-row upserts later if it gets slow).
+let agentCache: PersistentAgent[] = [];
+
+function rowToAgent(r: typeof agentsTable.$inferSelect): PersistentAgent {
+	return {
+		id: r.id,
+		name: r.name,
+		roleShort: r.roleShort,
+		roleFull: r.roleFull,
+		workspacePath: r.workspacePath,
+		teamId: r.teamId ?? undefined,
+		reportsToId: r.reportsToId ?? undefined,
+		palette: r.palette ?? undefined,
+		hueShift: r.hueShift ?? undefined,
+		seatId: r.seatId ?? undefined,
+		currentSessionId: r.currentSessionId ?? undefined,
+		lastSessionEnd: r.lastSessionEnd ?? undefined,
+		sessionCount: r.sessionCount ?? undefined,
+		currentTicketId: r.currentTicketId ?? undefined,
+		currentTicketName: r.currentTicketName ?? undefined,
+		currentTicketUrl: r.currentTicketUrl ?? undefined,
+		lastTicketId: r.lastTicketId ?? undefined,
+		retired: r.retired ?? undefined,
+	};
+}
+
+function agentToRow(a: PersistentAgent, buildingId: string): typeof agentsTable.$inferInsert {
+	return {
+		id: a.id,
+		buildingId,
+		name: a.name,
+		roleShort: a.roleShort,
+		roleFull: a.roleFull,
+		workspacePath: a.workspacePath,
+		teamId: a.teamId ?? null,
+		reportsToId: a.reportsToId ?? null,
+		palette: a.palette ?? null,
+		hueShift: a.hueShift ?? null,
+		seatId: a.seatId ?? null,
+		currentSessionId: a.currentSessionId ?? null,
+		lastSessionEnd: a.lastSessionEnd ?? null,
+		sessionCount: a.sessionCount ?? null,
+		currentTicketId: a.currentTicketId ?? null,
+		currentTicketName: a.currentTicketName ?? null,
+		currentTicketUrl: a.currentTicketUrl ?? null,
+		lastTicketId: a.lastTicketId ?? null,
+		retired: a.retired ?? null,
+	};
+}
+
+export async function initAgentStore(): Promise<void> {
+	const db = getDb();
+	const buildingId = getActiveBuildingId();
+	const rows = await db.select().from(agentsTable).where(eq(agentsTable.buildingId, buildingId));
+	agentCache = rows.map(rowToAgent);
+}
+
+/**
+ * Direct DB read for a specific building, bypassing the active-building cache.
+ * Used by boot-time team seeding which runs against every building.
+ */
+export async function loadPersistentAgentsForBuilding(buildingId: string): Promise<PersistentAgent[]> {
+	const db = getDb();
+	const rows = await db.select().from(agentsTable).where(eq(agentsTable.buildingId, buildingId));
+	return rows.map(rowToAgent);
+}
+
+/**
+ * Direct DB write for a specific building. If `buildingId` is the active
+ * building, the cache is also refreshed so subsequent loadPersistentAgents()
+ * sees the changes.
+ */
+export async function savePersistentAgentsForBuilding(buildingId: string, agents: PersistentAgent[]): Promise<void> {
+	const db = getDb();
+	const rows = agents.map(a => agentToRow(a, buildingId));
+	await db.transaction(async (tx) => {
+		await tx.delete(agentsTable).where(eq(agentsTable.buildingId, buildingId));
+		if (rows.length > 0) {
+			for (let i = 0; i < rows.length; i += 200) {
+				await tx.insert(agentsTable).values(rows.slice(i, i + 200));
 			}
 		}
-		return agents;
-	} catch { return []; }
+	});
+	if (buildingId === tryGetActiveBuildingId()) {
+		agentCache = agents;
+	}
+}
+
+export function loadPersistentAgents(): PersistentAgent[] {
+	return agentCache;
 }
 
 export function savePersistentAgents(agents: PersistentAgent[]): void {
-	if (!fs.existsSync(SETTINGS_DIR)) {
-		fs.mkdirSync(SETTINGS_DIR, { recursive: true });
+	agentCache = agents;
+	const buildingId = tryGetActiveBuildingId();
+	if (!buildingId) {
+		// Not initialized (e.g. unit tests that exercise pure in-memory logic).
+		// Cache update happened above; durable write is skipped.
+		return;
 	}
-	fs.writeFileSync(AGENTS_FILE, JSON.stringify(agents, null, 2), 'utf-8');
+	const db = getDb();
+	const rows = agents.map(a => agentToRow(a, buildingId));
+	// Fire-and-forget: cache is the source of truth in memory; DB write is
+	// durable persistence. Errors are logged but don't block the caller.
+	(async () => {
+		try {
+			await db.transaction(async (tx) => {
+				await tx.delete(agentsTable).where(eq(agentsTable.buildingId, buildingId));
+				if (rows.length > 0) {
+					for (let i = 0; i < rows.length; i += 200) {
+						await tx.insert(agentsTable).values(rows.slice(i, i + 200));
+					}
+				}
+			});
+		} catch (err) {
+			console.error('[agentStore] Failed to persist agents:', err);
+		}
+	})();
 }
 
 function normalizeUrlHost(host: string): string {

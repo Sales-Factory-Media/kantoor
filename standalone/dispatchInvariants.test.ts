@@ -73,7 +73,7 @@ vi.mock('../src/projectStore.js', () => ({
 
 import type { ServerContext, WorkerInfo } from './serverContext.js';
 import type { PersistentAgent } from './agentStore.js';
-import type { ClickUpStatusGroup } from './clickupClient.js';
+import type { ClickUpStatusGroup } from '../src/connectors/clickupClient.js';
 import { createDispatchRegistry, claimTicket, isTicketClaimed } from './dispatchRegistry.js';
 import {
 	autoDarrylPickup,

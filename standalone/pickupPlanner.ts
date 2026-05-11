@@ -10,7 +10,7 @@
  * handlers.
  */
 
-import type { ClickUpStatusGroup, ClickUpTask } from './clickupClient.js';
+import type { ClickUpStatusGroup, ClickUpTask } from '../src/connectors/clickupClient.js';
 
 export interface DarrylCandidate {
 	id: string;

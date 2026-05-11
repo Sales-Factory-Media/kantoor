@@ -163,6 +163,23 @@ export interface JanDesignConfig {
   examplesUrl: string
 }
 
+export interface BuildingSummary {
+  id: string
+  slug: string
+  name: string
+  connectorType: string
+  sortOrder: number
+  configured: boolean
+}
+
+export interface ProjectMembershipEntry {
+  id: number
+  name: string
+  workspacePath: string
+  description?: string
+  belongsToActive: boolean
+}
+
 export interface ExtensionMessageState {
   agents: number[]
   selectedAgent: number | null
@@ -188,6 +205,9 @@ export interface ExtensionMessageState {
   workers: WorkerStatusEntry[]
   organogram: OrganogramPayload | null
   janDesignConfig: JanDesignConfig | null
+  buildings: BuildingSummary[]
+  activeBuildingId: string | null
+  projectMemberships: ProjectMembershipEntry[]
 }
 
 export function useExtensionMessages(
@@ -216,6 +236,9 @@ export function useExtensionMessages(
   const [workers, setWorkers] = useState<WorkerStatusEntry[]>([])
   const [organogram, setOrganogram] = useState<OrganogramPayload | null>(null)
   const [janDesignConfig, setJanDesignConfig] = useState<JanDesignConfig | null>(null)
+  const [buildings, setBuildings] = useState<BuildingSummary[]>([])
+  const [activeBuildingId, setActiveBuildingId] = useState<string | null>(null)
+  const [projectMemberships, setProjectMemberships] = useState<ProjectMembershipEntry[]>([])
 
   // Ref to expose saveAgentMeta and forgetAgent outside the effect closure
   const saveAgentMetaRef = useRef<() => void>(() => {})
@@ -635,6 +658,40 @@ export function useExtensionMessages(
         setPeersBrokerAvailable(msg.available as boolean)
       } else if (msg.type === 'workerStatus') {
         setWorkers(msg.workers as WorkerStatusEntry[])
+      } else if (msg.type === 'buildingsList') {
+        setBuildings(msg.buildings as BuildingSummary[])
+        setActiveBuildingId(msg.activeBuildingId as string | null)
+      } else if (msg.type === 'buildingSwitched') {
+        // Hot-swap: server is about to send fresh state for the new building.
+        // Drop all live characters/agents so the office repopulates cleanly.
+        const building = msg.building as BuildingSummary
+        setActiveBuildingId(building.id)
+        const os = getOfficeState()
+        os.characters.clear()
+        setAgents([])
+        setSelectedAgent(null)
+        setAgentTools({})
+        setAgentStatuses({})
+        setSubagentTools({})
+        setSubagentCharacters([])
+        setClickupTickets([])
+        setClickupNextFetchAt(null)
+        layoutReadyRef.current = false
+        setLayoutReady(false)
+        // The server will resend organogram/knownProjects/offlineAgents/etc.
+        // immediately after this message; the existing handlers pick those up.
+      } else if (msg.type === 'buildingConfigured') {
+        // Server has merged a new connector config; just refresh the building
+        // list so the dropdown's "configured" badge updates.
+        vscode.postMessage({ type: 'listBuildings' })
+      } else if (msg.type === 'buildingCreateError') {
+        console.error('[Buildings] create failed:', msg.error)
+      } else if (msg.type === 'seatsLoaded') {
+        // Sent during a building switch — replaces cached seat metadata so
+        // characters that come back online get the new building's seats.
+        cachedMeta = (msg.seats as Record<string, { name?: string; palette?: number; hueShift?: number; seatId?: string; roleShort?: string; roleFull?: string; workspacePath?: string; persistentAgentId?: string }>) ?? {}
+      } else if (msg.type === 'projectsList') {
+        setProjectMemberships(msg.projects as ProjectMembershipEntry[])
       }
     }
     window.addEventListener('message', handler)
@@ -645,5 +702,5 @@ export function useExtensionMessages(
   const saveAgentMeta = useCallback(() => saveAgentMetaRef.current(), [])
   const forgetAgent = useCallback((sessionId: string) => forgetAgentRef.current(sessionId), [])
 
-  return { agents, selectedAgent, selectAgent: setSelectedAgent, agentTools, agentStatuses, subagentTools, subagentCharacters, layoutReady, loadedAssets, workspaceFolders, agentConversation, offlineAgents, knownProjects, saveAgentMeta, forgetAgent, clickupTickets, clickupConfigured, clickupListId, clickupNextFetchAt, activeConference, peersBrokerAvailable, workers, organogram, janDesignConfig }
+  return { agents, selectedAgent, selectAgent: setSelectedAgent, agentTools, agentStatuses, subagentTools, subagentCharacters, layoutReady, loadedAssets, workspaceFolders, agentConversation, offlineAgents, knownProjects, saveAgentMeta, forgetAgent, clickupTickets, clickupConfigured, clickupListId, clickupNextFetchAt, activeConference, peersBrokerAvailable, workers, organogram, janDesignConfig, buildings, activeBuildingId, projectMemberships }
 }

@@ -1,4 +1,21 @@
 services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: pixelagents
+      POSTGRES_PASSWORD: pixelagents
+      POSTGRES_DB: pixelagents
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    ports:
+      - "5438:5432"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pixelagents -d pixelagents"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
   peers-broker:
     image: oven/bun:latest
     working_dir: /app
@@ -22,5 +39,6 @@ services:
     restart: unless-stopped
 
 volumes:
+  postgres-data:
   peers-data:
   mempalace-data:
