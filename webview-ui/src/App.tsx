@@ -13,6 +13,7 @@ import { DebugView } from './components/DebugView.js'
 import { AgentSidebar } from './components/AgentSidebar.js'
 import { ForemanPanel } from './components/ForemanPanel.js'
 import { ArtDirectorPanel } from './components/ArtDirectorPanel.js'
+import { IdentifyWorkerModal } from './components/IdentifyWorkerModal.js'
 
 // Game state lives outside React — updated imperatively by message handlers
 const officeStateRef = { current: null as OfficeState | null }
@@ -31,7 +32,7 @@ function defaultZoom(): number {
 
 function App() {
   recordAppRender()
-  const { agents, selectedAgent, selectAgent, agentTools, agentStatuses, subagentTools, subagentCharacters, layoutReady, workspaceFolders, offlineAgents, knownProjects, saveAgentMeta, forgetAgent, clickupTickets, clickupConfigured, clickupListId, clickupNextFetchAt, workers, organogram, janDesignConfig, buildings, activeBuildingId, projectMemberships } = useExtensionMessages(getOfficeState)
+  const { agents, selectedAgent, selectAgent, agentTools, agentStatuses, subagentTools, subagentCharacters, layoutReady, workspaceFolders, offlineAgents, knownProjects, saveAgentMeta, forgetAgent, clickupTickets, clickupConfigured, clickupListId, clickupNextFetchAt, workers, organogram, janDesignConfig, buildings, activeBuildingId, projectMemberships, pendingWorkers, dismissPendingWorker } = useExtensionMessages(getOfficeState)
 
   const [isDebugMode, setIsDebugMode] = useState(false)
   const [zoom, setZoom] = useState(defaultZoom)
@@ -185,6 +186,14 @@ function App() {
         onOpenArtDirector={() => setArtDirectorOpen(true)}
         organogram={organogram}
       />
+
+      {pendingWorkers.length > 0 && (
+        <IdentifyWorkerModal
+          key={pendingWorkers[0].sessionId}
+          worker={pendingWorkers[0]}
+          onClose={() => dismissPendingWorker(pendingWorkers[0].sessionId)}
+        />
+      )}
 
       {isDebugMode && (
         <DebugView

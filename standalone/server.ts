@@ -35,6 +35,7 @@ import {
 	handleSaveAgentSeats,
 	handleSaveAgentIdentity,
 	handleDeleteAgentIdentity,
+	handleIdentifyWorker,
 	handleLaunchAgent,
 	handleRestartAgent,
 	handleForgetAgent,
@@ -197,6 +198,7 @@ function handleWebviewReady(ws: WebSocket, ctx: ServerContext): void {
 				roleFull: pa.roleFull,
 				workspacePath: pa.workspacePath,
 				persistentAgentId: pa.id,
+				avatarConfig: pa.avatarConfig,
 			};
 		}
 	}
@@ -265,6 +267,7 @@ const messageHandlers: Record<string, (ws: WebSocket, msg: Record<string, unknow
 	saveAgentSeats: (_ws, msg, ctx) => handleSaveAgentSeats(msg, ctx),
 	saveAgentIdentity: (_ws, msg, ctx) => handleSaveAgentIdentity(msg, ctx),
 	deleteAgentIdentity: (_ws, msg, ctx) => handleDeleteAgentIdentity(msg, ctx),
+	identifyWorker: (_ws, msg, ctx) => handleIdentifyWorker(msg, ctx),
 	launchAgent: (_ws, msg, ctx) => handleLaunchAgent(msg, ctx),
 	restartAgent: (_ws, msg) => handleRestartAgent(msg),
 	forgetAgent: (_ws, msg, ctx) => handleForgetAgent(msg, ctx),
@@ -482,19 +485,18 @@ async function main(): Promise<void> {
 				const sessionId = path.basename(jsonlFile, '.jsonl');
 				let pa = findPersistentAgentBySession(sessionId);
 
-				// If no agent claims this exact sessionId, try to ADOPT an existing
-				// offline agent at the same workspace before minting a new one. This
-				// is the fix for the historical "duplicates per project" bug: prior
-				// behavior was to always create a new PersistentAgent on every fresh
-				// JSONL, leaving the offline-but-still-meaningful previous agent
-				// stranded. We pick the most-recently-active offline candidate; if
-				// none exists we fall through to the create branch. Same-name agents
-				// in *different* workspaces are intentionally not merged here — the
-				// user explicitly relies on e.g. Pam-at-projectA being distinct from
+				// Compute existing offline employees at this workspace up-front. They
+				// are shown to the user in the "who's this?" popup so a freshly-
+				// discovered session can be marked as a returning employee instead of
+				// a brand-new hire (manual replacement for the old silent auto-adopt,
+				// which used to merge into the most-recent candidate without asking).
+				// Same-name agents in *different* workspaces are intentionally excluded
+				// — the user relies on e.g. Pam-at-projectA being distinct from
 				// Pam-at-projectB.
+				let candidates: PersistentAgent[] = [];
 				if (!pa && workspacePath) {
 					const targetWp = expandHome(workspacePath);
-					const candidates = persistentAgents.filter(p =>
+					candidates = persistentAgents.filter(p =>
 						!p.currentSessionId
 						&& !p.retired
 						&& p.workspacePath
@@ -503,15 +505,14 @@ async function main(): Promise<void> {
 					candidates.sort((a, b) =>
 						(b.lastSessionEnd ?? '').localeCompare(a.lastSessionEnd ?? ''),
 					);
-					if (candidates.length > 0) {
-						pa = candidates[0];
-						pa.currentSessionId = sessionId;
-						savePersistentAgents(persistentAgents);
-						console.log(`[Standalone] Adopted existing agent "${pa.name}" (${pa.id}) for session ${sessionId} at ${workspacePath}`);
-					}
 				}
 
-				// Auto-persist newly discovered agents
+				// A genuinely new session — mint a provisional agent so the office
+				// shows activity immediately, then ask the user who it is via the
+				// newWorkerIdentified popup. The user either adopts an existing
+				// employee (handleIdentifyWorker re-binds + deletes this provisional)
+				// or names it as a new hire.
+				const needsIdentification = !pa;
 				if (!pa) {
 					pa = {
 						id: crypto.randomUUID(),
@@ -535,7 +536,28 @@ async function main(): Promise<void> {
 					roleFull: pa.roleFull,
 					workspacePath: pa.workspacePath,
 					persistentAgentId: pa.id,
+					avatarConfig: pa.avatarConfig,
 				});
+
+				if (needsIdentification) {
+					broadcastSink.postMessage({
+						type: 'newWorkerIdentified',
+						sessionId,
+						provisionalAgentId: pa.id,
+						provisionalName: pa.name,
+						workspacePath: workspacePath || '',
+						projectName,
+						candidates: candidates.map(c => ({
+							id: c.id,
+							name: c.name,
+							roleShort: c.roleShort,
+							lastSessionEnd: c.lastSessionEnd,
+							sessionCount: c.sessionCount,
+							avatarConfig: c.avatarConfig,
+						})),
+					});
+				}
+
 				broadcastSink.postMessage({ type: 'knownProjects', projects: loadKnownProjects() });
 				broadcastSink.postMessage({ type: 'offlineAgents', agents: getOfflineAgents(agentManager, persistentAgents) });
 			}

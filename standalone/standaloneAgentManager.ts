@@ -193,6 +193,32 @@ export class StandaloneAgentManager {
 		return agent?.sessionId ?? null;
 	}
 
+	/** Find the live numeric agent id bound to a sessionId, or null. */
+	getAgentIdBySessionId(sessionId: string): number | null {
+		for (const [id, agent] of this.agents) {
+			if (agent.sessionId === sessionId) return id;
+		}
+		return null;
+	}
+
+	/**
+	 * Re-point a live session at a different persistent agent without tearing
+	 * down its file watching / numeric id. Used when the user identifies a
+	 * freshly-discovered session as an existing employee — we keep the running
+	 * character but swap which PersistentAgent it represents.
+	 *
+	 * Returns the live numeric id, or null if no session matched.
+	 */
+	rebindSession(sessionId: string, persistentAgentId: string): number | null {
+		for (const [id, agent] of this.agents) {
+			if (agent.sessionId === sessionId) {
+				agent.persistentAgentId = persistentAgentId;
+				return id;
+			}
+		}
+		return null;
+	}
+
 	/** Get all live session IDs */
 	getLiveSessionIds(): Set<string> {
 		const ids = new Set<string>();

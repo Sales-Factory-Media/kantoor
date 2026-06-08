@@ -57,6 +57,7 @@ export interface PersistentAgent {
 	currentTicketUrl?: string;
 	lastTicketId?: string;
 	retired?: boolean;        // archived role — kept for memory, never launched
+	avatarConfig?: string;    // DiceBear pixel-art combo as a JSON string ({ seed, options? })
 }
 
 // ── Team structure (static source of truth) ──────────────
@@ -123,6 +124,7 @@ function rowToAgent(r: typeof agentsTable.$inferSelect): PersistentAgent {
 		currentTicketUrl: r.currentTicketUrl ?? undefined,
 		lastTicketId: r.lastTicketId ?? undefined,
 		retired: r.retired ?? undefined,
+		avatarConfig: r.avatarConfig ?? undefined,
 	};
 }
 
@@ -147,6 +149,7 @@ function agentToRow(a: PersistentAgent, buildingId: string): typeof agentsTable.
 		currentTicketUrl: a.currentTicketUrl ?? null,
 		lastTicketId: a.lastTicketId ?? null,
 		retired: a.retired ?? null,
+		avatarConfig: a.avatarConfig ?? null,
 	};
 }
 

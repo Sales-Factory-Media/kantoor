@@ -1,8 +1,8 @@
 # Pixel Agents — Compressed Reference
 
-Pixel art office where AI agents (Claude Code sessions) are animated characters. Runs as a **standalone Node.js server** (primary) or a VS Code extension with embedded React webview.
+Pixel art office where AI agents (Claude Code sessions) are animated characters. Runs as a **standalone Node.js server** with an embedded React webview served over WebSocket.
 
-**Development focus**: New features should target the standalone version unless explicitly stated otherwise. The standalone server (`standalone/`) and shared modules (`src/types.ts`, `src/fileWatcher.ts`, `src/transcriptParser.ts`, `src/timerManager.ts`, `src/assetLoader.ts`, `src/layoutPersistence.ts`, `src/constants.ts`) are the primary codebase. The VS Code extension (`src/PixelAgentsViewProvider.ts`, `src/agentManager.ts`, `src/extension.ts`) is maintained but not the focus.
+**Architecture**: The standalone server (`standalone/`) plus shared modules in `src/` (`types.ts`, `fileWatcher.ts`, `transcriptParser.ts`, `timerManager.ts`, `assetLoader.ts`, `constants.ts`, `connectors/`, `db/`, `projectStore.ts`) make up the backend; `webview-ui/` is the frontend. The old VS Code extension has been removed — there is no extension build anymore.
 
 ## Architecture
 
@@ -23,7 +23,7 @@ standalone/                   — Standalone Node.js server (primary dev target)
   constants.ts               — Server port, scan intervals, role constants, JAN_WORKSPACE
   types.ts                   — StandaloneAgentState (extends BaseAgentState)
 
-src/                          — Extension backend (Node.js, VS Code API) + shared modules
+src/                          — Shared modules used by the standalone server (DB, connectors, asset/transcript parsing)
   db/                         — Drizzle ORM + Postgres (replaces ~/.pixel-agents/*.json state)
     client.ts                 — Pool + drizzle() factory; DATABASE_URL env or localhost:5438 default
     schema.ts                 — buildings, persistent_agents, seats, projects, building_projects, worker_assignments, app_settings
@@ -40,16 +40,12 @@ src/                          — Extension backend (Node.js, VS Code API) + sha
     registry.ts               — connectorForBuilding(building) — picks implementation by connectorType
     clickupClient.ts          — Low-level ClickUp HTTP client
   projectStore.ts             — Active-building project pool cache (M2M via building_projects)
-  constants.ts                — All backend magic numbers/strings (timing, truncation, asset parsing, VS Code IDs)
-  extension.ts                — Entry: activate(), deactivate()
-  PixelAgentsViewProvider.ts   — WebviewViewProvider, message dispatch, asset loading
+  constants.ts                — All backend magic numbers/strings (timing, truncation, asset parsing)
   assetLoader.ts              — PNG parsing, sprite conversion, catalog building, default layout loading
-  agentManager.ts             — Terminal lifecycle: launch, remove, restore, persist
-  layoutPersistence.ts        — User-level layout file I/O (~/.pixel-agents/layout.json), migration, cross-window watching
   fileWatcher.ts              — fs.watch + polling, readNewLines, /clear detection, terminal adoption
   transcriptParser.ts         — JSONL parsing: tool_use/tool_result → webview messages
   timerManager.ts             — Waiting/permission timer logic
-  types.ts                    — Shared interfaces (AgentState, PersistedAgent)
+  types.ts                    — Shared interfaces (MessageSink, BaseAgentState, ConversationEntry)
 
 webview-ui/src/               — React + TypeScript (Vite)
   constants.ts                — All webview magic numbers/strings (grid, animation, rendering, camera, zoom, editor, game logic, notification sound)
@@ -153,6 +149,10 @@ Two teams under Jan (Art Director), each with 1 PM, 1 QA reviewer, and 5 worker 
 **Agent discovery**: `ProjectScanner` scans `~/.claude/projects/` for JSONL files, checks `ps aux` for live `claude --session-id` processes. New JSONL files appearing during a live session are auto-adopted. No "+ Agent" button needed.
 
 **Agent lifecycle**: Auto-discovered from live processes. Removed when process dies (`STALE_CHECK_INTERVAL_MS = 5s` poll via `ps aux`). `StandaloneAgentManager` handles add/remove/status sync; delegates file watching to shared `startFileWatching()`.
+
+**New-worker identification popup**: When a genuinely new session (no PersistentAgent matches its `currentSessionId`) is discovered, `onNewSession` mints a *provisional* PersistentAgent (random name) so the office shows activity immediately, then broadcasts `newWorkerIdentified` (sessionId, provisionalAgentId, provisionalName, projectName, `candidates` = offline non-retired employees at the same workspace). The webview shows `IdentifyWorkerModal` ("Who's this?"): pick a returning employee → `identifyWorker {choice:'existing'}` re-binds the live session to that agent (`StandaloneAgentManager.rebindSession`) and deletes the provisional; or "+ New employee" → name/role form → `identifyWorker {choice:'new'}` stamps the provisional. Either path updates the live character in place via `agentReidentified` (name/role/palette/persistentAgentId). This **replaces the old silent auto-adopt** — adoption is now an explicit user choice (dismissing the popup keeps the provisional as a normal offline agent). UI-launched / called-in agents set `currentSessionId` before their JSONL appears, so they match and never trigger the popup.
+
+**Employee avatars (DiceBear pixel-art)**: Each employee gets a deterministic pixel-art face. Deps: `@dicebear/core` + `@dicebear/styles` (v10) in `webview-ui`. `webview-ui/src/avatar.ts` wraps the v10 API (`new Avatar(pixelArt, { seed, ...traits }).toString()/.toDataUri()`; `pixelArt` is `import … from '@dicebear/styles/pixel-art.json'`, needs `resolveJsonModule`). The stored "combo" is `{ seed, options? }` serialized to JSON in `persistent_agents.avatar_config` (migration `0002_avatar_config`, `PersistentAgent.avatarConfig`, carried through agentMeta/offlineAgents/`agentReidentified`/`agentIdentitySaved` and the webview `Character.avatarConfig`). `<EmployeeAvatar>` renders it as a crisp `<img>` (`image-rendering: pixelated`). The identify popup's new-hire form and the Employee File both show the face + a 🎲 Randomize button (`randomAvatarConfig()` = fresh random seed); the combo is persisted on Hire/Save. Returning-employee candidates and sidebar rows show their stored faces. NOTE: this is a separate profile image, distinct from the on-canvas pixel sprite (palette/hueShift).
 
 **Terminal focus**: `focusItermSession()` finds the TTY for a `claude --session-id <id>` process, then uses osascript to locate and select the matching iTerm2 tab.
 
@@ -270,14 +270,15 @@ Toggle via "Layout" button. Tools: SELECT (default), Floor paint, Wall paint, Er
 ## Build & Dev
 
 ```sh
-# VS Code extension
-npm install && cd webview-ui && npm install && cd .. && npm run build
-# Standalone
-node esbuild-standalone.js && cd webview-ui && npm run build && cd ..
-node dist/standalone.js
+npm install        # also installs webview-ui deps via postinstall
+npm run build      # esbuild (server) → dist/standalone.js + Vite (webview) → dist/webview/
+npm start          # node dist/standalone.js --no-local-dev (hub delegates dev work to remote workers)
 ```
-Extension build: type-check → lint → esbuild (extension) → vite (webview). F5 for Extension Dev Host.
-Standalone build: esbuild (server) + assets copy → `dist/standalone.js`; Vite (webview) → `dist/webview/`.
+- `npm run build` = `node esbuild-standalone.js && npm run build:webview` (server bundle + assets copy + migrations copy + Vite webview).
+- `npm run build:prod` = same with `--production` (minified server bundle).
+- `npm run build:server` = server bundle only (skip webview).
+- `npm start` runs with `--no-local-dev`; use `npm run start:local` to let the hub also run dev work locally.
+- `npm run check-types` = `tsc --noEmit` (tsconfig.json covers `standalone/**` + the shared `src/` modules). `npm run lint` = `eslint src standalone`. `npm test` = vitest.
 
 ## TypeScript Constraints
 

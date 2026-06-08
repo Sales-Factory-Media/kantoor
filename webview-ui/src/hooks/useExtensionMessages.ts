@@ -111,6 +111,27 @@ export interface OfflineAgent {
   roleFull?: string
   lastSessionEnd?: string
   sessionCount?: number
+  avatarConfig?: string
+}
+
+/** An existing employee offered as a match in the "who's this?" popup */
+export interface IdentifyCandidate {
+  id: string
+  name: string
+  roleShort?: string
+  lastSessionEnd?: string
+  sessionCount?: number
+  avatarConfig?: string
+}
+
+/** A freshly-discovered session awaiting user identification */
+export interface PendingWorker {
+  sessionId: string
+  provisionalAgentId: string
+  provisionalName: string
+  workspacePath?: string
+  projectName?: string
+  candidates: IdentifyCandidate[]
 }
 
 export interface WorkerStatusEntry {
@@ -208,6 +229,8 @@ export interface ExtensionMessageState {
   buildings: BuildingSummary[]
   activeBuildingId: string | null
   projectMemberships: ProjectMembershipEntry[]
+  pendingWorkers: PendingWorker[]
+  dismissPendingWorker: (sessionId: string) => void
 }
 
 export function useExtensionMessages(
@@ -239,6 +262,7 @@ export function useExtensionMessages(
   const [buildings, setBuildings] = useState<BuildingSummary[]>([])
   const [activeBuildingId, setActiveBuildingId] = useState<string | null>(null)
   const [projectMemberships, setProjectMemberships] = useState<ProjectMembershipEntry[]>([])
+  const [pendingWorkers, setPendingWorkers] = useState<PendingWorker[]>([])
 
   // Ref to expose saveAgentMeta and forgetAgent outside the effect closure
   const saveAgentMetaRef = useRef<() => void>(() => {})
@@ -256,17 +280,17 @@ export function useExtensionMessages(
 
   useEffect(() => {
     // Buffer agents from existingAgents until layout is loaded
-    let pendingAgents: Array<{ id: number; palette?: number; hueShift?: number; seatId?: string; name?: string; sessionId?: string; folderName?: string; roleShort?: string; roleFull?: string; workspacePath?: string; persistentAgentId?: string; carType?: string }> = []
+    let pendingAgents: Array<{ id: number; palette?: number; hueShift?: number; seatId?: string; name?: string; sessionId?: string; folderName?: string; roleShort?: string; roleFull?: string; workspacePath?: string; persistentAgentId?: string; carType?: string; avatarConfig?: string }> = []
 
     // Cached metadata from seats.json (keyed by sessionId)
-    let cachedMeta: Record<string, { name?: string; palette?: number; hueShift?: number; seatId?: string; roleShort?: string; roleFull?: string; workspacePath?: string; persistentAgentId?: string }> = {}
+    let cachedMeta: Record<string, { name?: string; palette?: number; hueShift?: number; seatId?: string; roleShort?: string; roleFull?: string; workspacePath?: string; persistentAgentId?: string; avatarConfig?: string }> = {}
 
     /** Save all non-sub-agent character metadata keyed by sessionId */
     function saveAgentMeta(os: OfficeState): void {
-      const seats: Record<string, { name?: string; palette?: number; hueShift?: number; seatId?: string; roleShort?: string; roleFull?: string; workspacePath?: string; persistentAgentId?: string; carType?: string }> = {}
+      const seats: Record<string, { name?: string; palette?: number; hueShift?: number; seatId?: string; roleShort?: string; roleFull?: string; workspacePath?: string; persistentAgentId?: string; carType?: string; avatarConfig?: string }> = {}
       for (const ch of os.characters.values()) {
         if (ch.isSubagent || !ch.sessionId) continue
-        seats[ch.sessionId] = { name: ch.name, palette: ch.palette, hueShift: ch.hueShift, seatId: ch.seatId ?? undefined, roleShort: ch.roleShort, roleFull: ch.roleFull, workspacePath: ch.workspacePath, persistentAgentId: ch.persistentAgentId, carType: ch.carType }
+        seats[ch.sessionId] = { name: ch.name, palette: ch.palette, hueShift: ch.hueShift, seatId: ch.seatId ?? undefined, roleShort: ch.roleShort, roleFull: ch.roleFull, workspacePath: ch.workspacePath, persistentAgentId: ch.persistentAgentId, carType: ch.carType, avatarConfig: ch.avatarConfig }
       }
       // Merge with cached meta to preserve data for offline agents
       const merged = { ...cachedMeta, ...seats }
@@ -314,6 +338,7 @@ export function useExtensionMessages(
             if (p.roleFull) ch.roleFull = p.roleFull
             if (p.workspacePath) ch.workspacePath = p.workspacePath
             if (p.persistentAgentId) ch.persistentAgentId = p.persistentAgentId
+            if (p.avatarConfig) ch.avatarConfig = p.avatarConfig
             ch.carType = p.carType || pickRandomCarType()
           }
         }
@@ -328,7 +353,7 @@ export function useExtensionMessages(
         const folderName = msg.folderName as string | undefined
         // Check cached metadata first, fall back to metadata embedded in the message
         const cached = sessionId ? cachedMeta[sessionId] : undefined
-        const inline = msg.name ? { name: msg.name as string, palette: msg.palette as number | undefined, hueShift: msg.hueShift as number | undefined, seatId: msg.seatId as string | undefined, roleShort: msg.roleShort as string | undefined, roleFull: msg.roleFull as string | undefined, workspacePath: msg.workspacePath as string | undefined, persistentAgentId: msg.persistentAgentId as string | undefined } : undefined
+        const inline = msg.name ? { name: msg.name as string, palette: msg.palette as number | undefined, hueShift: msg.hueShift as number | undefined, seatId: msg.seatId as string | undefined, roleShort: msg.roleShort as string | undefined, roleFull: msg.roleFull as string | undefined, workspacePath: msg.workspacePath as string | undefined, persistentAgentId: msg.persistentAgentId as string | undefined, avatarConfig: msg.avatarConfig as string | undefined } : undefined
         const m = cached || inline
         setAgents((prev) => (prev.includes(id) ? prev : [...prev, id]))
         setSelectedAgent(id)
@@ -340,6 +365,7 @@ export function useExtensionMessages(
             if (m?.roleFull) ch.roleFull = m.roleFull
             if (m?.workspacePath) ch.workspacePath = m.workspacePath
             if (m?.persistentAgentId) ch.persistentAgentId = m.persistentAgentId
+            if (m?.avatarConfig) ch.avatarConfig = m.avatarConfig
             ch.carType = (m as Record<string, unknown>)?.carType as string || pickRandomCarType()
           }
         }
@@ -380,7 +406,7 @@ export function useExtensionMessages(
         os.regenerateRoomLayout(knownProjectsRef.current, offlineAgentsRef.current)
       } else if (msg.type === 'existingAgents') {
         const incoming = msg.agents as number[]
-        const meta = (msg.agentMeta || {}) as Record<string, { name?: string; palette?: number; hueShift?: number; seatId?: string; roleShort?: string; roleFull?: string; workspacePath?: string; persistentAgentId?: string; carType?: string }>
+        const meta = (msg.agentMeta || {}) as Record<string, { name?: string; palette?: number; hueShift?: number; seatId?: string; roleShort?: string; roleFull?: string; workspacePath?: string; persistentAgentId?: string; carType?: string; avatarConfig?: string }>
         const sessionIds = (msg.sessionIds || {}) as Record<number, string>
         const folderNames = (msg.folderNames || {}) as Record<number, string>
         // Cache metadata for later lookups (e.g. new agents arriving with known sessionId)
@@ -390,7 +416,7 @@ export function useExtensionMessages(
           const sid = sessionIds[id]
           // Try sessionId-keyed metadata first, fall back to agentId-keyed (extension compat)
           const m = (sid ? meta[sid] : undefined) || meta[id]
-          pendingAgents.push({ id, palette: m?.palette, hueShift: m?.hueShift, seatId: m?.seatId, name: m?.name, sessionId: sid, folderName: folderNames[id], roleShort: m?.roleShort, roleFull: m?.roleFull, workspacePath: m?.workspacePath, persistentAgentId: m?.persistentAgentId, carType: m?.carType })
+          pendingAgents.push({ id, palette: m?.palette, hueShift: m?.hueShift, seatId: m?.seatId, name: m?.name, sessionId: sid, folderName: folderNames[id], roleShort: m?.roleShort, roleFull: m?.roleFull, workspacePath: m?.workspacePath, persistentAgentId: m?.persistentAgentId, carType: m?.carType, avatarConfig: m?.avatarConfig })
         }
         setAgents((prev) => {
           const ids = new Set(prev)
@@ -618,12 +644,13 @@ export function useExtensionMessages(
           }
           // Also match if we just saved for this character
           if (ch.persistentAgentId === agentId) {
-            const savedAgent = msg.agent as { name?: string; roleShort?: string; roleFull?: string; workspacePath?: string } | undefined
+            const savedAgent = msg.agent as { name?: string; roleShort?: string; roleFull?: string; workspacePath?: string; avatarConfig?: string } | undefined
             if (savedAgent) {
               if (savedAgent.name) ch.name = savedAgent.name
               if (savedAgent.roleShort !== undefined) ch.roleShort = savedAgent.roleShort
               if (savedAgent.roleFull !== undefined) ch.roleFull = savedAgent.roleFull
               if (savedAgent.workspacePath !== undefined) ch.workspacePath = savedAgent.workspacePath
+              if (savedAgent.avatarConfig !== undefined) ch.avatarConfig = savedAgent.avatarConfig
             }
           }
         }
@@ -689,9 +716,38 @@ export function useExtensionMessages(
       } else if (msg.type === 'seatsLoaded') {
         // Sent during a building switch — replaces cached seat metadata so
         // characters that come back online get the new building's seats.
-        cachedMeta = (msg.seats as Record<string, { name?: string; palette?: number; hueShift?: number; seatId?: string; roleShort?: string; roleFull?: string; workspacePath?: string; persistentAgentId?: string }>) ?? {}
+        cachedMeta = (msg.seats as Record<string, { name?: string; palette?: number; hueShift?: number; seatId?: string; roleShort?: string; roleFull?: string; workspacePath?: string; persistentAgentId?: string; avatarConfig?: string }>) ?? {}
       } else if (msg.type === 'projectsList') {
         setProjectMemberships(msg.projects as ProjectMembershipEntry[])
+      } else if (msg.type === 'newWorkerIdentified') {
+        const worker: PendingWorker = {
+          sessionId: msg.sessionId as string,
+          provisionalAgentId: msg.provisionalAgentId as string,
+          provisionalName: (msg.provisionalName as string) || '',
+          workspacePath: msg.workspacePath as string | undefined,
+          projectName: msg.projectName as string | undefined,
+          candidates: (msg.candidates as IdentifyCandidate[]) || [],
+        }
+        // De-dupe on sessionId in case the broadcast arrives twice.
+        setPendingWorkers((prev) => prev.some((w) => w.sessionId === worker.sessionId) ? prev : [...prev, worker])
+      } else if (msg.type === 'agentReidentified') {
+        // The user resolved a "who's this?" popup — update the live character in
+        // place (name/role/appearance) without tearing it down.
+        const id = msg.id as number
+        const ch = os.characters.get(id)
+        if (ch) {
+          if (msg.name !== undefined) ch.name = msg.name as string
+          if (msg.roleShort !== undefined) ch.roleShort = msg.roleShort as string
+          if (msg.roleFull !== undefined) ch.roleFull = msg.roleFull as string
+          if (msg.workspacePath !== undefined) ch.workspacePath = (msg.workspacePath as string) || undefined
+          if (msg.palette !== undefined && msg.palette !== null) ch.palette = msg.palette as number
+          if (msg.hueShift !== undefined && msg.hueShift !== null) ch.hueShift = msg.hueShift as number
+          if (msg.persistentAgentId !== undefined) ch.persistentAgentId = msg.persistentAgentId as string
+          if (msg.avatarConfig !== undefined) ch.avatarConfig = msg.avatarConfig as string
+          // Drop the resolved worker from the popup queue (match by live session).
+          if (ch.sessionId) setPendingWorkers((prev) => prev.filter((w) => w.sessionId !== ch.sessionId))
+          saveAgentMeta(os)
+        }
       }
     }
     window.addEventListener('message', handler)
@@ -701,6 +757,11 @@ export function useExtensionMessages(
 
   const saveAgentMeta = useCallback(() => saveAgentMetaRef.current(), [])
   const forgetAgent = useCallback((sessionId: string) => forgetAgentRef.current(sessionId), [])
+  // Dismiss is purely local — the provisional agent stays on the server and just
+  // becomes a normal (un-named) offline agent the user can edit later.
+  const dismissPendingWorker = useCallback((sessionId: string) => {
+    setPendingWorkers((prev) => prev.filter((w) => w.sessionId !== sessionId))
+  }, [])
 
-  return { agents, selectedAgent, selectAgent: setSelectedAgent, agentTools, agentStatuses, subagentTools, subagentCharacters, layoutReady, loadedAssets, workspaceFolders, agentConversation, offlineAgents, knownProjects, saveAgentMeta, forgetAgent, clickupTickets, clickupConfigured, clickupListId, clickupNextFetchAt, activeConference, peersBrokerAvailable, workers, organogram, janDesignConfig, buildings, activeBuildingId, projectMemberships }
+  return { agents, selectedAgent, selectAgent: setSelectedAgent, agentTools, agentStatuses, subagentTools, subagentCharacters, layoutReady, loadedAssets, workspaceFolders, agentConversation, offlineAgents, knownProjects, saveAgentMeta, forgetAgent, clickupTickets, clickupConfigured, clickupListId, clickupNextFetchAt, activeConference, peersBrokerAvailable, workers, organogram, janDesignConfig, buildings, activeBuildingId, projectMemberships, pendingWorkers, dismissPendingWorker }
 }

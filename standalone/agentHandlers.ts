@@ -91,7 +91,7 @@ export function handleSaveAgentSeats(msg: Record<string, unknown>, ctx: ServerCo
 
 export function handleSaveAgentIdentity(msg: Record<string, unknown>, ctx: ServerContext): void {
 	const { persistentAgents, broadcastSink, agentManager, setPersistentAgents } = ctx;
-	const agentData = msg.agent as { id?: string; name: string; roleShort: string; roleFull: string; workspacePath: string; palette?: number; hueShift?: number; seatId?: string; currentSessionId?: string };
+	const agentData = msg.agent as { id?: string; name: string; roleShort: string; roleFull: string; workspacePath: string; palette?: number; hueShift?: number; seatId?: string; currentSessionId?: string; avatarConfig?: string };
 	const shouldLaunch = msg.launch as boolean | undefined;
 	const isNew = !agentData.id;
 	const agentId = agentData.id || crypto.randomUUID();
@@ -105,6 +105,7 @@ export function handleSaveAgentIdentity(msg: Record<string, unknown>, ctx: Serve
 		if (agentData.palette !== undefined) existing.palette = agentData.palette;
 		if (agentData.hueShift !== undefined) existing.hueShift = agentData.hueShift;
 		if (agentData.seatId !== undefined) existing.seatId = agentData.seatId;
+		if (agentData.avatarConfig !== undefined) existing.avatarConfig = agentData.avatarConfig;
 	} else {
 		const newAgent: PersistentAgent = {
 			id: agentId,
@@ -116,6 +117,7 @@ export function handleSaveAgentIdentity(msg: Record<string, unknown>, ctx: Serve
 			hueShift: agentData.hueShift,
 			seatId: agentData.seatId,
 			currentSessionId: agentData.currentSessionId,
+			avatarConfig: agentData.avatarConfig,
 		};
 		persistentAgents.push(newAgent);
 	}
@@ -148,6 +150,95 @@ export function handleDeleteAgentIdentity(msg: Record<string, unknown>, ctx: Ser
 	setPersistentAgents(updated);
 	deleteAgentData(agentId);
 	broadcastSink.postMessage({ type: 'offlineAgents', agents: getOfflineAgents(agentManager, updated) });
+}
+
+/**
+ * Resolve the "who's this?" popup for a freshly-discovered session. The session
+ * already runs under a provisional PersistentAgent (minted in onNewSession); this
+ * handler either:
+ *  - choice 'existing': re-binds the live session to an existing employee and
+ *    deletes the throwaway provisional agent, or
+ *  - choice 'new': stamps the provisional agent with the user-supplied name/role.
+ * Either way the live character is updated in place via `agentReidentified` so it
+ * keeps its numeric id / file watching.
+ */
+export function handleIdentifyWorker(msg: Record<string, unknown>, ctx: ServerContext): void {
+	const { persistentAgents, broadcastSink, agentManager, setPersistentAgents } = ctx;
+	const sessionId = msg.sessionId as string;
+	const provisionalAgentId = msg.provisionalAgentId as string;
+	const choice = msg.choice as 'existing' | 'new';
+	const provisional = persistentAgents.find(p => p.id === provisionalAgentId);
+
+	if (choice === 'existing') {
+		const existingAgentId = msg.existingAgentId as string;
+		const target = persistentAgents.find(p => p.id === existingAgentId);
+		if (!target) {
+			console.log(`[Standalone] identifyWorker: existing agent ${existingAgentId} not found`);
+			return;
+		}
+		// Adopt: this running session now belongs to the existing employee.
+		target.currentSessionId = sessionId;
+
+		// Drop the throwaway provisional agent (keep the live manager session — we
+		// only rebind which PersistentAgent it points at, below).
+		let updated = persistentAgents;
+		if (provisional && provisional.id !== target.id) {
+			updated = persistentAgents.filter(p => p.id !== provisional.id);
+			deleteAgentData(provisional.id);
+		}
+		savePersistentAgents(updated);
+		setPersistentAgents(updated);
+
+		const liveId = agentManager.rebindSession(sessionId, target.id);
+		console.log(`[Standalone] identifyWorker: session ${sessionId} adopted by "${target.name}" (${target.id})`);
+		if (liveId !== null) {
+			broadcastSink.postMessage({
+				type: 'agentReidentified',
+				id: liveId,
+				name: target.name,
+				roleShort: target.roleShort,
+				roleFull: target.roleFull,
+				workspacePath: target.workspacePath,
+				palette: target.palette,
+				hueShift: target.hueShift,
+				persistentAgentId: target.id,
+				avatarConfig: target.avatarConfig,
+			});
+		}
+		broadcastSink.postMessage({ type: 'offlineAgents', agents: getOfflineAgents(agentManager, updated) });
+		return;
+	}
+
+	// choice === 'new' — name the provisional agent.
+	if (!provisional) {
+		console.log(`[Standalone] identifyWorker: provisional agent ${provisionalAgentId} not found`);
+		return;
+	}
+	const name = typeof msg.name === 'string' && msg.name.trim() ? msg.name.trim() : provisional.name;
+	provisional.name = name;
+	provisional.roleShort = typeof msg.roleShort === 'string' ? msg.roleShort.trim() : '';
+	provisional.roleFull = typeof msg.roleFull === 'string' ? msg.roleFull.trim() : '';
+	if (typeof msg.avatarConfig === 'string') provisional.avatarConfig = msg.avatarConfig;
+	savePersistentAgents(persistentAgents);
+	setPersistentAgents(persistentAgents);
+	console.log(`[Standalone] identifyWorker: session ${sessionId} named new hire "${provisional.name}" (${provisional.id})`);
+
+	const liveId = agentManager.getAgentIdBySessionId(sessionId);
+	if (liveId !== null) {
+		broadcastSink.postMessage({
+			type: 'agentReidentified',
+			id: liveId,
+			name: provisional.name,
+			roleShort: provisional.roleShort,
+			roleFull: provisional.roleFull,
+			workspacePath: provisional.workspacePath,
+			palette: provisional.palette,
+			hueShift: provisional.hueShift,
+			persistentAgentId: provisional.id,
+			avatarConfig: provisional.avatarConfig,
+		});
+	}
+	broadcastSink.postMessage({ type: 'offlineAgents', agents: getOfflineAgents(agentManager, persistentAgents) });
 }
 
 export function handleLaunchAgent(msg: Record<string, unknown>, ctx: ServerContext): void {

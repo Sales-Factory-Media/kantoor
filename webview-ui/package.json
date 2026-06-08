@@ -10,6 +10,8 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@dicebear/core": "^10.1.0",
+    "@dicebear/styles": "^10.1.0",
     "@pixi/tilemap": "^5.0.2",
     "d3": "^7.9.0",
     "d3-org-chart": "^3.1.1",

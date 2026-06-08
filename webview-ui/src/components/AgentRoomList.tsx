@@ -7,6 +7,7 @@ import { FOREMAN_ROOM_NAME, ART_DIRECTOR_ROOM_NAME } from '../constants.js'
 import { getActivity, getDotInfo, groupByRoom, deleteButtonStyle } from './agentSidebarUtils.js'
 import type { ClickUpTicketRef } from './agentSidebarUtils.js'
 import { OfflineAgentRow } from './OfflineAgentRow.js'
+import { EmployeeAvatar } from './EmployeeAvatar.js'
 
 export interface AgentRoomListProps {
   officeState: OfficeState
@@ -265,6 +266,13 @@ export function AgentRoomList({
               >
                 {/* Name row */}
                 <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                  <EmployeeAvatar
+                    id={ch.sessionId || String(id)}
+                    name={ch.name}
+                    avatarConfig={ch.avatarConfig}
+                    size={28}
+                    style={{ marginRight: 4 }}
+                  />
                   <span
                     className={dot?.pulse ? 'pixel-agents-pulse' : undefined}
                     style={{

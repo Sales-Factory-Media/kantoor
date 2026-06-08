@@ -50,6 +50,10 @@ export const persistentAgents = pgTable('persistent_agents', {
 	currentTicketUrl: text('current_ticket_url'),
 	lastTicketId: text('last_ticket_id'),
 	retired: boolean('retired'),
+	// DiceBear pixel-art avatar "combo" for this employee, stored as a JSON
+	// string ({ seed, options? }). Null until the user picks a face in the
+	// identify popup / employee file.
+	avatarConfig: text('avatar_config'),
 });
 
 /**

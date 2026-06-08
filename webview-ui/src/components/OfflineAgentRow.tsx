@@ -3,6 +3,7 @@ import type { OfflineAgent } from '../hooks/useExtensionMessages.js'
 import { vscode } from '../vscodeApi.js'
 import { timeAgo, deleteButtonStyle } from './agentSidebarUtils.js'
 import type { ClickUpTicketRef } from './agentSidebarUtils.js'
+import { EmployeeAvatar } from './EmployeeAvatar.js'
 
 interface OfflineAgentRowProps {
   agent: OfflineAgent
@@ -55,6 +56,13 @@ export function OfflineAgentRow({ agent, onEdit, onDelete, onCallIn, onRestart, 
         gap: 4,
       }}
     >
+      <EmployeeAvatar
+        id={agent.sessionId}
+        name={agent.name}
+        avatarConfig={agent.avatarConfig}
+        size={28}
+        style={{ opacity: 0.85, marginRight: 4 }}
+      />
       <div style={{ overflow: 'hidden', flex: 1 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
           <span

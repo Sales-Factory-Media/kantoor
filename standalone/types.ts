@@ -23,4 +23,5 @@ export interface OfflineAgent {
 	roleFull?: string;
 	lastSessionEnd?: string;
 	sessionCount?: number;
+	avatarConfig?: string;
 }

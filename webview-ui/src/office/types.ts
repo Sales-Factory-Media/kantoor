@@ -275,6 +275,8 @@ export interface Character {
   workspacePath?: string
   /** Linked persistent agent ID */
   persistentAgentId?: string
+  /** DiceBear pixel-art avatar combo (JSON string) for this employee */
+  avatarConfig?: string
   /** Whether the character is standing at an activity spot (not seated) */
   atActivitySpot: boolean
   /** Current activity spot target, or null if heading to seat */
