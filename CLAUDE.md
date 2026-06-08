@@ -12,10 +12,34 @@ standalone/                   — Standalone Node.js server (primary dev target)
   standaloneAgentManager.ts  — Agent lifecycle: add/remove sessions, status sync
   projectScanner.ts          — Scans ~/.claude/projects/ for JSONL files, ps aux for live sessions
   itermFocus.ts              — macOS: focus iTerm2 tab by session ID (osascript)
-  constants.ts               — Server port, scan intervals
+  agentStore.ts              — PersistentAgent CRUD, Drizzle-backed; dedup + cross-building collision defenses
+  buildingHandlers.ts        — Building list/switch/create, project membership toggling
+  launchHelpers.ts           — Shared launch boilerplate (delegates to itermFocus.launchAgentSession)
+  workerDispatch.ts          — Unified dispatcher: local-first, cascade to remote workers via fleet RPC
+  orchestratorDispatch.ts    — Shared batch-dispatch helper used by Jan/Darryl autopickup paths
+  dispatchRegistry.ts        — In-flight ticket claims (atomic claim/release, prevents races)
+  workerRegistry.ts          — Remote-worker connection tracking + per-machine state
+  conferenceHandlers.ts      — Two-agent peer conferences via claude-peers MCP
+  constants.ts               — Server port, scan intervals, role constants, JAN_WORKSPACE
   types.ts                   — StandaloneAgentState (extends BaseAgentState)
 
 src/                          — Extension backend (Node.js, VS Code API) + shared modules
+  db/                         — Drizzle ORM + Postgres (replaces ~/.pixel-agents/*.json state)
+    client.ts                 — Pool + drizzle() factory; DATABASE_URL env or localhost:5438 default
+    schema.ts                 — buildings, persistent_agents, seats, projects, building_projects, worker_assignments, app_settings
+    migrate.ts                — Runs SQL migrations on boot
+    migrateFromJson.ts        — One-shot legacy ~/.pixel-agents/*.json → DB import (idempotent, only fires when buildings table empty)
+    activeBuilding.ts         — In-memory "active building" cell; switchActiveBuilding() flips it
+    seatStore.ts              — Seat metadata per (buildingId, sessionId)
+    settingsStore.ts          — Global app_settings key/value (soundEnabled, janDesignConfig)
+    workerAssignmentStore.ts  — Worker assignment audit trail per building
+  connectors/                 — Ticket-source abstraction (per-building)
+    types.ts                  — ProjectConnector interface (fetchTickets, getTicket, addComment, moveStatus)
+    clickup.ts                — ClickUp connector (wraps clickupClient)
+    github.ts                 — GitHub Issues connector
+    registry.ts               — connectorForBuilding(building) — picks implementation by connectorType
+    clickupClient.ts          — Low-level ClickUp HTTP client
+  projectStore.ts             — Active-building project pool cache (M2M via building_projects)
   constants.ts                — All backend magic numbers/strings (timing, truncation, asset parsing, VS Code IDs)
   extension.ts                — Entry: activate(), deactivate()
   PixelAgentsViewProvider.ts   — WebviewViewProvider, message dispatch, asset loading
@@ -79,6 +103,20 @@ scripts/                      — 7-stage asset extraction pipeline
   wall-tile-editor.html       — Browser UI for editing wall tile appearance
 ```
 
+## Buildings
+
+A **building** represents one company / workspace context with its own ticket connector (ClickUp or GitHub Issues), org chart, agents, seats, and project membership. Seeded by `migrateLegacyJsonIntoDb` with `vibelab` (ClickUp) + `pc` (GitHub). Webview top-left dropdown switches the active building (`handleSwitchBuilding` stops connector polling, re-inits every store cache from DB, rebuilds connector, broadcasts fresh state).
+
+**Storage**: `src/db/schema.ts` is the source of truth. Postgres 16 in docker-compose. Drizzle ORM. Migrations in `src/db/migrations/`. The legacy JSON files in `~/.pixel-agents/` are NOT read at runtime anymore — `migrateLegacyJsonIntoDb` is the one-shot importer and only runs when the `buildings` table is empty.
+
+**M2M projects**: `projects` is a global pool keyed by `workspace_path`. `building_projects` joins them. The same project can belong to N buildings, or none. `projectStore.ts` caches the active building's project list and exposes `addKnownProject`, `setProjectMembership`, `listAllProjectsWithMembership`.
+
+**Identity rule**: `PersistentAgent.id` is the only unique key — globally, across buildings. `name` is NOT unique (multiple projects can each have a "Pam"). Uniqueness for "same conceptual worker" is the tuple `(building_id, name, workspace_path)`. Any dedup/cleanup logic MUST key on `workspace_path` too.
+
+**Org-wide staff workspace**: `JAN_WORKSPACE = ~/Projects/kantoor-workspace` is the shared workspace for Jan + design-team agents — they exist per-building but are never tied to a specific project. The sidebar filter (`agentSidebarUtils.groupByRoom`) treats `kantoor-workspace` paths as "always-visible" to keep org-wide staff from disappearing into the per-building filter.
+
+**Defense layer in `agentStore.ts`**: legacy data + race-prone fire-and-forget saves used to leave duplicate-id rows in the DB. Three defenses now stack: within-batch dedup by id, cross-building id collision detection (skip + warn — non-destructive), per-building Promise-chain save serializer. Diagnostic SQL at the bottom of the file. One-time cleanup script: `scripts/cleanup-duplicate-agents.ts` (dry-run by default, `--apply` to delete; groups by `(building_id, name, workspace_path)`).
+
 ## Dev Work AI Review (Darryl's flow)
 
 All dev work dispatched by Darryl goes through GitHub Copilot review before reaching humans. Worker finishes → moves ticket to `ai review` (NOT `qa test`) → Copilot reviews the PR. On the next polling cycle, `autoDarrylPickup` picks up `ai review` tickets assigned to Darryl (prioritized over `to do`) and dispatches Darryl with `ticketStatus = 'ai review'`. `handleDarrylHandleTicket` branches on this and gives Darryl an "AI Review dispatch" initial task: find the original implementer in the ticket comments (look for `Assigned to worker: ...`), reassign them via `POST /api/launch-agent` with `aiReviewMode: true`. The reassigned agent receives a feedback-processing initial task: move to `in progress`, read Copilot's PR comments, decide if anything actionable remains, then either fix-and-push-and-back-to-`ai review` or forward to `qa test`. Three-round soft cap: if a ticket has cycled through ai review 3+ times, Darryl tells the agent to be conservative and forward to qa test unless there's a real bug. Reviewer's character matches Visual QA: nitpicky but not hostage-taking.
@@ -118,7 +156,7 @@ Two teams under Jan (Art Director), each with 1 PM, 1 QA reviewer, and 5 worker 
 
 **Terminal focus**: `focusItermSession()` finds the TTY for a `claude --session-id <id>` process, then uses osascript to locate and select the matching iTerm2 tab.
 
-**Persistence**: `~/.pixel-agents/seats.json` (agent seat assignments) and `~/.pixel-agents/settings.json` (sound enabled) — plain JSON files written via `writeJson()`, not VS Code globalState. Layout uses the shared `~/.pixel-agents/layout.json` via `layoutPersistence.ts`.
+**Persistence**: Postgres-backed via Drizzle ORM (`src/db/`). PersistentAgents, seats, projects, building_projects, worker_assignments, and app_settings all live in DB. Layout still uses the shared `~/.pixel-agents/layout.json` via `layoutPersistence.ts` — that's intentional (layout is per-machine workspace state, not building-scoped). Legacy `~/.pixel-agents/*.json` files are read once by `migrateLegacyJsonIntoDb` on first boot and then ignored — safe to delete manually after verification.
 
 **Multi-client**: Broadcast WebSocket — `broadcastSink` sends to all connected `clients` Set. New clients receive full asset + agent state on `webviewReady`.
 
@@ -148,7 +186,7 @@ JSONL transcripts at `~/.claude/projects/<project-hash>/<session-id>.jsonl`. Pro
 
 **Extension state per agent**: `id, terminalRef, projectDir, jsonlFile, fileOffset, lineBuffer, activeToolIds, activeToolStatuses, activeSubagentToolNames, isWaiting`.
 
-**Persistence**: Agents persisted to `workspaceState` key `'pixel-agents.agents'` (includes palette/hueShift/seatId). **Layout persisted to `~/.pixel-agents/layout.json`** (user-level, shared across all VS Code windows/workspaces). `layoutPersistence.ts` handles all file I/O: `readLayoutFromFile()`, `writeLayoutToFile()` (atomic via `.tmp` + rename), `migrateAndLoadLayout()` (checks file → migrates old workspace state → falls back to bundled default), `watchLayoutFile()` (hybrid `fs.watch` + 2s polling for cross-window sync). On save, `markOwnWrite()` prevents the watcher from re-reading our own write. External changes push `layoutLoaded` to the webview; skipped if the editor has unsaved changes (last-save-wins). On webview ready: `restoreAgents()` matches persisted entries to live terminals. `nextAgentId`/`nextTerminalIndex` advanced past restored values. **Default layout**: When no saved layout file exists and no workspace state to migrate, a bundled `default-layout.json` is loaded from `assets/` and written to the file. If that also doesn't exist, `createDefaultLayout()` generates a basic office. To update the default: run "Pixel Agents: Export Layout as Default" from the command palette (writes current layout to `webview-ui/public/assets/default-layout.json`), then rebuild. **Export/Import**: Settings modal offers Export Layout (save dialog → JSON file) and Import Layout (open dialog → validates `version: 1` + `tiles` array → writes to layout file + pushes `layoutLoaded` to webview).
+**Persistence**: VS Code extension path persists agents to `workspaceState` key `'pixel-agents.agents'` (includes palette/hueShift/seatId). Standalone path persists to Postgres via Drizzle (`src/db/`) — see **Buildings** section. **Layout persisted to `~/.pixel-agents/layout.json`** in both paths (user-level, shared across all VS Code windows/workspaces). `layoutPersistence.ts` handles all file I/O: `readLayoutFromFile()`, `writeLayoutToFile()` (atomic via `.tmp` + rename), `migrateAndLoadLayout()` (checks file → migrates old workspace state → falls back to bundled default), `watchLayoutFile()` (hybrid `fs.watch` + 2s polling for cross-window sync). On save, `markOwnWrite()` prevents the watcher from re-reading our own write. External changes push `layoutLoaded` to the webview; skipped if the editor has unsaved changes (last-save-wins). On webview ready: `restoreAgents()` matches persisted entries to live terminals. `nextAgentId`/`nextTerminalIndex` advanced past restored values. **Default layout**: When no saved layout file exists and no workspace state to migrate, a bundled `default-layout.json` is loaded from `assets/` and written to the file. If that also doesn't exist, `createDefaultLayout()` generates a basic office. To update the default: run "Pixel Agents: Export Layout as Default" from the command palette (writes current layout to `webview-ui/public/assets/default-layout.json`), then rebuild. **Export/Import**: Settings modal offers Export Layout (save dialog → JSON file) and Import Layout (open dialog → validates `version: 1` + `tiles` array → writes to layout file + pushes `layoutLoaded` to webview).
 
 ## Office UI
 
@@ -270,8 +308,19 @@ All magic numbers and strings are centralized — never add inline constants to 
 - Snap both VS Code windows side-by-side on SAME screen before clicking in Extension Dev Host
 - Reload extension via button on main VS Code window after building
 
+## Memory Architecture
+
+Every agent's system prompt (built by `buildSystemPrompt` and friends in `standalone/systemPrompts.ts`, all going through `buildMemoryBlock(agentId, roleShort, sessionCount, lastSessionEnd)`) directs them to **three** MemPalace memory classes:
+
+- **`decisions` wing** — team-wide history; default `mempalace_add_drawer` destination, written sparingly.
+- **`skills` wing, room = `<role-slug>`** — procedural recipes shared by every agent in a role (e.g. `skills/visual-designer`, `skills/foreman`).
+- **`agents` wing, room = `<agent.id>`** — personal memory scoped to one PersistentAgent. Key is the immutable `persistent_agents.id` UUID so name changes don't orphan memories. Read at session start, write at session end / on workspace-specific learnings.
+
+Hard rule: NO local markdown memory files, NO `/tmp` scratchpad. MemPalace is it.
+
 ## Key Decisions
 
 - `WebviewViewProvider` (not `WebviewPanel`) — lives in panel area alongside terminal
 - Inline esbuild problem matcher (no extra extension needed)
 - Webview is separate Vite project with own `node_modules`/`tsconfig`
+- **Agent runtime stays on iTerm spawning** — `claude --session-id <uuid>` in iTerm2 tabs via AppleScript (`itermFocus.launchAgentSession`). A 2026-05-11 experiment with `@anthropic-ai/claude-agent-sdk` (Phase 1 shipped, then ripped out same day) confirmed: per-agent iTerm tabs are load-bearing UX, not infrastructure. Users need to click into a tab, see live output, type follow-up prompts, and use slash commands. Any future "modernize the runtime" proposal must surface the loss of interactive in-tab input in the FIRST phase, not as a Phase-4 afterthought.
