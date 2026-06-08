@@ -2,23 +2,24 @@
 	"compilerOptions": {
 		"module": "Node16",
 		"target": "ES2022",
-		"lib": [
-			"ES2022"
-		],
+		"lib": ["ES2022"],
 		"sourceMap": true,
-		"rootDir": "src",
+		"rootDir": ".",
 		"strict": true,
-		"skipLibCheck": true
+		"skipLibCheck": true,
+		"noEmit": true
 	},
+	"include": [
+		"standalone/**/*.ts",
+		"src/types.ts",
+		"src/constants.ts",
+		"src/fileWatcher.ts",
+		"src/transcriptParser.ts",
+		"src/timerManager.ts",
+		"src/assetLoader.ts"
+	],
 	"exclude": [
 		"node_modules",
-		"webview-ui",
-		"dist",
-		"out",
-		"scripts",
-		"standalone",
-		"vendor",
-		"vitest.config.ts",
-		"drizzle.config.ts"
+		"**/*.test.ts"
 	]
 }
