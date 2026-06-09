@@ -20,6 +20,14 @@ import {
   CHARACTER_HIT_HEIGHT,
   AGENT_NAME_POOL,
   TOOL_ACTIVITY_CATEGORY,
+  TASK_PIP_SIZE_PX,
+  TASK_PIP_GAP_PX,
+  TASK_PIP_OFFSET_Y_PX,
+  TASK_PIP_HIT_PAD_PX,
+  TASK_PIP_COLOR_PERMISSION,
+  TASK_PIP_COLOR_WAITING,
+  TASK_PIP_COLOR_ACTIVE,
+  TASK_PIP_COLOR_IDLE,
 } from '../../constants.js'
 import type { Character, Seat, FurnitureInstance, TileType as TileTypeVal, OfficeLayout, PlacedFurniture, ActivitySpot } from '../types.js'
 import { createCharacter, updateCharacter } from './characters.js'
@@ -417,8 +425,41 @@ export class OfficeState {
     return { palette, hueShift }
   }
 
-  addAgent(id: number, preferredPalette?: number, preferredHueShift?: number, preferredSeatId?: string, skipSpawnEffect?: boolean, folderName?: string, sessionId?: string, preferredName?: string): void {
+  /** The visible body for an employee (lowest-id non-follower character), or null. */
+  private findEmployeePrimary(persistentAgentId: string): Character | null {
+    let best: Character | null = null
+    for (const ch of this.characters.values()) {
+      if (ch.isSubagent || ch.followerOf != null) continue
+      if (ch.persistentAgentId !== persistentAgentId) continue
+      if (ch.matrixEffect === 'despawn') continue
+      if (!best || ch.id < best.id) best = ch
+    }
+    return best
+  }
+
+  addAgent(id: number, preferredPalette?: number, preferredHueShift?: number, preferredSeatId?: string, skipSpawnEffect?: boolean, folderName?: string, sessionId?: string, preferredName?: string, persistentAgentId?: string): void {
     if (this.characters.has(id)) return
+
+    // Multi-session: if this employee already has a visible body, this new
+    // session becomes a hidden "task" body grouped under it (no seat, no spawn
+    // effect). It still lives in the characters map so per-task activity routing
+    // works; it surfaces as a clickable pip above the primary's head.
+    const primary = persistentAgentId ? this.findEmployeePrimary(persistentAgentId) : null
+    if (primary) {
+      const follower = createCharacter(id, primary.palette, null, null, primary.hueShift, preferredName || primary.name)
+      follower.followerOf = primary.id
+      follower.persistentAgentId = persistentAgentId
+      if (sessionId) follower.sessionId = sessionId
+      if (folderName) { follower.folderName = folderName; follower.projectName = folderName }
+      follower.x = primary.x
+      follower.y = primary.y
+      follower.tileCol = primary.tileCol
+      follower.tileRow = primary.tileRow
+      follower.dir = primary.dir
+      follower.state = CharacterState.TYPE
+      this.characters.set(id, follower)
+      return
+    }
 
     let palette: number
     let hueShift: number
@@ -468,6 +509,9 @@ export class OfficeState {
     if (sessionId) {
       ch.sessionId = sessionId
     }
+    if (persistentAgentId) {
+      ch.persistentAgentId = persistentAgentId
+    }
     if (folderName) {
       ch.folderName = folderName
       ch.projectName = folderName
@@ -480,10 +524,86 @@ export class OfficeState {
     this.characters.set(id, ch)
   }
 
+  /**
+   * After a character's persistentAgentId is set late (the "who's this?" popup
+   * resolves a fresh session onto an existing employee), fold it into that
+   * employee's group: the lower-id character stays the visible body, the other
+   * becomes a hidden follower and gives up its seat.
+   */
+  regroupCharacterUnderEmployee(id: number): void {
+    const ch = this.characters.get(id)
+    if (!ch || ch.isSubagent || ch.followerOf != null || !ch.persistentAgentId) return
+    let other: Character | null = null
+    for (const c of this.characters.values()) {
+      if (c.id === id || c.isSubagent || c.followerOf != null) continue
+      if (c.persistentAgentId !== ch.persistentAgentId) continue
+      if (c.matrixEffect === 'despawn') continue
+      if (!other || c.id < other.id) other = c
+    }
+    if (!other) return
+    // Keep the lower id as the visible body; demote the higher id to a follower.
+    const keep = ch.id < other.id ? ch : other
+    const demote = ch.id < other.id ? other : ch
+    if (demote.seatId) {
+      const seat = this.seats.get(demote.seatId)
+      if (seat) seat.assigned = false
+      demote.seatId = null
+    }
+    demote.followerOf = keep.id
+    demote.matrixEffect = null
+    demote.x = keep.x
+    demote.y = keep.y
+    demote.tileCol = keep.tileCol
+    demote.tileRow = keep.tileRow
+    // Re-point any followers the demoted character had onto the survivor.
+    for (const c of this.characters.values()) {
+      if (c.followerOf === demote.id) c.followerOf = keep.id
+    }
+    if (this.selectedAgentId === demote.id) this.selectedAgentId = keep.id
+    if (this.cameraFollowId === demote.id) this.cameraFollowId = keep.id
+  }
+
   removeAgent(id: number): void {
     const ch = this.characters.get(id)
     if (!ch) return
     if (ch.matrixEffect === 'despawn') return // already despawning
+
+    // Hidden task body (follower) — nothing to free; just drop it. Selection
+    // falls back to the visible body it was grouped under.
+    if (ch.followerOf != null) {
+      this.releaseActivitySpot(id)
+      if (this.selectedAgentId === id) this.selectedAgentId = ch.followerOf
+      if (this.cameraFollowId === id) this.cameraFollowId = ch.followerOf
+      this.characters.delete(id)
+      return
+    }
+
+    // Primary body that still has running task-followers — promote the next one
+    // so the employee keeps a body at the same desk (no despawn flicker).
+    const followers: Character[] = []
+    for (const c of this.characters.values()) {
+      if (c.followerOf === id && c.matrixEffect !== 'despawn') followers.push(c)
+    }
+    if (followers.length > 0) {
+      followers.sort((a, b) => a.id - b.id)
+      const next = followers[0]
+      next.followerOf = null
+      next.seatId = ch.seatId // inherit the desk (seat stays assigned)
+      next.x = ch.x
+      next.y = ch.y
+      next.tileCol = ch.tileCol
+      next.tileRow = ch.tileRow
+      next.dir = ch.dir
+      next.state = ch.state
+      for (let i = 1; i < followers.length; i++) followers[i].followerOf = next.id
+      if (this.selectedAgentId === id) this.selectedAgentId = next.id
+      if (this.cameraFollowId === id) this.cameraFollowId = next.id
+      this.releaseActivitySpot(id)
+      this.characters.delete(id)
+      return
+    }
+
+    // Last/only session for this employee — normal despawn.
     // Free seat and activity spot, clear selection immediately
     this.releaseActivitySpot(id)
     if (ch.seatId) {
@@ -772,6 +892,9 @@ export class OfficeState {
     const ch = this.characters.get(id)
     if (ch) {
       ch.isActive = active
+      // Hidden task body — record activity (drives its pip color) but skip all
+      // seat / activity-spot / furniture routing; the primary owns the desk.
+      if (ch.followerOf != null) return
       if (!active) {
         // Release activity spot if occupied
         this.releaseActivitySpot(id)
@@ -851,6 +974,9 @@ export class OfficeState {
     const ch = this.characters.get(id)
     if (!ch) return
     ch.currentTool = tool
+    // Hidden task body — tool drives its pip color, but it owns no seat so skip
+    // activity-spot rerouting.
+    if (ch.followerOf != null) return
 
     // Determine new activity category
     const newCategory = tool ? TOOL_ACTIVITY_CATEGORY[tool] ?? null : null
@@ -950,6 +1076,28 @@ export class OfficeState {
   update(dt: number): void {
     const toDelete: number[] = []
     for (const ch of this.characters.values()) {
+      // Hidden task body — keep it pinned to the primary's desk (so camera
+      // follow + pip anchoring track) and tick its own waiting bubble; skip the
+      // wander/seat FSM entirely.
+      if (ch.followerOf != null) {
+        const primary = this.characters.get(ch.followerOf)
+        if (primary) {
+          ch.x = primary.x
+          ch.y = primary.y
+          ch.tileCol = primary.tileCol
+          ch.tileRow = primary.tileRow
+          ch.dir = primary.dir
+          ch.state = primary.state
+        }
+        if (ch.bubbleType === 'waiting') {
+          ch.bubbleTimer -= dt
+          if (ch.bubbleTimer <= 0) {
+            ch.bubbleType = null
+            ch.bubbleTimer = 0
+          }
+        }
+        continue
+      }
       // Handle matrix effect animation
       if (ch.matrixEffect) {
         ch.matrixEffectTimer += dt
@@ -991,7 +1139,61 @@ export class OfficeState {
   }
 
   getCharacters(): Character[] {
-    return Array.from(this.characters.values())
+    // Followers are hidden task bodies — never drawn or hit-tested as bodies.
+    const out: Character[] = []
+    for (const ch of this.characters.values()) {
+      if (ch.followerOf != null) continue
+      out.push(ch)
+    }
+    return out
+  }
+
+  /** Status color for a task pip, derived from that session's live state. */
+  private pipColor(ch: Character): number {
+    if (ch.bubbleType === 'permission') return TASK_PIP_COLOR_PERMISSION
+    if (ch.bubbleType === 'waiting') return TASK_PIP_COLOR_WAITING
+    if (ch.isActive) return TASK_PIP_COLOR_ACTIVE
+    return TASK_PIP_COLOR_IDLE
+  }
+
+  /**
+   * Floating task pips for every employee running >1 concurrent session. One
+   * pip per task (primary + followers), laid out horizontally and centered
+   * above the visible body's head. Coordinates are in world (sprite) pixels.
+   */
+  getTaskPips(): Array<{ memberId: number; x: number; y: number; size: number; color: number }> {
+    const result: Array<{ memberId: number; x: number; y: number; size: number; color: number }> = []
+    for (const ch of this.characters.values()) {
+      if (ch.followerOf != null || ch.isSubagent || ch.matrixEffect === 'despawn') continue
+      const members: Character[] = [ch]
+      for (const other of this.characters.values()) {
+        if (other.followerOf === ch.id && other.matrixEffect !== 'despawn') members.push(other)
+      }
+      if (members.length < 2) continue
+      members.sort((a, b) => a.id - b.id)
+      const n = members.length
+      const totalW = n * TASK_PIP_SIZE_PX + (n - 1) * TASK_PIP_GAP_PX
+      const sittingOffset = ch.state === CharacterState.TYPE && !ch.atActivitySpot ? CHARACTER_SITTING_OFFSET_PX : 0
+      const y = ch.y + sittingOffset - CHARACTER_HIT_HEIGHT - TASK_PIP_OFFSET_Y_PX - TASK_PIP_SIZE_PX
+      let x = ch.x - totalW / 2
+      for (const m of members) {
+        result.push({ memberId: m.id, x, y, size: TASK_PIP_SIZE_PX, color: this.pipColor(m) })
+        x += TASK_PIP_SIZE_PX + TASK_PIP_GAP_PX
+      }
+    }
+    return result
+  }
+
+  /** Hit-test a task pip at the given world position; returns its task id or null. */
+  getPipAt(worldX: number, worldY: number): number | null {
+    const pad = TASK_PIP_HIT_PAD_PX
+    for (const p of this.getTaskPips()) {
+      if (worldX >= p.x - pad && worldX <= p.x + p.size + pad
+        && worldY >= p.y - pad && worldY <= p.y + p.size + pad) {
+        return p.memberId
+      }
+    }
+    return null
   }
 
   /** Get character at pixel position (for hit testing). Returns id or null. */

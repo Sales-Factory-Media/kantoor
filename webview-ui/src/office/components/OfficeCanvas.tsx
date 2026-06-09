@@ -227,7 +227,8 @@ export function OfficeCanvas({ officeState, onClick, zoom, onZoomChange, panRef 
 
       const pos = screenToWorld(e.clientX, e.clientY)
       if (!pos) return
-      const hitId = officeState.getCharacterAt(pos.worldX, pos.worldY)
+      const pipId = officeState.getPipAt(pos.worldX, pos.worldY)
+      const hitId = pipId !== null ? pipId : officeState.getCharacterAt(pos.worldX, pos.worldY)
       const tile = screenToTile(e.clientX, e.clientY)
       officeState.hoveredTile = tile
       const canvas = canvasRef.current
@@ -300,6 +301,16 @@ export function OfficeCanvas({ officeState, onClick, zoom, onZoomChange, panRef 
 
       const pos = screenToWorld(e.clientX, e.clientY)
       if (!pos) return
+
+      // A task pip (above a multitasking employee's head) jumps to that tab.
+      const pipId = officeState.getPipAt(pos.worldX, pos.worldY)
+      if (pipId !== null) {
+        officeState.dismissBubble(pipId)
+        officeState.selectedAgentId = pipId
+        officeState.cameraFollowId = pipId
+        onClick(pipId)
+        return
+      }
 
       const hitId = officeState.getCharacterAt(pos.worldX, pos.worldY)
       if (hitId !== null) {

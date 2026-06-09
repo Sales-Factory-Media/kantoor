@@ -84,6 +84,14 @@ export async function migrateLegacyJsonIntoDb(): Promise<{ imported: boolean }> 
 			hueShift: a.hueShift as number | undefined ?? null,
 			seatId: a.seatId as string | undefined ?? null,
 			currentSessionId: a.currentSessionId as string | undefined ?? null,
+			currentSessions: a.currentSessionId
+				? [{
+					sessionId: a.currentSessionId as string,
+					ticketId: a.currentTicketId as string | undefined,
+					ticketName: a.currentTicketName as string | undefined,
+					ticketUrl: a.currentTicketUrl as string | undefined,
+				}]
+				: null,
 			lastSessionEnd: a.lastSessionEnd as string | undefined ?? null,
 			sessionCount: a.sessionCount as number | undefined ?? null,
 			currentTicketId: a.currentTicketId as string | undefined ?? null,

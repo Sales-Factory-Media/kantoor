@@ -234,6 +234,23 @@ export const CHARACTER_HIT_HEIGHT = 24
 export const TOOL_OVERLAY_VERTICAL_OFFSET = 32
 export const PULSE_ANIMATION_DURATION_SEC = 1.5
 
+// ── Task pips (multi-session indicator) ────────────────────
+// Small clickable squares floating above an employee who is running several
+// concurrent sessions — one pip per task, colored by that task's status,
+// clicking jumps to its iTerm tab. Sizes are in sprite (world) pixels.
+export const TASK_PIP_SIZE_PX = 5
+export const TASK_PIP_GAP_PX = 2
+/** Gap above the character's head (on top of CHARACTER_HIT_HEIGHT). */
+export const TASK_PIP_OFFSET_Y_PX = 5
+/** Extra slack added around a pip for easier clicking. */
+export const TASK_PIP_HIT_PAD_PX = 3
+export const TASK_PIP_BORDER_PX = 1
+export const TASK_PIP_BORDER_COLOR = 0x0a0a14
+export const TASK_PIP_COLOR_PERMISSION = 0xe0a93a // needs a permission decision
+export const TASK_PIP_COLOR_WAITING = 0x5cc46a    // turn done, awaiting input
+export const TASK_PIP_COLOR_ACTIVE = 0x5a8cff     // actively working
+export const TASK_PIP_COLOR_IDLE = 0x9a9ab0       // idle
+
 // ── Foreman (Darryl) ───────────────────────────────────────
 export const DARRYL_CLICKUP_USERNAME = 'Darryl Philbin'
 

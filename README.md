@@ -14,8 +14,8 @@ Would I rather be feared or loved? Easy. Both. I want people to be afraid of how
 
 ```bash
 npm install
-cd webview-ui && npm install && cd ..
-npm run build:standalone && npm run standalone
+npm run build
+npm start
 ```
 
 Then open `http://localhost:3333` in your browser. Bears. Beets. Battlestar Galactica. Localhost:3333.

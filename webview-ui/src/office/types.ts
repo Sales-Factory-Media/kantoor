@@ -255,6 +255,14 @@ export interface Character {
   isSubagent: boolean
   /** Parent agent ID if this is a sub-agent, null otherwise */
   parentAgentId: number | null
+  /**
+   * Multi-session grouping: if set, this character is a hidden "task" body for
+   * the same employee as the character with this id. One employee running N
+   * concurrent sessions shows ONE visible body (the primary, followerOf == null)
+   * plus N-1 followers; the followers aren't drawn but carry per-task activity
+   * state, surfaced as clickable pips above the primary's head.
+   */
+  followerOf?: number | null
   /** Active matrix spawn/despawn effect, or null */
   matrixEffect: 'spawn' | 'despawn' | null
   /** Timer counting up from 0 to MATRIX_EFFECT_DURATION */
@@ -275,6 +283,14 @@ export interface Character {
   workspacePath?: string
   /** Linked persistent agent ID */
   persistentAgentId?: string
+  /** DiceBear pixel-art avatar combo (JSON string) for this employee */
+  avatarConfig?: string
+  /** Number of completed sessions (a rough "experience" metric) */
+  sessionCount?: number
+  /** ISO timestamp of the last session end */
+  lastSessionEnd?: string
+  /** Short label of what THIS session/tab is working on (its opening prompt). */
+  taskTitle?: string
   /** Whether the character is standing at an activity spot (not seated) */
   atActivitySpot: boolean
   /** Current activity spot target, or null if heading to seat */

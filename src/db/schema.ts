@@ -42,7 +42,14 @@ export const persistentAgents = pgTable('persistent_agents', {
 	palette: integer('palette'),
 	hueShift: integer('hue_shift'),
 	seatId: text('seat_id'),
+	// Primary live session (mirror of currentSessions[0]). Kept for the many
+	// "is this agent online / busy" readers that only care whether ANY session
+	// is running. The authoritative multi-session list is `currentSessions`.
 	currentSessionId: text('current_session_id'),
+	// All concurrent live sessions for this agent (one per iTerm tab / task).
+	// One PersistentAgent can run N tasks at once; each entry carries its own
+	// optional ticket. Null/empty when the agent is idle.
+	currentSessions: jsonb('current_sessions').$type<Array<{ sessionId: string; ticketId?: string; ticketName?: string; ticketUrl?: string }>>(),
 	lastSessionEnd: text('last_session_end'),
 	sessionCount: integer('session_count'),
 	currentTicketId: text('current_ticket_id'),
@@ -50,6 +57,10 @@ export const persistentAgents = pgTable('persistent_agents', {
 	currentTicketUrl: text('current_ticket_url'),
 	lastTicketId: text('last_ticket_id'),
 	retired: boolean('retired'),
+	// DiceBear pixel-art avatar "combo" for this employee, stored as a JSON
+	// string ({ seed, options? }). Null until the user picks a face in the
+	// identify popup / employee file.
+	avatarConfig: text('avatar_config'),
 });
 
 /**

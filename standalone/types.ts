@@ -8,6 +8,8 @@ export interface StandaloneAgentState extends BaseAgentState {
 	workspacePath?: string;
 	/** Linked persistent agent ID, if any */
 	persistentAgentId?: string;
+	/** Short label of what this session is working on (its opening prompt). */
+	taskTitle?: string;
 }
 
 export interface OfflineAgent {
@@ -23,4 +25,5 @@ export interface OfflineAgent {
 	roleFull?: string;
 	lastSessionEnd?: string;
 	sessionCount?: number;
+	avatarConfig?: string;
 }

@@ -15,6 +15,20 @@
       "when": 1778396000000,
       "tag": "0001_projects_m2m",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1778396010000,
+      "tag": "0002_avatar_config",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1778396020000,
+      "tag": "0003_current_sessions",
+      "breakpoints": true
     }
   ]
 }

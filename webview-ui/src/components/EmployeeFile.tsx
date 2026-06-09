@@ -1,6 +1,8 @@
 import { useState } from 'react'
 import type { OfficeState } from '../office/engine/officeState.js'
 import type { OfflineAgent } from '../hooks/useExtensionMessages.js'
+import { parseAvatarConfig, randomAvatarConfig, type AvatarConfig } from '../avatar.js'
+import { EmployeeAvatar } from './EmployeeAvatar.js'
 import { vscode } from '../vscodeApi.js'
 
 interface EmployeeFileProps {
@@ -27,13 +29,20 @@ export function EmployeeFile({ officeState, agentId, offlineAgent, defaultWorksp
 
   const persistentId = ch?.persistentAgentId || (offlineAgent?.isPersistent ? offlineAgent.sessionId : undefined)
 
+  const [avatar, setAvatar] = useState<AvatarConfig>(
+    () => parseAvatarConfig(ch?.avatarConfig ?? offlineAgent?.avatarConfig)
+      ?? { seed: persistentId || ch?.sessionId || name || 'employee' },
+  )
+
   const handleSave = () => {
+    const avatarConfig = JSON.stringify(avatar)
     // Update live character if editing one
     if (ch) {
       ch.name = name
       ch.roleShort = roleShort
       ch.roleFull = roleFull
       ch.workspacePath = workspacePath || undefined
+      ch.avatarConfig = avatarConfig
     }
 
     // Save as persistent agent identity
@@ -49,6 +58,7 @@ export function EmployeeFile({ officeState, agentId, offlineAgent, defaultWorksp
         hueShift: ch?.hueShift,
         seatId: ch?.seatId,
         currentSessionId: ch?.sessionId,
+        avatarConfig,
       },
       launch: launchAfterSave || false,
     })
@@ -120,6 +130,25 @@ export function EmployeeFile({ officeState, agentId, offlineAgent, defaultWorksp
             }}
           >
             {'\u2715'}
+          </button>
+        </div>
+
+        {/* Face builder */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <EmployeeAvatar id={persistentId} name={name} avatarConfig={avatar} size={72} />
+          <button
+            onClick={() => setAvatar(randomAvatarConfig())}
+            style={{
+              padding: '6px 12px',
+              fontSize: '18px',
+              color: 'var(--pixel-text)',
+              background: 'var(--pixel-bg)',
+              border: '2px solid var(--pixel-border)',
+              borderRadius: 0,
+              cursor: 'pointer',
+            }}
+          >
+            {'🎲'} Randomize
           </button>
         </div>
 

@@ -1,79 +1,32 @@
 {
   "name": "pixel-agents",
-  "displayName": "Pixel Agents",
   "description": "Pixel art office where your Claude Code agents come to life as animated characters",
   "version": "1.0.2",
-  "publisher": "pablodelucca",
   "repository": {
     "type": "git",
     "url": "https://github.com/pablodelucca/pixel-agents"
   },
-  "icon": "icon.png",
   "license": "MIT",
-  "engines": {
-    "vscode": "^1.107.0"
-  },
-  "categories": [
-    "Other"
-  ],
-  "activationEvents": [],
-  "main": "./dist/extension.js",
-  "contributes": {
-    "commands": [
-      {
-        "command": "pixel-agents.showPanel",
-        "title": "Pixel Agents: Show Panel"
-      },
-      {
-        "command": "pixel-agents.exportDefaultLayout",
-        "title": "Pixel Agents: Export Layout as Default"
-      }
-    ],
-    "viewsContainers": {
-      "panel": [
-        {
-          "id": "pixel-agents-panel",
-          "title": "Pixel Agents",
-          "icon": "$(window)"
-        }
-      ]
-    },
-    "views": {
-      "pixel-agents-panel": [
-        {
-          "type": "webview",
-          "id": "pixel-agents.panelView",
-          "name": "Pixel Agents"
-        }
-      ]
-    }
-  },
   "scripts": {
-    "vscode:prepublish": "npm run package",
     "postinstall": "cd webview-ui && npm install --no-audit --no-fund",
     "install:webview": "cd webview-ui && npm install --no-audit --no-fund",
     "build:webview": "npm run install:webview && cd webview-ui && npm run build",
-    "compile": "npm run check-types && npm run lint && node esbuild.js && npm run build:webview",
-    "build": "npm run compile",
-    "watch": "npm-run-all -p watch:*",
-    "watch:esbuild": "node esbuild.js --watch",
-    "watch:tsc": "tsc --noEmit --watch --project tsconfig.json",
-    "package": "npm run check-types && npm run lint && node esbuild.js --production && npm run build:webview",
+    "build:server": "node esbuild-standalone.js",
+    "build": "node esbuild-standalone.js && npm run build:webview",
+    "build:prod": "node esbuild-standalone.js --production && npm run build:webview",
     "check-types": "tsc --noEmit",
-    "lint": "eslint src",
+    "lint": "eslint src standalone",
+    "start": "node dist/standalone.js --no-local-dev",
+    "start:local": "node dist/standalone.js",
     "import-tileset": "tsx scripts/import-tileset-cli.ts",
-    "build:standalone": "node esbuild-standalone.js && npm run build:webview",
-    "standalone": "node dist/standalone.js",
-    "standalone:no-local-dev": "node dist/standalone.js --no-local-dev",
     "test": "vitest run",
     "test:watch": "vitest"
   },
   "devDependencies": {
-    "@anthropic-ai/sdk": "^0.90.0",
+    "@anthropic-ai/sdk": "^0.102.0",
     "@types/node": "25.x",
     "@types/pg": "^8.20.0",
     "@types/pngjs": "^6.0.5",
-    "@types/vscode": "^1.107.0",
     "@types/ws": "^8.18.1",
     "drizzle-kit": "^0.31.10",
     "esbuild": "^0.28.0",
