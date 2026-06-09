@@ -5,6 +5,7 @@ import { CONFERENCE_AGENT_DELAY_MS, PEERS_BROKER_URL } from './constants.js';
 import { launchAgentSession } from './itermFocus.js';
 import {
 	savePersistentAgents,
+	addAgentSession,
 	expandHome,
 	ensureMempalaceMcpConfig,
 	mergeMcpConfigs,
@@ -53,7 +54,7 @@ export function handleStartConference(msg: Record<string, unknown>, ctx: ServerC
 	const initialPrompt2 = `Conference topic: ${topic}. Start NOW: call mcp__peers__check_messages to see if ${pa1.name} has messaged you, then reply via mcp__peers__send_message. If no message yet, call mcp__peers__list_peers with scope="machine" to find them. Use ONLY MCP peer tools, NOT SendMessage/Agent.`;
 
 	// Launch agent 1
-	pa1.currentSessionId = sid1;
+	addAgentSession(pa1, { sessionId: sid1 });
 	savePersistentAgents(persistentAgents);
 	const cwd1 = expandHome(pa1.workspacePath || '~');
 	console.log(`[Standalone] Conference: launching ${pa1.name} (${sid1})`);
@@ -61,7 +62,7 @@ export function handleStartConference(msg: Record<string, unknown>, ctx: ServerC
 
 	// Launch agent 2 after delay
 	setTimeout(() => {
-		pa2.currentSessionId = sid2;
+		addAgentSession(pa2, { sessionId: sid2 });
 		savePersistentAgents(persistentAgents);
 		const cwd2 = expandHome(pa2.workspacePath || '~');
 		console.log(`[Standalone] Conference: launching ${pa2.name} (${sid2})`);

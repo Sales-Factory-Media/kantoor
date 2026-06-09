@@ -30,6 +30,7 @@ export function IdentifyWorkerModal({ worker, onClose }: IdentifyWorkerModalProp
       provisionalAgentId: worker.provisionalAgentId,
       choice: 'existing',
       existingAgentId,
+      reassign: worker.reassign === true,
     })
     onClose()
   }
@@ -44,6 +45,7 @@ export function IdentifyWorkerModal({ worker, onClose }: IdentifyWorkerModalProp
       roleShort: roleShort.trim(),
       roleFull: roleFull.trim(),
       avatarConfig: JSON.stringify(avatar),
+      reassign: worker.reassign === true,
     })
     onClose()
   }
@@ -97,7 +99,7 @@ export function IdentifyWorkerModal({ worker, onClose }: IdentifyWorkerModalProp
         {/* Header */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <span style={{ fontSize: '24px', color: 'var(--pixel-text)', fontWeight: 'bold' }}>
-            Who&apos;s this?
+            {worker.reassign ? 'Reassign task' : "Who's this?"}
           </span>
           <button
             onClick={onClose}
@@ -115,7 +117,16 @@ export function IdentifyWorkerModal({ worker, onClose }: IdentifyWorkerModalProp
         </div>
 
         <div style={{ fontSize: '16px', color: 'var(--pixel-text-dim)' }}>
-          A new worker just started{projectLabel ? ` in ${projectLabel}` : ''}.
+          {worker.reassign ? 'Move this task to someone else.' : 'A new worker just started.'}
+        </div>
+
+        {/* Always state which project we're assigning for — it's the key cue for
+            picking the right person (the same name can exist in many projects). */}
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, fontSize: '16px' }}>
+          <span style={{ color: 'var(--pixel-text-dim)' }}>Project:</span>
+          <span style={{ color: 'var(--pixel-text)', fontWeight: 'bold' }}>
+            {projectLabel || 'Unknown'}
+          </span>
         </div>
 
         {view === 'choose' ? (
@@ -141,12 +152,29 @@ export function IdentifyWorkerModal({ worker, onClose }: IdentifyWorkerModalProp
                   }}
                 >
                   <EmployeeAvatar id={c.id} name={c.name} avatarConfig={c.avatarConfig} size={36} />
-                  <div>
+                  <div style={{ flex: 1 }}>
                     <div style={{ fontWeight: 'bold' }}>{c.name}</div>
                     {c.roleShort && (
                       <div style={{ fontSize: '15px', color: 'var(--pixel-text-dim)' }}>{c.roleShort}</div>
                     )}
                   </div>
+                  {c.activeTaskCount ? (
+                    <span
+                      title={`Already working on ${c.activeTaskCount} task${c.activeTaskCount > 1 ? 's' : ''}`}
+                      style={{
+                        fontSize: '13px',
+                        fontWeight: 'bold',
+                        color: 'var(--pixel-bg)',
+                        background: '#5cc46a',
+                        border: '2px solid #0a0a14',
+                        borderRadius: 0,
+                        padding: '1px 6px',
+                        whiteSpace: 'nowrap',
+                      }}
+                    >
+                      {`● ${c.activeTaskCount} active`}
+                    </span>
+                  ) : null}
                 </button>
               ))}
             </div>

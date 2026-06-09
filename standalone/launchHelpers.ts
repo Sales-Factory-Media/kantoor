@@ -12,6 +12,8 @@ import { launchAgentSession } from './itermFocus.js';
 import {
 	expandHome,
 	savePersistentAgents,
+	addAgentSession,
+	removeAgentSession,
 	ensureMempalaceMcpConfig,
 	mergeMcpConfigs,
 } from './agentStore.js';
@@ -75,10 +77,12 @@ export function launchPersistentAgentSession(
 	options: LaunchOptions = {},
 ): LaunchResult {
 	const newSessionId = crypto.randomUUID();
-	agent.currentSessionId = newSessionId;
-	agent.currentTicketId = ticket.ticketId;
-	agent.currentTicketName = ticket.ticketName;
-	agent.currentTicketUrl = ticket.ticketUrl;
+	addAgentSession(agent, {
+		sessionId: newSessionId,
+		ticketId: ticket.ticketId,
+		ticketName: ticket.ticketName,
+		ticketUrl: ticket.ticketUrl,
+	});
 	savePersistentAgents(persistentAgents);
 
 	let mempalaceHost: string | undefined;
@@ -110,7 +114,7 @@ export function launchPersistentAgentSession(
 	}
 
 	// Rollback so the slot is free for retry.
-	agent.currentSessionId = undefined;
+	removeAgentSession(agent, newSessionId);
 	savePersistentAgents(persistentAgents);
 	return { success: false, error: 'Failed to launch agent session' };
 }

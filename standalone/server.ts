@@ -15,11 +15,16 @@ import {
 	initAgentStore,
 	loadPersistentAgentsForBuilding,
 	savePersistentAgentsForBuilding,
-	expandHome,
+	addAgentSession,
+	removeAgentSession,
+	pruneDeadSessions,
+	findAgentBySessionId,
+	agentSessionIds,
+	isUnidentified,
 } from './agentStore.js';
 import { buildOrganogram } from './organogram.js';
 import type { PersistentAgent } from './agentStore.js';
-import { readJson, writeJson, getOfflineAgents } from './serverHelpers.js';
+import { readJson, writeJson, getOfflineAgents, buildNewWorkerPopup } from './serverHelpers.js';
 import { preloadAssets, WORKER_IDENTITY_FILE } from './serverContext.js';
 import type { ServerContext, WorkerIdentity } from './serverContext.js';
 import { createDispatchRegistry, releaseTicket } from './dispatchRegistry.js';
@@ -36,6 +41,7 @@ import {
 	handleSaveAgentIdentity,
 	handleDeleteAgentIdentity,
 	handleIdentifyWorker,
+	handleReassignTask,
 	handleLaunchAgent,
 	handleRestartAgent,
 	handleForgetAgent,
@@ -187,9 +193,11 @@ function handleWebviewReady(ws: WebSocket, ctx: ServerContext): void {
 		agentMeta[sid] = rawMeta as Record<string, unknown>;
 	}
 	for (const pa of persistentAgents) {
-		if (pa.currentSessionId) {
-			agentMeta[pa.currentSessionId] = {
-				...agentMeta[pa.currentSessionId],
+		// One agent can run several concurrent sessions — emit meta for each so
+		// every live tab's character is restored on reconnect.
+		for (const sid of agentSessionIds(pa)) {
+			agentMeta[sid] = {
+				...agentMeta[sid],
 				name: pa.name,
 				palette: pa.palette,
 				hueShift: pa.hueShift,
@@ -199,6 +207,8 @@ function handleWebviewReady(ws: WebSocket, ctx: ServerContext): void {
 				workspacePath: pa.workspacePath,
 				persistentAgentId: pa.id,
 				avatarConfig: pa.avatarConfig,
+				sessionCount: pa.sessionCount,
+				lastSessionEnd: pa.lastSessionEnd,
 			};
 		}
 	}
@@ -216,7 +226,29 @@ function handleWebviewReady(ws: WebSocket, ctx: ServerContext): void {
 		agentMeta,
 		sessionIds: agentManager.getSessionIds(),
 		folderNames,
+		taskTitles: agentManager.getTaskTitles(),
 	}));
+
+	// Replay the "who's this?" popup for any live session still attached to an
+	// unidentified (provisional) agent. The popup is normally fired once, live,
+	// from onNewSession — but if it went out before any client was connected
+	// (e.g. the server discovered already-running sessions at boot) it was lost.
+	// Re-surfacing it here means a freshly-opened webview always gets to assign
+	// those sessions instead of letting them stick under a throwaway random name.
+	for (const id of agentIds) {
+		const agent = agentManager.agents.get(id);
+		if (!agent) continue;
+		const owner = findAgentBySessionId(persistentAgents, agent.sessionId);
+		if (owner && isUnidentified(owner)) {
+			ws.send(JSON.stringify(buildNewWorkerPopup(
+				persistentAgents,
+				agent.sessionId,
+				owner,
+				agent.projectName,
+				agent.workspacePath || owner.workspacePath || '',
+			)));
+		}
+	}
 
 	// Signal layout ready
 	ws.send(JSON.stringify({ type: 'layoutLoaded', layout: null }));
@@ -268,6 +300,7 @@ const messageHandlers: Record<string, (ws: WebSocket, msg: Record<string, unknow
 	saveAgentIdentity: (_ws, msg, ctx) => handleSaveAgentIdentity(msg, ctx),
 	deleteAgentIdentity: (_ws, msg, ctx) => handleDeleteAgentIdentity(msg, ctx),
 	identifyWorker: (_ws, msg, ctx) => handleIdentifyWorker(msg, ctx),
+	reassignTask: (_ws, msg, ctx) => handleReassignTask(msg, ctx),
 	launchAgent: (_ws, msg, ctx) => handleLaunchAgent(msg, ctx),
 	restartAgent: (_ws, msg) => handleRestartAgent(msg),
 	forgetAgent: (_ws, msg, ctx) => handleForgetAgent(msg, ctx),
@@ -399,10 +432,9 @@ async function main(): Promise<void> {
 	const liveOnStartup = getLiveSessionIds();
 	let clearedStale = false;
 	for (const pa of persistentAgents) {
-		if (pa.currentSessionId && !liveOnStartup.has(pa.currentSessionId)) {
-			console.log(`[Standalone] Clearing stale session ${pa.currentSessionId} from agent "${pa.name}"`);
+		if (pruneDeadSessions(pa, liveOnStartup)) {
+			console.log(`[Standalone] Cleared stale session(s) from agent "${pa.name}"`);
 			pa.lastSessionEnd = pa.lastSessionEnd || new Date().toISOString();
-			pa.currentSessionId = undefined;
 			clearedStale = true;
 		}
 	}
@@ -471,9 +503,9 @@ async function main(): Promise<void> {
 		return workspacePathCache.get(projectDir) ?? undefined;
 	}
 
-	/** Find persistent agent linked to a session ID */
+	/** Find persistent agent linked to a session ID (array-aware) */
 	function findPersistentAgentBySession(sessionId: string): PersistentAgent | undefined {
-		return persistentAgents.find(pa => pa.currentSessionId === sessionId);
+		return findAgentBySessionId(persistentAgents, sessionId);
 	}
 
 	// ── Project scanner ──────────────────────────────────────
@@ -485,34 +517,19 @@ async function main(): Promise<void> {
 				const sessionId = path.basename(jsonlFile, '.jsonl');
 				let pa = findPersistentAgentBySession(sessionId);
 
-				// Compute existing offline employees at this workspace up-front. They
-				// are shown to the user in the "who's this?" popup so a freshly-
-				// discovered session can be marked as a returning employee instead of
-				// a brand-new hire (manual replacement for the old silent auto-adopt,
-				// which used to merge into the most-recent candidate without asking).
-				// Same-name agents in *different* workspaces are intentionally excluded
-				// — the user relies on e.g. Pam-at-projectA being distinct from
-				// Pam-at-projectB.
-				let candidates: PersistentAgent[] = [];
-				if (!pa && workspacePath) {
-					const targetWp = expandHome(workspacePath);
-					candidates = persistentAgents.filter(p =>
-						!p.currentSessionId
-						&& !p.retired
-						&& p.workspacePath
-						&& expandHome(p.workspacePath) === targetWp,
-					);
-					candidates.sort((a, b) =>
-						(b.lastSessionEnd ?? '').localeCompare(a.lastSessionEnd ?? ''),
-					);
-				}
+				// "Needs the who's-this popup" when there's no owning agent at all,
+				// OR the owning agent is still unidentified (no job title/description).
+				// The latter covers the restart case: a provisional agent minted on a
+				// previous boot was persisted to the DB, so on this boot the session
+				// matches it — but it's still nobody, so we must ask again instead of
+				// silently adopting it under its throwaway random name.
+				const needsIdentification = !pa || isUnidentified(pa);
 
 				// A genuinely new session — mint a provisional agent so the office
 				// shows activity immediately, then ask the user who it is via the
 				// newWorkerIdentified popup. The user either adopts an existing
 				// employee (handleIdentifyWorker re-binds + deletes this provisional)
 				// or names it as a new hire.
-				const needsIdentification = !pa;
 				if (!pa) {
 					pa = {
 						id: crypto.randomUUID(),
@@ -520,8 +537,8 @@ async function main(): Promise<void> {
 						roleShort: '',
 						roleFull: '',
 						workspacePath: workspacePath || '',
-						currentSessionId: sessionId,
 					};
+					addAgentSession(pa, { sessionId });
 					persistentAgents.push(pa);
 					savePersistentAgents(persistentAgents);
 					console.log(`[Standalone] Auto-persisted new agent "${pa.name}" (${pa.id}) for session ${sessionId}`);
@@ -537,25 +554,12 @@ async function main(): Promise<void> {
 					workspacePath: pa.workspacePath,
 					persistentAgentId: pa.id,
 					avatarConfig: pa.avatarConfig,
+					sessionCount: pa.sessionCount,
+					lastSessionEnd: pa.lastSessionEnd,
 				});
 
 				if (needsIdentification) {
-					broadcastSink.postMessage({
-						type: 'newWorkerIdentified',
-						sessionId,
-						provisionalAgentId: pa.id,
-						provisionalName: pa.name,
-						workspacePath: workspacePath || '',
-						projectName,
-						candidates: candidates.map(c => ({
-							id: c.id,
-							name: c.name,
-							roleShort: c.roleShort,
-							lastSessionEnd: c.lastSessionEnd,
-							sessionCount: c.sessionCount,
-							avatarConfig: c.avatarConfig,
-						})),
-					});
+					broadcastSink.postMessage(buildNewWorkerPopup(persistentAgents, sessionId, pa, projectName, workspacePath || ''));
 				}
 
 				broadcastSink.postMessage({ type: 'knownProjects', projects: loadKnownProjects() });
@@ -567,24 +571,22 @@ async function main(): Promise<void> {
 			const sessionId = path.basename(jsonlFile, '.jsonl');
 			const pa = findPersistentAgentBySession(sessionId);
 			if (pa) {
-				// Capture ticket info before clearing
-				const completedTicket = pa.currentTicketId ? {
-					ticketId: pa.currentTicketId,
-					ticketName: pa.currentTicketName || '',
-					ticketUrl: pa.currentTicketUrl || '',
+				// Remove just THIS session (the agent may still be running others).
+				// The removed entry carries the ticket this specific task held.
+				const removed = removeAgentSession(pa, sessionId);
+				const completedTicket = removed?.ticketId ? {
+					ticketId: removed.ticketId,
+					ticketName: removed.ticketName || '',
+					ticketUrl: removed.ticketUrl || '',
 					designerName: pa.name,
 					workspacePath: pa.workspacePath,
 				} : null;
 
 				pa.lastSessionEnd = new Date().toISOString();
 				pa.sessionCount = (pa.sessionCount || 0) + 1;
-				if (pa.currentTicketId) {
-					pa.lastTicketId = pa.currentTicketId;
+				if (removed?.ticketId) {
+					pa.lastTicketId = removed.ticketId;
 				}
-				pa.currentSessionId = undefined;
-				pa.currentTicketId = undefined;
-				pa.currentTicketName = undefined;
-				pa.currentTicketUrl = undefined;
 				savePersistentAgents(persistentAgents);
 
 				// Release the dispatch claim if this session held one. On hub this

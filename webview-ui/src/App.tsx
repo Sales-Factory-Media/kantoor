@@ -14,6 +14,10 @@ import { AgentSidebar } from './components/AgentSidebar.js'
 import { ForemanPanel } from './components/ForemanPanel.js'
 import { ArtDirectorPanel } from './components/ArtDirectorPanel.js'
 import { IdentifyWorkerModal } from './components/IdentifyWorkerModal.js'
+import { IdentityPromptModal } from './components/IdentityPromptModal.js'
+import { PolaroidBar } from './components/PolaroidBar.js'
+import { StatusHeader } from './components/StatusHeader.js'
+import { Credits } from './components/Credits.js'
 
 // Game state lives outside React — updated imperatively by message handlers
 const officeStateRef = { current: null as OfficeState | null }
@@ -32,7 +36,7 @@ function defaultZoom(): number {
 
 function App() {
   recordAppRender()
-  const { agents, selectedAgent, selectAgent, agentTools, agentStatuses, subagentTools, subagentCharacters, layoutReady, workspaceFolders, offlineAgents, knownProjects, saveAgentMeta, forgetAgent, clickupTickets, clickupConfigured, clickupListId, clickupNextFetchAt, workers, organogram, janDesignConfig, buildings, activeBuildingId, projectMemberships, pendingWorkers, dismissPendingWorker } = useExtensionMessages(getOfficeState)
+  const { agents, selectedAgent, selectAgent, agentTools, agentStatuses, subagentTools, subagentCharacters, layoutReady, workspaceFolders, offlineAgents, knownProjects, saveAgentMeta, forgetAgent, clickupTickets, clickupConfigured, clickupListId, clickupNextFetchAt, workers, organogram, janDesignConfig, buildings, activeBuildingId, projectMemberships, pendingWorkers, dismissPendingWorker, identityPrompt, dismissIdentityPrompt } = useExtensionMessages(getOfficeState)
 
   const [isDebugMode, setIsDebugMode] = useState(false)
   const [zoom, setZoom] = useState(defaultZoom)
@@ -96,6 +100,8 @@ function App() {
 
       <BuildingSwitcher buildings={buildings} activeBuildingId={activeBuildingId} projects={projectMemberships} />
 
+      <StatusHeader clickupNextFetchAt={clickupNextFetchAt} workers={workers} />
+
       {/* Vignette overlay */}
       <div
         style={{
@@ -156,9 +162,16 @@ function App() {
       <BottomToolbar
         onOpenClaude={handleOpenClaude}
         workspaceFolders={workspaceFolders}
-        clickupNextFetchAt={clickupNextFetchAt}
-        workers={workers}
       />
+
+      <PolaroidBar
+        officeState={officeState}
+        agents={agents}
+        agentStatuses={agentStatuses}
+        onSelect={handleClick}
+      />
+
+      <Credits />
 
       <ToolOverlay
         officeState={officeState}
@@ -192,6 +205,14 @@ function App() {
           key={pendingWorkers[0].sessionId}
           worker={pendingWorkers[0]}
           onClose={() => dismissPendingWorker(pendingWorkers[0].sessionId)}
+        />
+      )}
+
+      {identityPrompt && (
+        <IdentityPromptModal
+          key={identityPrompt.sessionId}
+          prompt={identityPrompt}
+          onClose={dismissIdentityPrompt}
         />
       )}
 

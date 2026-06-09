@@ -5,6 +5,11 @@ import { loadKnownProjects, removeKnownProjectByName, updateKnownProject } from 
 import { focusItermSession, launchItermSession, launchAgentSession } from './itermFocus.js';
 import {
 	savePersistentAgents,
+	addAgentSession,
+	removeAgentSession,
+	findAgentBySessionId,
+	agentSessionCount,
+	isUnidentified,
 	deleteAgentData,
 	expandHome,
 	ensureMempalaceMcpConfig,
@@ -12,7 +17,7 @@ import {
 import type { PersistentAgent, DesignConfig } from './agentStore.js';
 import { DEFAULT_DESIGN_CONFIG } from './agentStore.js';
 import { buildSystemPrompt } from './systemPrompts.js';
-import { getOfflineAgents } from './serverHelpers.js';
+import { getOfflineAgents, buildIdentityPrompt, buildNewWorkerPopup } from './serverHelpers.js';
 import type { ServerContext } from './serverContext.js';
 import { loadSeats, saveSeats } from '../src/db/seatStore.js';
 import { getAppSetting, setAppSetting } from '../src/db/settingsStore.js';
@@ -26,7 +31,7 @@ import { getAppSetting, setAppSetting } from '../src/db/settingsStore.js';
 // and keep the default self-exit block.
 export function launchPersistentAgent(pa: PersistentAgent, persistentAgents: PersistentAgent[], callInTask?: string, mempalaceHost?: string): boolean {
 	const newSessionId = crypto.randomUUID();
-	pa.currentSessionId = newSessionId;
+	addAgentSession(pa, { sessionId: newSessionId });
 	savePersistentAgents(persistentAgents);
 
 	const knownProjects = loadKnownProjects();
@@ -116,9 +121,11 @@ export function handleSaveAgentIdentity(msg: Record<string, unknown>, ctx: Serve
 			palette: agentData.palette,
 			hueShift: agentData.hueShift,
 			seatId: agentData.seatId,
-			currentSessionId: agentData.currentSessionId,
 			avatarConfig: agentData.avatarConfig,
 		};
+		if (agentData.currentSessionId) {
+			addAgentSession(newAgent, { sessionId: agentData.currentSessionId });
+		}
 		persistentAgents.push(newAgent);
 	}
 
@@ -153,20 +160,94 @@ export function handleDeleteAgentIdentity(msg: Record<string, unknown>, ctx: Ser
 }
 
 /**
- * Resolve the "who's this?" popup for a freshly-discovered session. The session
- * already runs under a provisional PersistentAgent (minted in onNewSession); this
+ * Push the agent's identity into its live iTerm session as a copy-pasteable
+ * prompt. We can't type into the user's terminal for them, so the webview shows
+ * the text with a Copy button (`agentIdentityPrompt`); the user pastes it so the
+ * running Claude process knows who it now is and which project it's in.
+ */
+function emitIdentityPrompt(ctx: ServerContext, sessionId: string, pa: PersistentAgent): void {
+	const liveId = ctx.agentManager.getAgentIdBySessionId(sessionId);
+	const projectName = liveId !== null ? ctx.agentManager.agents.get(liveId)?.projectName : undefined;
+	ctx.broadcastSink.postMessage({
+		type: 'agentIdentityPrompt',
+		sessionId,
+		agentId: pa.id,
+		name: pa.name,
+		roleShort: pa.roleShort,
+		prompt: buildIdentityPrompt(pa, projectName),
+	});
+}
+
+/**
+ * Move a live session onto `target`, lifting it off whoever currently owns it.
+ * Handles both first-time identification (the previous owner is the throwaway
+ * provisional, which gets deleted once empty) and reassignment between real
+ * employees (the previous owner keeps its other tasks). Re-syncs the live
+ * character via `agentReidentified` and surfaces the copy-paste identity prompt.
+ */
+function bindSessionToAgent(ctx: ServerContext, sessionId: string, target: PersistentAgent): PersistentAgent[] {
+	const { agentManager, setPersistentAgents, broadcastSink } = ctx;
+	let persistentAgents = ctx.persistentAgents;
+
+	// Lift the session off its previous owner (if any, and not already target),
+	// carrying its ticket so the task keeps its context.
+	const prevOwner = findAgentBySessionId(persistentAgents, sessionId);
+	if (prevOwner && prevOwner.id !== target.id) {
+		const moved = removeAgentSession(prevOwner, sessionId);
+		addAgentSession(target, { sessionId, ticketId: moved?.ticketId, ticketName: moved?.ticketName, ticketUrl: moved?.ticketUrl });
+		// A now-empty, still-unidentified previous owner is a throwaway provisional
+		// — drop it. A real employee (named) or one with other live tasks is kept.
+		if (agentSessionCount(prevOwner) === 0 && isUnidentified(prevOwner)) {
+			persistentAgents = persistentAgents.filter(p => p.id !== prevOwner.id);
+			deleteAgentData(prevOwner.id);
+		}
+	} else {
+		addAgentSession(target, { sessionId });
+	}
+
+	savePersistentAgents(persistentAgents);
+	setPersistentAgents(persistentAgents);
+
+	const liveId = agentManager.rebindSession(sessionId, target.id);
+	if (liveId !== null) {
+		broadcastSink.postMessage({
+			type: 'agentReidentified',
+			id: liveId,
+			name: target.name,
+			roleShort: target.roleShort,
+			roleFull: target.roleFull,
+			workspacePath: target.workspacePath,
+			palette: target.palette,
+			hueShift: target.hueShift,
+			persistentAgentId: target.id,
+			avatarConfig: target.avatarConfig,
+		});
+	}
+	emitIdentityPrompt(ctx, sessionId, target);
+	broadcastSink.postMessage({ type: 'offlineAgents', agents: getOfflineAgents(agentManager, persistentAgents) });
+	return persistentAgents;
+}
+
+/**
+ * Resolve the "who's this?" popup for a session (a freshly-discovered one, or an
+ * explicit reassignment). The session runs under some PersistentAgent already
+ * (the provisional minted in onNewSession, or its current real owner); this
  * handler either:
- *  - choice 'existing': re-binds the live session to an existing employee and
- *    deletes the throwaway provisional agent, or
- *  - choice 'new': stamps the provisional agent with the user-supplied name/role.
- * Either way the live character is updated in place via `agentReidentified` so it
- * keeps its numeric id / file watching.
+ *  - choice 'existing': re-binds the live session to an existing employee, and
+ *  - choice 'new': mints/stamps a fresh employee and binds to that.
+ * Either way the live character is updated in place via `agentReidentified`
+ * (keeping its numeric id / file watching) and a copy-paste identity prompt is
+ * surfaced so the user can make the running session self-aware.
  */
 export function handleIdentifyWorker(msg: Record<string, unknown>, ctx: ServerContext): void {
-	const { persistentAgents, broadcastSink, agentManager, setPersistentAgents } = ctx;
+	const { persistentAgents, agentManager, setPersistentAgents, broadcastSink } = ctx;
 	const sessionId = msg.sessionId as string;
 	const provisionalAgentId = msg.provisionalAgentId as string;
 	const choice = msg.choice as 'existing' | 'new';
+	// Reassign = the session already belongs to a real (identified) employee and
+	// the user is moving it to someone else. For a 'new' choice this means we mint
+	// a brand-new employee instead of renaming the current owner in place.
+	const reassign = msg.reassign === true;
 	const provisional = persistentAgents.find(p => p.id === provisionalAgentId);
 
 	if (choice === 'existing') {
@@ -176,49 +257,41 @@ export function handleIdentifyWorker(msg: Record<string, unknown>, ctx: ServerCo
 			console.log(`[Standalone] identifyWorker: existing agent ${existingAgentId} not found`);
 			return;
 		}
-		// Adopt: this running session now belongs to the existing employee.
-		target.currentSessionId = sessionId;
-
-		// Drop the throwaway provisional agent (keep the live manager session — we
-		// only rebind which PersistentAgent it points at, below).
-		let updated = persistentAgents;
-		if (provisional && provisional.id !== target.id) {
-			updated = persistentAgents.filter(p => p.id !== provisional.id);
-			deleteAgentData(provisional.id);
-		}
-		savePersistentAgents(updated);
-		setPersistentAgents(updated);
-
-		const liveId = agentManager.rebindSession(sessionId, target.id);
-		console.log(`[Standalone] identifyWorker: session ${sessionId} adopted by "${target.name}" (${target.id})`);
-		if (liveId !== null) {
-			broadcastSink.postMessage({
-				type: 'agentReidentified',
-				id: liveId,
-				name: target.name,
-				roleShort: target.roleShort,
-				roleFull: target.roleFull,
-				workspacePath: target.workspacePath,
-				palette: target.palette,
-				hueShift: target.hueShift,
-				persistentAgentId: target.id,
-				avatarConfig: target.avatarConfig,
-			});
-		}
-		broadcastSink.postMessage({ type: 'offlineAgents', agents: getOfflineAgents(agentManager, updated) });
+		bindSessionToAgent(ctx, sessionId, target);
+		console.log(`[Standalone] identifyWorker: session ${sessionId} assigned to "${target.name}" (${target.id})`);
 		return;
 	}
 
-	// choice === 'new' — name the provisional agent.
-	if (!provisional) {
-		console.log(`[Standalone] identifyWorker: provisional agent ${provisionalAgentId} not found`);
+	// choice === 'new'. Reassign-to-new mints a fresh employee; first-time
+	// identification stamps the provisional that already holds this session.
+	const name = typeof msg.name === 'string' && msg.name.trim() ? msg.name.trim() : (provisional?.name || 'New hire');
+	const roleShort = typeof msg.roleShort === 'string' ? msg.roleShort.trim() : '';
+	const roleFull = typeof msg.roleFull === 'string' ? msg.roleFull.trim() : '';
+	const avatarConfig = typeof msg.avatarConfig === 'string' ? msg.avatarConfig : undefined;
+
+	if (reassign || !provisional) {
+		const target: PersistentAgent = {
+			id: crypto.randomUUID(),
+			name,
+			roleShort,
+			roleFull,
+			workspacePath: provisional?.workspacePath
+				|| (agentManager.agents.get(agentManager.getAgentIdBySessionId(sessionId) ?? -1)?.workspacePath ?? ''),
+			avatarConfig,
+		};
+		persistentAgents.push(target);
+		setPersistentAgents(persistentAgents);
+		bindSessionToAgent(ctx, sessionId, target);
+		console.log(`[Standalone] identifyWorker: session ${sessionId} reassigned to new hire "${target.name}" (${target.id})`);
 		return;
 	}
-	const name = typeof msg.name === 'string' && msg.name.trim() ? msg.name.trim() : provisional.name;
+
+	// First-time identification: stamp the provisional in place (keeps its id, so
+	// the session it already owns stays put — no rebind needed).
 	provisional.name = name;
-	provisional.roleShort = typeof msg.roleShort === 'string' ? msg.roleShort.trim() : '';
-	provisional.roleFull = typeof msg.roleFull === 'string' ? msg.roleFull.trim() : '';
-	if (typeof msg.avatarConfig === 'string') provisional.avatarConfig = msg.avatarConfig;
+	provisional.roleShort = roleShort;
+	provisional.roleFull = roleFull;
+	if (avatarConfig !== undefined) provisional.avatarConfig = avatarConfig;
 	savePersistentAgents(persistentAgents);
 	setPersistentAgents(persistentAgents);
 	console.log(`[Standalone] identifyWorker: session ${sessionId} named new hire "${provisional.name}" (${provisional.id})`);
@@ -238,7 +311,30 @@ export function handleIdentifyWorker(msg: Record<string, unknown>, ctx: ServerCo
 			avatarConfig: provisional.avatarConfig,
 		});
 	}
+	emitIdentityPrompt(ctx, sessionId, provisional);
 	broadcastSink.postMessage({ type: 'offlineAgents', agents: getOfflineAgents(agentManager, persistentAgents) });
+}
+
+/**
+ * Open the "who's this?" picker for an already-running, already-identified
+ * session so the user can reassign it to a different employee. Reuses the same
+ * popup the new-session flow uses; the `reassign` flag tells the resolver to
+ * move (not rename) when a new hire is chosen.
+ */
+export function handleReassignTask(msg: Record<string, unknown>, ctx: ServerContext): void {
+	const { persistentAgents, agentManager, broadcastSink } = ctx;
+	const sessionId = msg.sessionId as string;
+	const owner = findAgentBySessionId(persistentAgents, sessionId);
+	if (!owner) {
+		console.log(`[Standalone] reassignTask: no owner for session ${sessionId}`);
+		return;
+	}
+	const liveId = agentManager.getAgentIdBySessionId(sessionId);
+	const live = liveId !== null ? agentManager.agents.get(liveId) : undefined;
+	const projectName = live?.projectName ?? '';
+	const workspacePath = live?.workspacePath || owner.workspacePath || '';
+	const popup = buildNewWorkerPopup(persistentAgents, sessionId, owner, projectName, workspacePath);
+	broadcastSink.postMessage({ ...popup, reassign: true });
 }
 
 export function handleLaunchAgent(msg: Record<string, unknown>, ctx: ServerContext): void {

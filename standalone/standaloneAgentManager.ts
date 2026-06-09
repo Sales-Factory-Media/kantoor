@@ -4,7 +4,56 @@ import type { MessageSink, ConversationEntry } from '../src/types.js';
 import type { StandaloneAgentState } from './types.js';
 import { startFileWatching } from '../src/fileWatcher.js';
 import { cancelWaitingTimer, cancelPermissionTimer } from '../src/timerManager.js';
-import { CONVERSATION_BUFFER_SIZE } from '../src/constants.js';
+import { CONVERSATION_BUFFER_SIZE, SESSION_TASK_TITLE_MAX_LENGTH, SESSION_TASK_TITLE_SCAN_BYTES } from '../src/constants.js';
+
+/**
+ * Best-effort read of what a session is working on: its opening user prompt,
+ * pulled from the head of the JSONL. Skips slash-command wrappers and local-
+ * command caveats so the title reads like the actual task. Returns undefined
+ * when nothing suitable is found (e.g. the file has no user text yet).
+ */
+export function extractSessionTaskTitle(jsonlFile: string): string | undefined {
+	let head: string;
+	try {
+		if (!fs.existsSync(jsonlFile)) return undefined;
+		const stat = fs.statSync(jsonlFile);
+		const len = Math.min(SESSION_TASK_TITLE_SCAN_BYTES, stat.size);
+		if (len <= 0) return undefined;
+		const buf = Buffer.alloc(len);
+		const fd = fs.openSync(jsonlFile, 'r');
+		fs.readSync(fd, buf, 0, len, 0);
+		fs.closeSync(fd);
+		head = buf.toString('utf-8');
+	} catch {
+		return undefined;
+	}
+
+	for (const line of head.split('\n')) {
+		if (!line.trim().startsWith('{')) continue;
+		let rec: { type?: string; message?: { content?: unknown } };
+		try { rec = JSON.parse(line); } catch { continue; }
+		if (rec.type !== 'user') continue;
+		const content = rec.message?.content;
+		let text: string | undefined;
+		if (typeof content === 'string') {
+			text = content;
+		} else if (Array.isArray(content)) {
+			// First text block; tool_result-only turns have no text.
+			for (const block of content as Array<{ type?: string; text?: string }>) {
+				if (block?.type === 'text' && typeof block.text === 'string') { text = block.text; break; }
+			}
+		}
+		if (!text) continue;
+		const cleaned = text.replace(/\s+/g, ' ').trim();
+		// Skip slash-command/system wrappers and local-command caveats — keep
+		// scanning for the first genuine task prompt.
+		if (!cleaned || cleaned.startsWith('<') || cleaned.startsWith('Caveat:')) continue;
+		return cleaned.length > SESSION_TASK_TITLE_MAX_LENGTH
+			? cleaned.slice(0, SESSION_TASK_TITLE_MAX_LENGTH - 1).trimEnd() + '…'
+			: cleaned;
+	}
+	return undefined;
+}
 
 /**
  * A MessageSink that delegates to the current broadcast sink.
@@ -70,6 +119,7 @@ export class StandaloneAgentManager {
 
 		const sessionId = path.basename(jsonlFile, '.jsonl');
 		const id = this.nextAgentId++;
+		const taskTitle = extractSessionTaskTitle(jsonlFile);
 
 		const agent: StandaloneAgentState = {
 			id,
@@ -91,13 +141,14 @@ export class StandaloneAgentManager {
 			conversationBuffer: [],
 			workspacePath,
 			persistentAgentId,
+			taskTitle,
 		};
 
 		this.agents.set(id, agent);
 		this.fileToAgent.set(jsonlFile, id);
 
 		console.log(`[Standalone] Agent ${id}: tracking ${projectName}/${sessionId}`);
-		this.delegatingSink.postMessage({ type: 'agentCreated', id, sessionId, folderName: projectName, ...(agentMeta ?? {}) });
+		this.delegatingSink.postMessage({ type: 'agentCreated', id, sessionId, folderName: projectName, taskTitle, ...(agentMeta ?? {}) });
 
 		// Start watching from end of file (don't replay history)
 		// but peek at the tail to determine if the agent is currently active
@@ -184,6 +235,15 @@ export class StandaloneAgentManager {
 		const result: Record<number, string> = {};
 		for (const [id, agent] of this.agents) {
 			result[id] = agent.sessionId;
+		}
+		return result;
+	}
+
+	/** Per-live-agent task titles (opening prompt), for the existingAgents payload. */
+	getTaskTitles(): Record<number, string> {
+		const result: Record<number, string> = {};
+		for (const [id, agent] of this.agents) {
+			if (agent.taskTitle) result[id] = agent.taskTitle;
 		}
 		return result;
 	}

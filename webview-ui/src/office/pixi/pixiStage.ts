@@ -20,7 +20,7 @@ import type { OfficeState } from '../engine/officeState.js'
 import type { OutdoorState } from '../outdoor/outdoorGenerator.js'
 import type { FurnitureInstance, FloorColor, TileType as TileTypeVal, SpriteData } from '../types.js'
 import { TileType, TILE_SIZE, CharacterState } from '../types.js'
-import { CHARACTER_SITTING_OFFSET_PX, CHARACTER_Z_SORT_OFFSET, FALLBACK_FLOOR_COLOR } from '../../constants.js'
+import { CHARACTER_SITTING_OFFSET_PX, CHARACTER_Z_SORT_OFFSET, FALLBACK_FLOOR_COLOR, TASK_PIP_BORDER_PX, TASK_PIP_BORDER_COLOR } from '../../constants.js'
 import { getCharacterSprite } from '../engine/characters.js'
 import { getCharacterSprites } from '../sprites/spriteData.js'
 import { hasFloorSprites, usesGeneratedFloor, getColorizedFloorSprite, getColorizedHerringboneSprite, getAllFloorSprites } from '../floorTiles.js'
@@ -50,6 +50,8 @@ export class PixiStage {
   private furnitureSpritePool: Sprite[] = []
   /** Character sprites are keyed by id for stable identity (visibility, hover, etc). */
   private characterSprites = new Map<number, Sprite>()
+  /** Task-pip sprite pool — each pip is a dark border behind a tinted square. */
+  private pipPool: Array<{ outer: Sprite; inner: Sprite }> = []
 
   /** Floor-bake cache invalidation keys (reference identity on layout). */
   private floorTileMapRef: TileTypeVal[][] | null = null
@@ -140,6 +142,42 @@ export class PixiStage {
     this.updateOutdoor(officeState.outdoor)
     this.updateFloor(officeState.tileMap, tileColors, cols, rows)
     this.updateEntities(officeState)
+    this.updatePips(officeState)
+  }
+
+  // ── Task pips (multi-session indicator) ────────────────────────
+
+  private updatePips(officeState: OfficeState): void {
+    const pips = officeState.getTaskPips()
+    for (let i = 0; i < pips.length; i++) {
+      const p = pips[i]
+      let pair = this.pipPool[i]
+      if (!pair) {
+        const outer = new Sprite(Texture.WHITE)
+        outer.tint = TASK_PIP_BORDER_COLOR
+        const inner = new Sprite(Texture.WHITE)
+        this.overlayLayer.addChild(outer)
+        this.overlayLayer.addChild(inner)
+        pair = { outer, inner }
+        this.pipPool[i] = pair
+      }
+      const b = TASK_PIP_BORDER_PX
+      pair.outer.x = p.x - b
+      pair.outer.y = p.y - b
+      pair.outer.width = p.size + b * 2
+      pair.outer.height = p.size + b * 2
+      pair.outer.visible = true
+      pair.inner.x = p.x
+      pair.inner.y = p.y
+      pair.inner.width = p.size
+      pair.inner.height = p.size
+      pair.inner.tint = p.color
+      pair.inner.visible = true
+    }
+    for (let i = pips.length; i < this.pipPool.length; i++) {
+      this.pipPool[i].outer.visible = false
+      this.pipPool[i].inner.visible = false
+    }
   }
 
   // ── Outdoor (forest) layer ─────────────────────────────────────

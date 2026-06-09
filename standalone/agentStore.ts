@@ -38,6 +38,17 @@ export const DEFAULT_DESIGN_CONFIG: DesignConfig = {
 	examplesUrl: DEFAULT_DESIGN_EXAMPLES_URL,
 };
 
+/**
+ * One live session (= one iTerm tab / task) an agent is running. An agent can
+ * hold several of these concurrently (see PersistentAgent.currentSessions).
+ */
+export interface AgentSession {
+	sessionId: string;
+	ticketId?: string;
+	ticketName?: string;
+	ticketUrl?: string;
+}
+
 export interface PersistentAgent {
 	id: string;
 	name: string;
@@ -49,15 +60,120 @@ export interface PersistentAgent {
 	palette?: number;
 	hueShift?: number;
 	seatId?: string;
+	/**
+	 * Primary live session — a MIRROR of `currentSessions[0]`. Kept so the many
+	 * "is this agent online / busy" / orchestrator-singleton readers can stay a
+	 * simple truthy check. Always kept in sync via addAgentSession /
+	 * removeAgentSession / pruneDeadSessions. `currentSessions` is authoritative.
+	 */
 	currentSessionId?: string;
+	/** All concurrent live sessions (one per task/tab). Empty/undefined = idle. */
+	currentSessions?: AgentSession[];
 	lastSessionEnd?: string;
 	sessionCount?: number;
-	currentTicketId?: string;
-	currentTicketName?: string;
-	currentTicketUrl?: string;
+	currentTicketId?: string;     // mirror of currentSessions[0].ticketId
+	currentTicketName?: string;   // mirror of currentSessions[0].ticketName
+	currentTicketUrl?: string;    // mirror of currentSessions[0].ticketUrl
 	lastTicketId?: string;
 	retired?: boolean;        // archived role — kept for memory, never launched
 	avatarConfig?: string;    // DiceBear pixel-art combo as a JSON string ({ seed, options? })
+}
+
+// ── Multi-session helpers ──────────────────────────────────────
+// One PersistentAgent can run N concurrent sessions. `currentSessions` is the
+// authoritative list; the scalar currentSessionId/currentTicket* fields mirror
+// the primary (first) entry so legacy readers keep working unchanged.
+
+/** Re-derive the scalar mirror fields from the primary session. */
+function syncSessionMirror(pa: PersistentAgent): void {
+	const primary = pa.currentSessions?.[0];
+	pa.currentSessionId = primary?.sessionId;
+	pa.currentTicketId = primary?.ticketId;
+	pa.currentTicketName = primary?.ticketName;
+	pa.currentTicketUrl = primary?.ticketUrl;
+}
+
+/** All live session ids of an agent (array-aware, with legacy scalar fallback). */
+export function agentSessionIds(pa: PersistentAgent): string[] {
+	if (pa.currentSessions && pa.currentSessions.length > 0) {
+		return pa.currentSessions.map(s => s.sessionId);
+	}
+	return pa.currentSessionId ? [pa.currentSessionId] : [];
+}
+
+/** How many concurrent sessions/tasks this agent is currently running. */
+export function agentSessionCount(pa: PersistentAgent): number {
+	return agentSessionIds(pa).length;
+}
+
+/** Find the agent that owns a given live session id (array-aware). */
+export function findAgentBySessionId(agents: PersistentAgent[], sessionId: string): PersistentAgent | undefined {
+	return agents.find(pa => agentSessionIds(pa).includes(sessionId));
+}
+
+/** Attach a new live session (a concurrent task) to an agent. Idempotent. */
+export function addAgentSession(pa: PersistentAgent, session: AgentSession): void {
+	if (!pa.currentSessions) pa.currentSessions = [];
+	if (!pa.currentSessions.some(s => s.sessionId === session.sessionId)) {
+		pa.currentSessions.push(session);
+	}
+	syncSessionMirror(pa);
+}
+
+/**
+ * Remove one session by id. Returns the removed entry (so callers can release
+ * its ticket / record history). Re-syncs the scalar mirror afterwards.
+ */
+export function removeAgentSession(pa: PersistentAgent, sessionId: string): AgentSession | undefined {
+	let removed: AgentSession | undefined;
+	if (pa.currentSessions) {
+		const idx = pa.currentSessions.findIndex(s => s.sessionId === sessionId);
+		if (idx >= 0) {
+			removed = pa.currentSessions[idx];
+			pa.currentSessions.splice(idx, 1);
+		}
+	}
+	// Legacy: a scalar-only session never mirrored into the array.
+	if (!removed && pa.currentSessionId === sessionId) {
+		removed = {
+			sessionId,
+			ticketId: pa.currentTicketId,
+			ticketName: pa.currentTicketName,
+			ticketUrl: pa.currentTicketUrl,
+		};
+	}
+	syncSessionMirror(pa);
+	return removed;
+}
+
+/**
+ * Drop any sessions that aren't in `liveIds` (e.g. stale refs after a restart
+ * or building switch). Returns true if anything changed.
+ */
+export function pruneDeadSessions(pa: PersistentAgent, liveIds: Set<string>): boolean {
+	const before = agentSessionCount(pa);
+	// Normalize legacy scalar-only into the array first so we operate uniformly.
+	if ((!pa.currentSessions || pa.currentSessions.length === 0) && pa.currentSessionId) {
+		pa.currentSessions = [{
+			sessionId: pa.currentSessionId,
+			ticketId: pa.currentTicketId,
+			ticketName: pa.currentTicketName,
+			ticketUrl: pa.currentTicketUrl,
+		}];
+	}
+	pa.currentSessions = (pa.currentSessions ?? []).filter(s => liveIds.has(s.sessionId));
+	syncSessionMirror(pa);
+	return agentSessionCount(pa) !== before;
+}
+
+/**
+ * An agent with no job title AND no job description is treated as new/unknown:
+ * it was minted provisionally for a freshly-discovered session and the user
+ * hasn't said who it is yet. Such agents still need the "who's this?" popup
+ * (including across a server restart, since the provisional row was persisted).
+ */
+export function isUnidentified(pa: PersistentAgent): boolean {
+	return !pa.roleShort?.trim() && !pa.roleFull?.trim();
 }
 
 // ── Team structure (static source of truth) ──────────────
@@ -117,6 +233,18 @@ function rowToAgent(r: typeof agentsTable.$inferSelect): PersistentAgent {
 		hueShift: r.hueShift ?? undefined,
 		seatId: r.seatId ?? undefined,
 		currentSessionId: r.currentSessionId ?? undefined,
+		// Normalize: if the DB row predates currentSessions, synthesize it from
+		// the legacy scalar so the rest of the code always sees the array form.
+		currentSessions: (r.currentSessions && r.currentSessions.length > 0)
+			? r.currentSessions
+			: (r.currentSessionId
+				? [{
+					sessionId: r.currentSessionId,
+					ticketId: r.currentTicketId ?? undefined,
+					ticketName: r.currentTicketName ?? undefined,
+					ticketUrl: r.currentTicketUrl ?? undefined,
+				}]
+				: undefined),
 		lastSessionEnd: r.lastSessionEnd ?? undefined,
 		sessionCount: r.sessionCount ?? undefined,
 		currentTicketId: r.currentTicketId ?? undefined,
@@ -142,6 +270,7 @@ function agentToRow(a: PersistentAgent, buildingId: string): typeof agentsTable.
 		hueShift: a.hueShift ?? null,
 		seatId: a.seatId ?? null,
 		currentSessionId: a.currentSessionId ?? null,
+		currentSessions: (a.currentSessions && a.currentSessions.length > 0) ? a.currentSessions : null,
 		lastSessionEnd: a.lastSessionEnd ?? null,
 		sessionCount: a.sessionCount ?? null,
 		currentTicketId: a.currentTicketId ?? null,

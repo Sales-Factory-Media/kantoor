@@ -1,54 +1,10 @@
 import { useState, useEffect, useRef } from 'react'
-import type { WorkspaceFolder, WorkerStatusEntry } from '../hooks/useExtensionMessages.js'
+import type { WorkspaceFolder } from '../hooks/useExtensionMessages.js'
 import { vscode, isStandalone } from '../vscodeApi.js'
 
 interface BottomToolbarProps {
   onOpenClaude: () => void
   workspaceFolders: WorkspaceFolder[]
-  clickupNextFetchAt: number | null
-  workers: WorkerStatusEntry[]
-}
-
-function WorkerChip({ worker }: { worker: WorkerStatusEntry }) {
-  const disconnected = worker.status === 'disconnected'
-  return (
-    <div
-      title={
-        worker.status === 'busy' && worker.ticketName
-          ? `${worker.name} — ${worker.ticketName}`
-          : `${worker.name} (${worker.status})`
-      }
-      style={{
-        display: 'flex',
-        alignItems: 'center',
-        gap: 6,
-        padding: '2px 8px',
-        fontSize: '14px',
-        color: disconnected ? 'var(--pixel-text-dim)' : 'var(--pixel-text)',
-        background: 'var(--pixel-btn-bg)',
-        border: '2px solid var(--pixel-border)',
-        borderRadius: 0,
-        opacity: disconnected ? 0.6 : 1,
-      }}
-    >
-      <span
-        style={{
-          width: 8,
-          height: 8,
-          borderRadius: '50%',
-          backgroundColor: disconnected ? '#666' : worker.color,
-          flexShrink: 0,
-        }}
-      />
-      <span>{worker.name}</span>
-      {worker.isHub && (
-        <span style={{ fontSize: '12px', color: 'var(--pixel-text-dim)' }}>(hub)</span>
-      )}
-      {worker.status === 'busy' && worker.ticketId && (
-        <span style={{ fontSize: '12px', color: worker.color }}>CU-{worker.ticketId}</span>
-      )}
-    </div>
-  )
 }
 
 const btnBase: React.CSSProperties = {
@@ -61,61 +17,14 @@ const btnBase: React.CSSProperties = {
   cursor: 'pointer',
 }
 
-function formatCountdown(ms: number): string {
-  if (ms <= 0) return '0:00'
-  const totalSec = Math.ceil(ms / 1000)
-  const min = Math.floor(totalSec / 60)
-  const sec = totalSec % 60
-  return `${min}:${sec.toString().padStart(2, '0')}`
-}
-
 export function BottomToolbar({
   onOpenClaude,
   workspaceFolders,
-  clickupNextFetchAt,
-  workers,
 }: BottomToolbarProps) {
   const [hovered, setHovered] = useState<string | null>(null)
   const [isFolderPickerOpen, setIsFolderPickerOpen] = useState(false)
   const [hoveredFolder, setHoveredFolder] = useState<number | null>(null)
   const folderPickerRef = useRef<HTMLDivElement>(null)
-  const [countdown, setCountdown] = useState<string | null>(null)
-  const [fetchStartedFrom, setFetchStartedFrom] = useState<number | null>(null)
-  const isFetching = fetchStartedFrom !== null
-
-  // Clear spinner when the server broadcasts a new clickupNextFetchAt (fetch completed).
-  useEffect(() => {
-    if (fetchStartedFrom == null) return
-    if (clickupNextFetchAt != null && clickupNextFetchAt !== fetchStartedFrom) {
-      setFetchStartedFrom(null)
-    }
-  }, [clickupNextFetchAt, fetchStartedFrom])
-
-  // Safety cap so a stuck fetch doesn't pin the spinner forever.
-  useEffect(() => {
-    if (fetchStartedFrom == null) return
-    const id = setTimeout(() => setFetchStartedFrom(null), 30000)
-    return () => clearTimeout(id)
-  }, [fetchStartedFrom])
-
-  const handleFetchNow = () => {
-    setFetchStartedFrom(clickupNextFetchAt ?? 0)
-    vscode.postMessage({ type: 'clickupRefresh' })
-  }
-
-  useEffect(() => {
-    if (clickupNextFetchAt == null) {
-      setCountdown(null)
-      return
-    }
-    const tick = () => {
-      const remaining = clickupNextFetchAt - Date.now()
-      setCountdown(remaining > 0 ? formatCountdown(remaining) : null)
-    }
-    tick()
-    const id = setInterval(tick, 1000)
-    return () => clearInterval(id)
-  }, [clickupNextFetchAt])
 
   // Close folder picker on outside click
   useEffect(() => {
@@ -144,84 +53,10 @@ export function BottomToolbar({
     vscode.postMessage({ type: 'openClaude', folderPath: folder.path })
   }
 
+  // In standalone the status strip + credits moved to StatusHeader / Credits
+  // (top + bottom-right), so the bottom toolbar has nothing to render here.
   if (isStandalone) {
-    return (
-      <div
-        style={{
-          position: 'absolute',
-          bottom: 6,
-          left: 8,
-          right: 8,
-          zIndex: 'var(--pixel-controls-z)',
-          fontSize: '20px',
-          color: 'var(--pixel-text-dim)',
-          userSelect: 'none',
-          display: 'flex',
-          flexDirection: 'column',
-          alignItems: 'flex-start',
-          gap: '4px',
-        }}
-      >
-        {workers.length > 0 && (
-          <div
-            style={{
-              display: 'flex',
-              flexWrap: 'wrap',
-              gap: 6,
-              width: '100%',
-            }}
-          >
-            {workers.map((w) => (
-              <WorkerChip key={`${w.hostname}:${w.name}`} worker={w} />
-            ))}
-          </div>
-        )}
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: '8px',
-          }}
-        >
-        <span style={{ pointerEvents: 'none' }}>
-          Watching... {countdown != null ? `(next fetch in ${countdown})` : 'Countdown not running'}
-        </span>
-        {countdown != null && (
-          isFetching ? (
-            <span
-              className="pixel-spinner"
-              style={{
-                fontSize: '16px',
-                padding: '2px 8px',
-                color: 'var(--pixel-text-dim)',
-              }}
-              title="Fetching..."
-            >
-              {'↻'}
-            </span>
-          ) : (
-            <button
-              onClick={handleFetchNow}
-              onMouseEnter={() => setHovered('fetchNow')}
-              onMouseLeave={() => setHovered(null)}
-              title="Fetch now"
-              style={{
-                ...btnBase,
-                fontSize: '16px',
-                padding: '2px 8px',
-                border: hovered === 'fetchNow' ? '2px solid var(--pixel-accent)' : '2px solid transparent',
-              }}
-            >
-              Fetch now
-            </button>
-          )
-        )}
-        <span style={{ fontSize: '8px', opacity: 0.4, marginLeft: 8 }}>
-          Furniture by pablodelucca (MIT) | Vehicles by MinZinn (CC-BY 4.0) | Cats by bluecarrot16 (CC-BY 3.0) | Forest by Seliel the Shaper
-        </span>
-        </div>
-      </div>
-    )
+    return null
   }
 
   return (

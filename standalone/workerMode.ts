@@ -252,6 +252,10 @@ function mergeAgents(hubAgents: PersistentAgent[]): void {
 			agent.workspacePath = collapseHome(agent.workspacePath);
 		}
 		delete agent.currentSessionId;
+		delete agent.currentSessions;
+		delete agent.currentTicketId;
+		delete agent.currentTicketName;
+		delete agent.currentTicketUrl;
 	}
 
 	// Start with all hub agents

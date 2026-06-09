@@ -9,6 +9,10 @@ export const TEXT_IDLE_DELAY_MS = 5000;
 // ── Display Truncation ──────────────────────────────────────
 export const BASH_COMMAND_DISPLAY_MAX_LENGTH = 30;
 export const TASK_DESCRIPTION_DISPLAY_MAX_LENGTH = 40;
+/** Max length of the per-session task title shown on an employee's ID card. */
+export const SESSION_TASK_TITLE_MAX_LENGTH = 100;
+/** Bytes read from the head of a JSONL to find the session's opening prompt. */
+export const SESSION_TASK_TITLE_SCAN_BYTES = 65536;
 
 // ── PNG / Asset Parsing ─────────────────────────────────────
 export const PNG_ALPHA_THRESHOLD = 128;

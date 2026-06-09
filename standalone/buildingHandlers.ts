@@ -16,6 +16,7 @@ import {
 	loadPersistentAgentsForBuilding,
 	savePersistentAgents,
 	savePersistentAgentsForBuilding,
+	pruneDeadSessions,
 	seedDesignTeams,
 } from './agentStore.js';
 import { initProjectStore, loadKnownProjects, listAllProjectsWithMembership, setProjectMembership } from '../src/projectStore.js';
@@ -95,10 +96,7 @@ export async function handleSwitchBuilding(msg: Record<string, unknown>, ctx: Se
 	const liveIds = getLiveSessionIds();
 	let cleared = false;
 	for (const pa of ctx.persistentAgents) {
-		if (pa.currentSessionId && !liveIds.has(pa.currentSessionId)) {
-			pa.currentSessionId = undefined;
-			cleared = true;
-		}
+		if (pruneDeadSessions(pa, liveIds)) cleared = true;
 	}
 	if (cleared) savePersistentAgents(ctx.persistentAgents);
 
