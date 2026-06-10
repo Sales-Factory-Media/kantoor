@@ -35,6 +35,7 @@ import { connectorForBuilding } from '../src/connectors/registry.js';
 import { initSeatStore, loadSeats } from '../src/db/seatStore.js';
 import { initSettingsStore, getAppSetting } from '../src/db/settingsStore.js';
 import { initWorkerAssignmentStore } from '../src/db/workerAssignmentStore.js';
+import { initSessionHistoryStore, lookupSessionOwner } from '../src/db/sessionHistoryStore.js';
 import {
 	handleFocusAgent,
 	handleSaveAgentSeats,
@@ -417,6 +418,7 @@ async function main(): Promise<void> {
 		initSeatStore(),
 		initSettingsStore(),
 		initWorkerAssignmentStore(),
+		initSessionHistoryStore(),
 	]);
 	const connector = connectorForBuilding(activeBuilding);
 
@@ -430,16 +432,31 @@ async function main(): Promise<void> {
 	// where the session ended after the server stopped. Clear any that don't
 	// have a live claude process.
 	const liveOnStartup = getLiveSessionIds();
-	let clearedStale = false;
-	for (const pa of persistentAgents) {
-		if (pruneDeadSessions(pa, liveOnStartup)) {
-			console.log(`[Standalone] Cleared stale session(s) from agent "${pa.name}"`);
-			pa.lastSessionEnd = pa.lastSessionEnd || new Date().toISOString();
-			clearedStale = true;
+	const claimedCount = persistentAgents.reduce(
+		(n, pa) => n + (pa.currentSessions?.length ?? 0),
+		0,
+	);
+	// Safety: if `ps aux` returned no Claude processes at all (the call timed
+	// out or hit transient load) while persistent agents claim sessions, that's
+	// a strong signal of a failed probe rather than a real mass-cleanup.
+	// Treating it as "everything's dead" would clear every employee's
+	// currentSessionId and cause `onNewSession` to mint duplicate provisional
+	// employees a moment later when the scanner re-probes successfully. Skip
+	// the prune and let the periodic `checkStale` clean things up correctly.
+	if (liveOnStartup.size === 0 && claimedCount > 0) {
+		console.warn(`[Standalone] Skipping boot prune: ps aux returned 0 live sessions but ${claimedCount} are claimed in DB — assuming transient probe failure.`);
+	} else {
+		let clearedStale = false;
+		for (const pa of persistentAgents) {
+			if (pruneDeadSessions(pa, liveOnStartup)) {
+				console.log(`[Standalone] Cleared stale session(s) from agent "${pa.name}"`);
+				pa.lastSessionEnd = pa.lastSessionEnd || new Date().toISOString();
+				clearedStale = true;
+			}
 		}
-	}
-	if (clearedStale) {
-		savePersistentAgents(persistentAgents);
+		if (clearedStale) {
+			savePersistentAgents(persistentAgents);
+		}
 	}
 
 	// Note: design teams already seeded for every building above. The active
@@ -516,6 +533,24 @@ async function main(): Promise<void> {
 				addKnownProject(projectName, workspacePath || projectDir);
 				const sessionId = path.basename(jsonlFile, '.jsonl');
 				let pa = findPersistentAgentBySession(sessionId);
+
+				// Durable fallback: if no agent currently claims this session in
+				// memory, session_history may still remember its original owner from
+				// before a transient ps-aux failure / over-eager prune cleared their
+				// currentSessions. Re-attach to that employee instead of minting a
+				// duplicate provisional named "Angela" / "Michael 2" / etc.
+				if (!pa) {
+					const ownerId = lookupSessionOwner(sessionId);
+					if (ownerId) {
+						const recovered = persistentAgents.find(p => p.id === ownerId);
+						if (recovered) {
+							addAgentSession(recovered, { sessionId });
+							savePersistentAgents(persistentAgents);
+							console.log(`[Standalone] Recovered session ${sessionId} → "${recovered.name}" (${recovered.id}) via session_history`);
+							pa = recovered;
+						}
+					}
+				}
 
 				// "Needs the who's-this popup" when there's no owning agent at all,
 				// OR the owning agent is still unidentified (no job title/description).

@@ -22,6 +22,7 @@ import {
 import { initProjectStore, loadKnownProjects, listAllProjectsWithMembership, setProjectMembership } from '../src/projectStore.js';
 import { initSeatStore, loadSeats } from '../src/db/seatStore.js';
 import { initWorkerAssignmentStore, loadWorkerAssignments } from '../src/db/workerAssignmentStore.js';
+import { initSessionHistoryStore } from '../src/db/sessionHistoryStore.js';
 import { connectorForBuilding } from '../src/connectors/registry.js';
 import { stopClickupPolling, startClickupPolling, handleClickupRefresh } from './clickupHandlers.js';
 import { buildOrganogram } from './organogram.js';
@@ -77,6 +78,7 @@ export async function handleSwitchBuilding(msg: Record<string, unknown>, ctx: Se
 		initProjectStore(),
 		initSeatStore(),
 		initWorkerAssignmentStore(),
+		initSessionHistoryStore(),
 	]);
 
 	const newConnector = connectorForBuilding(newBuilding);
@@ -92,13 +94,24 @@ export async function handleSwitchBuilding(msg: Record<string, unknown>, ctx: Se
 	ctx.workerAssignments = loadWorkerAssignments();
 
 	// Clear stale current-session refs that point at sessions that don't exist
-	// in the new building's roster.
+	// in the new building's roster. Same safety as the boot path: if ps aux
+	// returned empty while agents claim sessions, treat as a transient probe
+	// failure rather than clobbering every employee's currentSessionId (which
+	// would cause onNewSession to mint duplicate provisional employees).
 	const liveIds = getLiveSessionIds();
-	let cleared = false;
-	for (const pa of ctx.persistentAgents) {
-		if (pruneDeadSessions(pa, liveIds)) cleared = true;
+	const claimedCount = ctx.persistentAgents.reduce(
+		(n, pa) => n + (pa.currentSessions?.length ?? 0),
+		0,
+	);
+	if (liveIds.size === 0 && claimedCount > 0) {
+		console.warn(`[Buildings] Skipping prune on building switch: ps aux returned 0 live sessions but ${claimedCount} claimed — assuming transient probe failure.`);
+	} else {
+		let cleared = false;
+		for (const pa of ctx.persistentAgents) {
+			if (pruneDeadSessions(pa, liveIds)) cleared = true;
+		}
+		if (cleared) savePersistentAgents(ctx.persistentAgents);
 	}
-	if (cleared) savePersistentAgents(ctx.persistentAgents);
 
 	// Reflect ClickUp config alias for legacy callers
 	const cfg = newBuilding.connectorConfig as Record<string, unknown>;

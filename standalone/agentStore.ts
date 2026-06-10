@@ -22,6 +22,7 @@ import { writeJson } from './serverHelpers.js';
 import { getDb } from '../src/db/client.js';
 import { persistentAgents as agentsTable } from '../src/db/schema.js';
 import { getActiveBuildingId, tryGetActiveBuildingId } from '../src/db/activeBuilding.js';
+import { recordSessionOwner } from '../src/db/sessionHistoryStore.js';
 
 const SETTINGS_DIR = path.join(os.homedir(), '.pixel-agents');
 const AGENTS_DIR = path.join(SETTINGS_DIR, 'agents');
@@ -118,6 +119,10 @@ export function addAgentSession(pa: PersistentAgent, session: AgentSession): voi
 		pa.currentSessions.push(session);
 	}
 	syncSessionMirror(pa);
+	// Durable ownership — survives `currentSessions` being pruned by an
+	// over-eager boot cleanup so `onNewSession` can recover the right employee
+	// instead of minting a duplicate provisional.
+	recordSessionOwner(session.sessionId, pa.id);
 }
 
 /**

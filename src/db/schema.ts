@@ -103,6 +103,25 @@ export const buildingProjects = pgTable('building_projects', {
 	pk: primaryKey({ columns: [t.buildingId, t.projectId] }),
 }));
 
+/**
+ * Durable session → agent ownership. The JSONL file at
+ * ~/.claude/projects/<hash>/<sessionId>.jsonl is conceptually owned by exactly
+ * one PersistentAgent for life. Independent of `persistent_agents.current_sessions`
+ * (which is "what's live right now") so that a transient `ps aux` failure or
+ * an aggressive prune cannot break the binding — `onNewSession` consults this
+ * table before minting a duplicate provisional employee.
+ */
+export const sessionHistory = pgTable('session_history', {
+	sessionId: text('session_id').primaryKey(),
+	agentId: text('agent_id')
+		.notNull()
+		.references(() => persistentAgents.id, { onDelete: 'cascade' }),
+	buildingId: uuid('building_id')
+		.notNull()
+		.references(() => buildings.id, { onDelete: 'cascade' }),
+	createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
 export const workerAssignments = pgTable('worker_assignments', {
 	id: integer('id').primaryKey().generatedAlwaysAsIdentity(),
 	buildingId: uuid('building_id').notNull().references(() => buildings.id, { onDelete: 'cascade' }),
@@ -135,3 +154,5 @@ export type BuildingProjectRow = typeof buildingProjects.$inferSelect;
 export type NewBuildingProjectRow = typeof buildingProjects.$inferInsert;
 export type WorkerAssignmentRow = typeof workerAssignments.$inferSelect;
 export type NewWorkerAssignmentRow = typeof workerAssignments.$inferInsert;
+export type SessionHistoryRow = typeof sessionHistory.$inferSelect;
+export type NewSessionHistoryRow = typeof sessionHistory.$inferInsert;
