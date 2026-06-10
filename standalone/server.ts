@@ -432,19 +432,18 @@ async function main(): Promise<void> {
 	// where the session ended after the server stopped. Clear any that don't
 	// have a live claude process.
 	const liveOnStartup = getLiveSessionIds();
-	const claimedCount = persistentAgents.reduce(
-		(n, pa) => n + (pa.currentSessions?.length ?? 0),
-		0,
-	);
-	// Safety: if `ps aux` returned no Claude processes at all (the call timed
-	// out or hit transient load) while persistent agents claim sessions, that's
-	// a strong signal of a failed probe rather than a real mass-cleanup.
-	// Treating it as "everything's dead" would clear every employee's
-	// currentSessionId and cause `onNewSession` to mint duplicate provisional
-	// employees a moment later when the scanner re-probes successfully. Skip
-	// the prune and let the periodic `checkStale` clean things up correctly.
-	if (liveOnStartup.size === 0 && claimedCount > 0) {
-		console.warn(`[Standalone] Skipping boot prune: ps aux returned 0 live sessions but ${claimedCount} are claimed in DB — assuming transient probe failure.`);
+	// Safety: if `ps aux` failed (timeout / transient load), getLiveSessionIds
+	// returns null. Treating that as "everything's dead" would clear every
+	// employee's currentSessionId and cause `onNewSession` to mint duplicate
+	// provisional employees a moment later when the scanner re-probes
+	// successfully. Skip the prune and let the periodic `checkStale` clean
+	// things up correctly.
+	if (liveOnStartup === null) {
+		const claimedCount = persistentAgents.reduce(
+			(n, pa) => n + (pa.currentSessions?.length ?? 0),
+			0,
+		);
+		console.warn(`[Standalone] Skipping boot prune: ps aux probe failed (${claimedCount} sessions claimed in DB) — will recover on next checkStale tick.`);
 	} else {
 		let clearedStale = false;
 		for (const pa of persistentAgents) {

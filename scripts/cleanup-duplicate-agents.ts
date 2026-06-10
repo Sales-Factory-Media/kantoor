@@ -172,6 +172,11 @@ async function main(): Promise<void> {
 			`);
 			const all = ((rows as unknown as { rows: Array<{ id: string; current_sessions: unknown }> }).rows
 				?? (rows as unknown as Array<{ id: string; current_sessions: unknown }>));
+			// `WHERE id = ANY(...)` has no guaranteed order. Put the keep-row
+			// first so its first session stays primary in the merged list (and
+			// therefore in `current_session_id`, documented as a mirror of
+			// `currentSessions[0]`).
+			all.sort((a, b) => (a.id === g.keep_id ? -1 : b.id === g.keep_id ? 1 : 0));
 			const merged: Array<Record<string, unknown>> = [];
 			const seen = new Set<string>();
 			for (const r of all) {

@@ -27,10 +27,10 @@ describe('getLiveSessionIds', () => {
 		vi.clearAllMocks();
 	});
 
-	it('returns empty set when no claude processes are running', () => {
-		mockExecSync.mockImplementation(() => { throw new Error('no matches'); });
+	it('returns null when the ps aux probe itself fails', () => {
+		mockExecSync.mockImplementation(() => { throw new Error('timeout'); });
 		const ids = getLiveSessionIds();
-		expect(ids.size).toBe(0);
+		expect(ids).toBeNull();
 	});
 
 	it('extracts session IDs from ps output', () => {
@@ -39,15 +39,17 @@ describe('getLiveSessionIds', () => {
 			'user  5678 0.3 0.8 ... claude --session-id def67890-5678-5678-5678-567890123456 ...\n'
 		);
 		const ids = getLiveSessionIds();
-		expect(ids.size).toBe(2);
-		expect(ids.has('abc12345-1234-1234-1234-123456789012')).toBe(true);
-		expect(ids.has('def67890-5678-5678-5678-567890123456')).toBe(true);
+		expect(ids).not.toBeNull();
+		expect(ids!.size).toBe(2);
+		expect(ids!.has('abc12345-1234-1234-1234-123456789012')).toBe(true);
+		expect(ids!.has('def67890-5678-5678-5678-567890123456')).toBe(true);
 	});
 
-	it('returns empty set on empty output', () => {
+	it('returns empty set on empty output (genuine zero sessions)', () => {
 		mockExecSync.mockReturnValue('');
 		const ids = getLiveSessionIds();
-		expect(ids.size).toBe(0);
+		expect(ids).not.toBeNull();
+		expect(ids!.size).toBe(0);
 	});
 
 	it('ignores lines without valid session IDs', () => {
@@ -56,8 +58,9 @@ describe('getLiveSessionIds', () => {
 			'user  5678 0.3 0.8 ... claude --session-id abc12345-1234-1234-1234-123456789012\n'
 		);
 		const ids = getLiveSessionIds();
-		expect(ids.size).toBe(1);
-		expect(ids.has('abc12345-1234-1234-1234-123456789012')).toBe(true);
+		expect(ids).not.toBeNull();
+		expect(ids!.size).toBe(1);
+		expect(ids!.has('abc12345-1234-1234-1234-123456789012')).toBe(true);
 	});
 });
 

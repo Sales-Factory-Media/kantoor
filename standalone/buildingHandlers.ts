@@ -94,17 +94,13 @@ export async function handleSwitchBuilding(msg: Record<string, unknown>, ctx: Se
 	ctx.workerAssignments = loadWorkerAssignments();
 
 	// Clear stale current-session refs that point at sessions that don't exist
-	// in the new building's roster. Same safety as the boot path: if ps aux
-	// returned empty while agents claim sessions, treat as a transient probe
-	// failure rather than clobbering every employee's currentSessionId (which
-	// would cause onNewSession to mint duplicate provisional employees).
+	// in the new building's roster. Same safety as the boot path: if `ps aux`
+	// failed (null), treat as a transient probe failure rather than clobbering
+	// every employee's currentSessionId (which would cause onNewSession to mint
+	// duplicate provisional employees).
 	const liveIds = getLiveSessionIds();
-	const claimedCount = ctx.persistentAgents.reduce(
-		(n, pa) => n + (pa.currentSessions?.length ?? 0),
-		0,
-	);
-	if (liveIds.size === 0 && claimedCount > 0) {
-		console.warn(`[Buildings] Skipping prune on building switch: ps aux returned 0 live sessions but ${claimedCount} claimed — assuming transient probe failure.`);
+	if (liveIds === null) {
+		console.warn('[Buildings] Skipping prune on building switch: ps aux probe failed — will recover on next checkStale tick.');
 	} else {
 		let cleared = false;
 		for (const pa of ctx.persistentAgents) {

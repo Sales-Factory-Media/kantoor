@@ -23,23 +23,36 @@ interface WatchedProject {
 	timer: ReturnType<typeof setInterval>;
 }
 
-/** Get the set of session IDs that have a live claude process */
-export function getLiveSessionIds(): Set<string> {
+/**
+ * Get the set of session IDs that have a live claude process.
+ *
+ * Returns `null` when the probe itself failed (timeout, signal, shell error)
+ * so callers can distinguish "no sessions running" from "we don't know".
+ * Critical because the stale-check demotes any session not in this set —
+ * treating a transient `ps aux` failure as "everything is dead" would clear
+ * every employee's currentSessionId and cascade into duplicate provisional
+ * employees on the next probe.
+ *
+ * The trailing `|| true` neutralises grep's zero-match exit status so a
+ * genuinely empty result is returned as an empty Set (not a throw).
+ */
+export function getLiveSessionIds(): Set<string> | null {
 	const ids = new Set<string>();
+	let output: string;
 	try {
-		const output = execSync(
-			'ps aux | grep "claude" | grep "session-id" | grep -v grep',
+		output = execSync(
+			'ps aux | grep "claude" | grep "session-id" | grep -v grep || true',
 			{ encoding: 'utf-8', timeout: 3000 },
 		).trim();
-		if (!output) return ids;
-		for (const line of output.split('\n')) {
-			const match = line.match(/--session-id\s+([0-9a-f-]{36})/);
-			if (match) {
-				ids.add(match[1]);
-			}
-		}
 	} catch {
-		// No claude processes running
+		return null;
+	}
+	if (!output) return ids;
+	for (const line of output.split('\n')) {
+		const match = line.match(/--session-id\s+([0-9a-f-]{36})/);
+		if (match) {
+			ids.add(match[1]);
+		}
 	}
 	return ids;
 }
@@ -114,9 +127,15 @@ export class ProjectScanner {
 	}
 
 	start(): void {
-		// Get live sessions before initial scan
-		this.liveSessionIds = getLiveSessionIds();
-		console.log(`[Scanner] Found ${this.liveSessionIds.size} live Claude session(s)`);
+		// Get live sessions before initial scan. A null probe at boot is rare
+		// but not catastrophic — treat as empty and let the next tick recover.
+		const initialProbe = getLiveSessionIds();
+		this.liveSessionIds = initialProbe ?? new Set();
+		if (initialProbe === null) {
+			console.warn('[Scanner] Initial ps aux probe failed — starting with empty live set; will recover on next tick.');
+		} else {
+			console.log(`[Scanner] Found ${this.liveSessionIds.size} live Claude session(s)`);
+		}
 
 		// Initial scan
 		this.scanProjectDirs();
@@ -124,9 +143,18 @@ export class ProjectScanner {
 		// Poll for new project directories
 		this.dirScanTimer = setInterval(() => this.scanProjectDirs(), PROJECT_DIR_SCAN_INTERVAL_MS);
 
-		// Periodically refresh live sessions and check for stale agents
+		// Periodically refresh live sessions and check for stale agents.
+		// On probe failure (null) keep the previous set and skip the stale
+		// check — otherwise every live session would be demoted on a single
+		// flaky `ps aux`, firing `onSessionStale` for all of them and
+		// triggering the duplicate-provisional cascade.
 		this.staleTimer = setInterval(() => {
-			this.liveSessionIds = getLiveSessionIds();
+			const probe = getLiveSessionIds();
+			if (probe === null) {
+				console.warn('[Scanner] ps aux probe failed — keeping previous live set and skipping stale check.');
+				return;
+			}
+			this.liveSessionIds = probe;
 			this.checkStale();
 		}, STALE_CHECK_INTERVAL_MS);
 	}

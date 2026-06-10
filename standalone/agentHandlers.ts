@@ -34,11 +34,6 @@ export function launchPersistentAgent(pa: PersistentAgent, persistentAgents: Per
 	addAgentSession(pa, { sessionId: newSessionId });
 	savePersistentAgents(persistentAgents);
 
-	// We know the opening prompt right now — stash it so the session's card shows
-	// the real task immediately instead of "Tab N" while the JSONL is still being
-	// flushed (a race that longer prompts lose more often).
-	if (callInTask && agentManager) agentManager.setPendingTaskTitle(newSessionId, callInTask);
-
 	const knownProjects = loadKnownProjects();
 	const project = knownProjects.find(p => p.workspacePath === pa.workspacePath);
 	// Manual UI launch ("Start new job" / new-hire kickoff): work on the
@@ -48,7 +43,16 @@ export function launchPersistentAgent(pa: PersistentAgent, persistentAgents: Per
 	const cwd = expandHome(pa.workspacePath || '~');
 	const mcpConfigPath = ensureMempalaceMcpConfig(mempalaceHost);
 	console.log(`[Standalone] Launching agent "${pa.name}" with session ${newSessionId} in ${cwd}${callInTask ? ` with task: ${callInTask}` : ''}`);
-	return launchAgentSession(newSessionId, cwd, prompt, callInTask, { mcpConfigPath });
+	const launched = launchAgentSession(newSessionId, cwd, prompt, callInTask, { mcpConfigPath });
+
+	// We know the opening prompt right now — stash it so the session's card shows
+	// the real task immediately instead of "Tab N" while the JSONL is still being
+	// flushed (a race that longer prompts lose more often). Set only on a
+	// successful launch so failed attempts don't leak entries the consumer
+	// (addSession) will never see.
+	if (launched && callInTask && agentManager) agentManager.setPendingTaskTitle(newSessionId, callInTask);
+
+	return launched;
 }
 
 // ── Message handlers ─────────────────────────────────────────

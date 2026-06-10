@@ -221,7 +221,7 @@ export function ProfileCard({ character: ch, tasks, onGoTo, onReassign, onStartJ
                     }}
                   >
                     <button
-                      onClick={() => onGoTo(t.id)}
+                      onClick={() => { onGoTo(t.id); onClose() }}
                       title="Go to this tab"
                       style={{
                         display: 'flex',
