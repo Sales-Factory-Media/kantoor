@@ -7,6 +7,20 @@ import { cancelWaitingTimer, cancelPermissionTimer } from '../src/timerManager.j
 import { CONVERSATION_BUFFER_SIZE, SESSION_TASK_TITLE_MAX_LENGTH, SESSION_TASK_TITLE_SCAN_BYTES } from '../src/constants.js';
 
 /**
+ * Normalise a raw prompt into a task title: collapse whitespace, reject
+ * slash-command wrappers / local-command caveats (so the caller keeps scanning),
+ * and truncate to the display limit. Shared by JSONL extraction and the
+ * launch-time seed so both produce identical titles.
+ */
+export function cleanTaskTitle(text: string): string | undefined {
+	const cleaned = text.replace(/\s+/g, ' ').trim();
+	if (!cleaned || cleaned.startsWith('<') || cleaned.startsWith('Caveat:')) return undefined;
+	return cleaned.length > SESSION_TASK_TITLE_MAX_LENGTH
+		? cleaned.slice(0, SESSION_TASK_TITLE_MAX_LENGTH - 1).trimEnd() + '…'
+		: cleaned;
+}
+
+/**
  * Best-effort read of what a session is working on: its opening user prompt,
  * pulled from the head of the JSONL. Skips slash-command wrappers and local-
  * command caveats so the title reads like the actual task. Returns undefined
@@ -44,13 +58,11 @@ export function extractSessionTaskTitle(jsonlFile: string): string | undefined {
 			}
 		}
 		if (!text) continue;
-		const cleaned = text.replace(/\s+/g, ' ').trim();
 		// Skip slash-command/system wrappers and local-command caveats — keep
 		// scanning for the first genuine task prompt.
-		if (!cleaned || cleaned.startsWith('<') || cleaned.startsWith('Caveat:')) continue;
-		return cleaned.length > SESSION_TASK_TITLE_MAX_LENGTH
-			? cleaned.slice(0, SESSION_TASK_TITLE_MAX_LENGTH - 1).trimEnd() + '…'
-			: cleaned;
+		const title = cleanTaskTitle(text);
+		if (!title) continue;
+		return title;
 	}
 	return undefined;
 }
@@ -99,6 +111,11 @@ export class StandaloneAgentManager {
 	// File path → agent ID mapping
 	private fileToAgent = new Map<string, number>();
 
+	// sessionId → known opening prompt, stashed at launch time so a freshly
+	// launched session shows its real task immediately instead of "Tab N" while
+	// we race the JSONL flush. Consumed (and cleared) by addSession.
+	private pendingTaskTitles = new Map<string, string>();
+
 	// Delegating sink — always points to the latest broadcast target
 	private delegatingSink = new DelegatingSink();
 
@@ -110,6 +127,16 @@ export class StandaloneAgentManager {
 		this.delegatingSink.current = sink;
 	}
 
+	/**
+	 * Record the opening prompt for a session we're about to launch, so the very
+	 * first `addSession` can label it correctly even before the prompt is flushed
+	 * to the JSONL. Cleaned/truncated the same way as the JSONL-extracted title.
+	 */
+	setPendingTaskTitle(sessionId: string, rawPrompt: string): void {
+		const title = cleanTaskTitle(rawPrompt);
+		if (title) this.pendingTaskTitles.set(sessionId, title);
+	}
+
 	hasSession(jsonlFile: string): boolean {
 		return this.fileToAgent.has(jsonlFile);
 	}
@@ -119,7 +146,11 @@ export class StandaloneAgentManager {
 
 		const sessionId = path.basename(jsonlFile, '.jsonl');
 		const id = this.nextAgentId++;
-		const taskTitle = extractSessionTaskTitle(jsonlFile);
+		// Prefer the JSONL prompt once it's there; fall back to the title we
+		// stashed at launch (Start-new-job / call-ins) so we never show "Tab N"
+		// when we already know the task. One-shot: consume the pending entry.
+		const taskTitle = extractSessionTaskTitle(jsonlFile) ?? this.pendingTaskTitles.get(sessionId);
+		this.pendingTaskTitles.delete(sessionId);
 
 		const agent: StandaloneAgentState = {
 			id,

@@ -58,7 +58,14 @@ export function PolaroidBar({ officeState, agents, agentStatuses, onSelect }: Po
     if (arr) arr.push(ch)
     else groups.set(key, [ch])
   }
-  const groupList = [...groups.entries()]
+  // Order the cards by project first, then alphabetically by employee name, so
+  // teammates on the same project sit together and the row is stable.
+  const groupList = [...groups.entries()].sort(([, a], [, b]) => {
+    const projA = (a[0].projectName || a[0].folderName || '').toLowerCase()
+    const projB = (b[0].projectName || b[0].folderName || '').toLowerCase()
+    if (projA !== projB) return projA.localeCompare(projB)
+    return (a[0].name || '').toLowerCase().localeCompare((b[0].name || '').toLowerCase())
+  })
 
   const profileTasks = profileKey ? groups.get(profileKey) : undefined
   const profileChar = profileTasks?.[0] ?? null
@@ -163,7 +170,7 @@ export function PolaroidBar({ officeState, agents, agentStatuses, onSelect }: Po
               </div>
               {/* Photo */}
               <EmployeeAvatar
-                id={ch.sessionId || ch.persistentAgentId}
+                id={ch.persistentAgentId || ch.sessionId}
                 name={ch.name}
                 avatarConfig={ch.avatarConfig}
                 size={PHOTO_SIZE}

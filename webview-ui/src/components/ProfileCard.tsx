@@ -107,23 +107,24 @@ export function ProfileCard({ character: ch, tasks, onGoTo, onReassign, onStartJ
         style={{
           position: 'relative',
           width: 540,
-          // Real ID-card landscape ratio at rest; grow to fit the composer.
-          aspectRatio: composing ? undefined : '3.375 / 2.125',
-          minHeight: composing ? 340 : undefined,
+          // No fixed ratio: the card grows in height as more tasks/jobs run.
+          // Cap at the viewport with a scroll fallback for extreme task counts.
+          maxHeight: '90vh',
+          overflowY: 'auto',
           background: CARD_BG,
           border: `2px solid ${EDGE}`,
           borderRadius: 0,
           boxShadow: `2px 2px 0px ${EDGE}`,
           padding: 16,
           display: 'flex',
+          flexDirection: 'column',
           gap: 16,
-          alignItems: 'stretch',
           boxSizing: 'border-box',
         }}
         onClick={(e) => e.stopPropagation()}
       >
         {/* Edit + Close */}
-        <div style={{ position: 'absolute', top: 6, right: 8, display: 'flex', gap: 8, alignItems: 'center' }}>
+        <div style={{ position: 'absolute', top: 6, right: 8, display: 'flex', gap: 8, alignItems: 'center', zIndex: 1 }}>
           {onEdit && (
             <button
               onClick={onEdit}
@@ -142,18 +143,17 @@ export function ProfileCard({ character: ch, tasks, onGoTo, onReassign, onStartJ
           </button>
         </div>
 
-        {/* Photo */}
-        <EmployeeAvatar
-          id={ch.sessionId || ch.persistentAgentId}
-          name={ch.name}
-          avatarConfig={ch.avatarConfig}
-          size={PHOTO_SIZE}
-          style={{ border: `2px solid ${EDGE}`, alignSelf: 'flex-start' }}
-        />
+        {/* Top: agent information — photo beside identity (kept as-is) */}
+        <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start' }}>
+          <EmployeeAvatar
+            id={ch.persistentAgentId || ch.sessionId}
+            name={ch.name}
+            avatarConfig={ch.avatarConfig}
+            size={PHOTO_SIZE}
+            style={{ border: `2px solid ${EDGE}`, flexShrink: 0 }}
+          />
 
-        {/* All details beside the photo */}
-        <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minWidth: 0, height: '100%' }}>
-          <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, flex: 1, minWidth: 0 }}>
             {/* Name with the role behind it */}
             <div style={{ lineHeight: 1.15 }}>
               <span style={{ fontSize: '26px', color: INK, fontWeight: 'bold' }}>
@@ -185,76 +185,6 @@ export function ProfileCard({ character: ch, tasks, onGoTo, onReassign, onStartJ
               </div>
             </div>
 
-            {/* Running tasks — one row per concurrent iTerm tab, with what it's on */}
-            {tasks.length > 0 && (
-              <div>
-                <div style={labelStyle}>{tasks.length > 1 ? `Active tasks (${tasks.length})` : 'Current task'}</div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 5, marginTop: 4 }}>
-                  {tasks.map((t, i) => {
-                    const st = taskStatusLabel(t.status)
-                    return (
-                      <div
-                        key={t.id}
-                        style={{
-                          display: 'flex',
-                          alignItems: 'stretch',
-                          border: `1px solid ${SOFT}`,
-                          borderRadius: 0,
-                          background: 'rgba(255,255,255,0.45)',
-                        }}
-                      >
-                        <button
-                          onClick={() => { onGoTo(t.id); onClose() }}
-                          title="Go to this tab"
-                          style={{
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: 8,
-                            padding: '6px 8px',
-                            flex: 1,
-                            minWidth: 0,
-                            textAlign: 'left',
-                            border: 'none',
-                            background: 'none',
-                            cursor: 'pointer',
-                          }}
-                        >
-                          <span style={{ width: 8, height: 8, borderRadius: '50%', background: st.color, flexShrink: 0 }} />
-                          <div style={{ flex: 1, minWidth: 0 }}>
-                            <div
-                              style={{ fontSize: '15px', color: INK, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
-                              title={t.title || undefined}
-                            >
-                              {t.title || `Tab ${i + 1}`}
-                            </div>
-                            <div style={{ fontSize: '13px', color: INK_DIM }}>{st.text}</div>
-                          </div>
-                        </button>
-                        {onReassign && t.sessionId && (
-                          <button
-                            onClick={() => { onReassign(t.sessionId!); onClose() }}
-                            title="Reassign this task to someone else"
-                            style={{
-                              flexShrink: 0,
-                              padding: '0 10px',
-                              border: 'none',
-                              borderLeft: `1px solid ${SOFT}`,
-                              background: 'none',
-                              color: INK_DIM,
-                              fontSize: '16px',
-                              cursor: 'pointer',
-                            }}
-                          >
-                            {'⇄'}
-                          </button>
-                        )}
-                      </div>
-                    )
-                  })}
-                </div>
-              </div>
-            )}
-
             {ch.roleFull && (
               <div>
                 <div style={labelStyle}>Role description</div>
@@ -270,48 +200,114 @@ export function ProfileCard({ character: ch, tasks, onGoTo, onReassign, onStartJ
               </div>
             )}
           </div>
+        </div>
 
-          {/* Start a new concurrent job (a new iTerm tab) for this employee. */}
-          {onStartJob && (
-            <div style={{ marginTop: 8 }}>
-              {composing ? (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                  <textarea
-                    autoFocus
-                    value={jobText}
-                    onChange={(e) => setJobText(e.target.value)}
-                    placeholder="What should they work on? (optional)"
-                    rows={2}
+        {/* Running tasks — full-width, one row per concurrent iTerm tab */}
+        {tasks.length > 0 && (
+          <div>
+            <div style={labelStyle}>{tasks.length > 1 ? `Active tasks (${tasks.length})` : 'Current task'}</div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 5, marginTop: 4 }}>
+              {tasks.map((t, i) => {
+                const st = taskStatusLabel(t.status)
+                return (
+                  <div
+                    key={t.id}
                     style={{
-                      resize: 'vertical',
-                      fontFamily: 'inherit',
-                      fontSize: '14px',
-                      color: INK,
-                      background: '#fff',
+                      display: 'flex',
+                      alignItems: 'stretch',
                       border: `1px solid ${SOFT}`,
                       borderRadius: 0,
-                      padding: '6px 8px',
+                      background: 'rgba(255,255,255,0.45)',
                     }}
-                  />
-                  <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 6 }}>
-                    <button onClick={() => { setComposing(false); setJobText('') }} style={{ ...buttonStyle, background: 'transparent', color: INK_DIM, border: `2px solid ${SOFT}` }}>
-                      Cancel
+                  >
+                    <button
+                      onClick={() => onGoTo(t.id)}
+                      title="Go to this tab"
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 8,
+                        padding: '6px 8px',
+                        flex: 1,
+                        minWidth: 0,
+                        textAlign: 'left',
+                        border: 'none',
+                        background: 'none',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      <span style={{ width: 8, height: 8, borderRadius: '50%', background: st.color, flexShrink: 0 }} />
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div
+                          style={{ fontSize: '15px', color: INK, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                          title={t.title || undefined}
+                        >
+                          {t.title || `Tab ${i + 1}`}
+                        </div>
+                        <div style={{ fontSize: '13px', color: INK_DIM }}>{st.text}</div>
+                      </div>
                     </button>
-                    <button onClick={launchJob} style={buttonStyle}>
-                      Launch
-                    </button>
+                    {onReassign && t.sessionId && (
+                      <button
+                        onClick={() => { onReassign(t.sessionId!); onClose() }}
+                        title="Reassign this task to someone else"
+                        style={{
+                          flexShrink: 0,
+                          padding: '0 10px',
+                          border: 'none',
+                          borderLeft: `1px solid ${SOFT}`,
+                          background: 'none',
+                          color: INK_DIM,
+                          fontSize: '16px',
+                          cursor: 'pointer',
+                        }}
+                      >
+                        {'⇄'}
+                      </button>
+                    )}
                   </div>
-                </div>
-              ) : (
-                <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-                  <button onClick={() => setComposing(true)} style={buttonStyle}>
-                    + Start new job
-                  </button>
-                </div>
-              )}
+                )
+              })}
             </div>
-          )}
-        </div>
+          </div>
+        )}
+
+        {/* Start a new concurrent job (a new iTerm tab) for this employee. Full-width. */}
+        {onStartJob && (
+          composing ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <textarea
+                autoFocus
+                value={jobText}
+                onChange={(e) => setJobText(e.target.value)}
+                placeholder="What should they work on? (optional)"
+                rows={2}
+                style={{
+                  resize: 'vertical',
+                  fontFamily: 'inherit',
+                  fontSize: '14px',
+                  color: INK,
+                  background: '#fff',
+                  border: `1px solid ${SOFT}`,
+                  borderRadius: 0,
+                  padding: '6px 8px',
+                }}
+              />
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 6 }}>
+                <button onClick={() => { setComposing(false); setJobText('') }} style={{ ...buttonStyle, background: 'transparent', color: INK_DIM, border: `2px solid ${SOFT}` }}>
+                  Cancel
+                </button>
+                <button onClick={launchJob} style={buttonStyle}>
+                  Launch
+                </button>
+              </div>
+            </div>
+          ) : (
+            <button onClick={() => setComposing(true)} style={{ ...buttonStyle, width: '100%' }}>
+              + Start new job
+            </button>
+          )
+        )}
       </div>
     </div>
   )

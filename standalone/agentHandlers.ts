@@ -29,14 +29,22 @@ import { getAppSetting, setAppSetting } from '../src/db/settingsStore.js';
 // auto-closing it after the work would be surprising. Automated dispatchers
 // (Darryl/Jan orchestrators, workerDispatch) build their prompts directly
 // and keep the default self-exit block.
-export function launchPersistentAgent(pa: PersistentAgent, persistentAgents: PersistentAgent[], callInTask?: string, mempalaceHost?: string): boolean {
+export function launchPersistentAgent(pa: PersistentAgent, persistentAgents: PersistentAgent[], callInTask?: string, mempalaceHost?: string, agentManager?: ServerContext['agentManager']): boolean {
 	const newSessionId = crypto.randomUUID();
 	addAgentSession(pa, { sessionId: newSessionId });
 	savePersistentAgents(persistentAgents);
 
+	// We know the opening prompt right now — stash it so the session's card shows
+	// the real task immediately instead of "Tab N" while the JSONL is still being
+	// flushed (a race that longer prompts lose more often).
+	if (callInTask && agentManager) agentManager.setPendingTaskTitle(newSessionId, callInTask);
+
 	const knownProjects = loadKnownProjects();
 	const project = knownProjects.find(p => p.workspacePath === pa.workspacePath);
-	const prompt = buildSystemPrompt(pa, project?.description, false);
+	// Manual UI launch ("Start new job" / new-hire kickoff): work on the
+	// current branch in a shared checkout where other sessions may be active —
+	// not the ticket-based Gitflow "create a feature branch" convention.
+	const prompt = buildSystemPrompt(pa, project?.description, false, true);
 	const cwd = expandHome(pa.workspacePath || '~');
 	const mcpConfigPath = ensureMempalaceMcpConfig(mempalaceHost);
 	console.log(`[Standalone] Launching agent "${pa.name}" with session ${newSessionId} in ${cwd}${callInTask ? ` with task: ${callInTask}` : ''}`);
@@ -338,7 +346,7 @@ export function handleReassignTask(msg: Record<string, unknown>, ctx: ServerCont
 }
 
 export function handleLaunchAgent(msg: Record<string, unknown>, ctx: ServerContext): void {
-	const { persistentAgents } = ctx;
+	const { persistentAgents, agentManager } = ctx;
 	const agentId = msg.agentId as string;
 	const callInTask = msg.callInTask as string | undefined;
 	const useTeam = msg.useTeam as boolean | undefined;
@@ -353,7 +361,7 @@ export function handleLaunchAgent(msg: Record<string, unknown>, ctx: ServerConte
 	const task = useTeam && callInTask
 		? `${callInTask}\n\nCreate an agent team to work on this. Break the work into parallel tasks and spawn teammates to handle them.`
 		: callInTask;
-	if (!launchPersistentAgent(pa, persistentAgents, task)) {
+	if (!launchPersistentAgent(pa, persistentAgents, task, undefined, agentManager)) {
 		console.log(`[Standalone] Failed to launch agent session for ${pa.name}`);
 	}
 }

@@ -95,6 +95,9 @@ export function EmployeeFile({ officeState, agentId, offlineAgent, defaultWorksp
         alignItems: 'center',
         justifyContent: 'center',
         background: 'rgba(0,0,0,0.5)',
+        // Rendered inside PolaroidBar's pointerEvents:'none' container — restore
+        // clicks so the inputs/buttons/backdrop work (matches ProfileCard).
+        pointerEvents: 'auto',
       }}
       onClick={onClose}
     >
