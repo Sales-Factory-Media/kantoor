@@ -19,9 +19,36 @@
  *   tsx scripts/cleanup-duplicate-agents.ts --apply     # actually delete
  */
 
-import { sql, inArray } from 'drizzle-orm';
+import { sql, inArray, eq } from 'drizzle-orm';
+import { createServer } from 'net';
 import { getDb, closeDb } from '../src/db/client.js';
-import { persistentAgents } from '../src/db/schema.js';
+import { persistentAgents, sessionHistory } from '../src/db/schema.js';
+import { SERVER_PORT } from '../standalone/constants.js';
+
+/**
+ * Hard-stop the cleanup if the standalone server is still listening on its
+ * port. Otherwise the server's in-memory agentCache would re-flush the deleted
+ * rows back to the DB on the next `savePersistentAgents` call (which fires on
+ * almost any agent state change), silently undoing the cleanup.
+ */
+async function assertServerNotRunning(): Promise<void> {
+	const inUse = await new Promise<boolean>((resolve) => {
+		const probe = createServer();
+		probe.once('error', (err: NodeJS.ErrnoException) => {
+			resolve(err.code === 'EADDRINUSE');
+		});
+		probe.once('listening', () => {
+			probe.close(() => resolve(false));
+		});
+		probe.listen(SERVER_PORT, '127.0.0.1');
+	});
+	if (inUse) {
+		console.error(`[cleanup] Standalone server appears to be running (port ${SERVER_PORT} is in use).`);
+		console.error('[cleanup] Stop the server first (the in-memory agent cache would re-flush the deleted rows back to DB otherwise).');
+		await closeDb();
+		process.exit(2);
+	}
+}
 
 interface DuplicateGroup {
 	building_id: string;
@@ -34,13 +61,22 @@ interface DuplicateGroup {
 
 async function findGroups(): Promise<DuplicateGroup[]> {
 	const db = getDb();
+	// Keep-priority within each duplicate group, in order:
+	//   1. avatar_config IS NOT NULL — the row the user actually personalised
+	//      (picked a DiceBear face for) is the "real" identity; duplicates
+	//      minted by the buggy onNewSession path never get an avatar set.
+	//   2. role_short non-empty — identified employee beats throwaway provisional.
+	//   3. Most recent last_session_end — recently-active row beats ancient ghost.
+	//   4. NULL last_session_end last — a row currently mid-session sorts after a
+	//      recently-ended one because the live session can be migrated to the
+	//      kept row (we copy `current_sessions` over before deletion).
 	const result = await db.execute(sql`
-		SELECT building_id::text                                              AS building_id,
+		SELECT building_id::text                                                                                AS building_id,
 		       name,
 		       workspace_path,
-		       COUNT(*)::int                                                  AS total,
-		       (array_agg(id ORDER BY last_session_end DESC NULLS LAST))[1]  AS keep_id,
-		       array_agg(id ORDER BY last_session_end DESC NULLS LAST)       AS all_ids
+		       COUNT(*)::int                                                                                    AS total,
+		       (array_agg(id ORDER BY (avatar_config IS NOT NULL) DESC, (role_short <> '') DESC, last_session_end DESC NULLS LAST))[1] AS keep_id,
+		       array_agg(id ORDER BY (avatar_config IS NOT NULL) DESC, (role_short <> '') DESC, last_session_end DESC NULLS LAST)       AS all_ids
 		FROM persistent_agents
 		WHERE workspace_path <> ''
 		GROUP BY building_id, name, workspace_path
@@ -116,9 +152,69 @@ async function main(): Promise<void> {
 
 	// 3. Apply if asked.
 	if (apply && groups.length > 0) {
+		await assertServerNotRunning();
 		const db = getDb();
+
+		// 3a. Migrate `current_sessions` from each delete-row onto its keep-row
+		// FIRST, so a live iTerm process whose session lived on a duplicate
+		// stays attributed to the surviving employee. Without this, the kept
+		// row sees no live session and onNewSession would re-discover the
+		// session next boot, which (with session_history remap below) would
+		// re-attach correctly anyway — but the in-DB scalar/array state would
+		// briefly be inconsistent, which other readers don't expect.
+		let migratedSessions = 0;
+		for (const g of groups) {
+			// Sum of current_sessions[] across all rows in the group (keep + deletes).
+			const rows = await db.execute(sql`
+				SELECT id, current_sessions
+				FROM persistent_agents
+				WHERE id = ANY(${[g.keep_id, ...g.delete_ids]}::text[])
+			`);
+			const all = ((rows as unknown as { rows: Array<{ id: string; current_sessions: unknown }> }).rows
+				?? (rows as unknown as Array<{ id: string; current_sessions: unknown }>));
+			const merged: Array<Record<string, unknown>> = [];
+			const seen = new Set<string>();
+			for (const r of all) {
+				const sessions = (r.current_sessions as Array<Record<string, unknown>> | null) ?? [];
+				for (const s of sessions) {
+					const sid = s.sessionId as string | undefined;
+					if (!sid || seen.has(sid)) continue;
+					seen.add(sid);
+					merged.push(s);
+				}
+			}
+			if (merged.length > 0) {
+				await db.execute(sql`
+					UPDATE persistent_agents
+					SET current_sessions = ${JSON.stringify(merged)}::jsonb,
+					    current_session_id = ${merged[0].sessionId as string}
+					WHERE id = ${g.keep_id}
+				`);
+				migratedSessions += merged.length - ((all.find(r => r.id === g.keep_id)
+					?.current_sessions as Array<unknown> | null)?.length ?? 0);
+			}
+		}
+		if (migratedSessions > 0) console.log(`[cleanup] Migrated ${migratedSessions} live session(s) onto the kept agents.`);
+
+		// 3b. Remap session_history so historical session attributions point at
+		// the survivor. The FK is ON DELETE CASCADE, so skipping this step
+		// would silently drop those rows and any future onNewSession for the
+		// same sessionId would fall through to a fresh provisional — defeating
+		// the whole point of session_history.
+		let remapped = 0;
+		for (const g of groups) {
+			for (const deleteId of g.delete_ids) {
+				const result = await db
+					.update(sessionHistory)
+					.set({ agentId: g.keep_id })
+					.where(eq(sessionHistory.agentId, deleteId));
+				remapped += (result as unknown as { rowCount?: number }).rowCount ?? 0;
+			}
+		}
+		if (remapped > 0) console.log(`[cleanup] Remapped ${remapped} session_history row(s) onto the kept agents.`);
+
+		// 3c. Delete the duplicates.
 		const allDeleteIds = groups.flatMap(g => g.delete_ids);
-		// Chunk to stay below Postgres' parameter limit.
 		let deleted = 0;
 		for (let i = 0; i < allDeleteIds.length; i += 500) {
 			const slice = allDeleteIds.slice(i, i + 500);

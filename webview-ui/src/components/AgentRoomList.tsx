@@ -267,7 +267,7 @@ export function AgentRoomList({
                 {/* Name row */}
                 <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
                   <EmployeeAvatar
-                    id={ch.sessionId || String(id)}
+                    id={ch.persistentAgentId || ch.sessionId || String(id)}
                     name={ch.name}
                     avatarConfig={ch.avatarConfig}
                     size={28}

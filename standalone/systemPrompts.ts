@@ -168,7 +168,11 @@ function buildMemoryBlock(agentId: string, roleShort: string | undefined, sessio
 // launches (handleLaunchAgent, handleSaveAgentIdentity → launchPersistentAgent,
 // handleStartConference) pass `false` because the user is driving — we never
 // want a hand-launched character to silently kill its own iTerm tab.
-export function buildSystemPrompt(agent: PersistentAgent, projectDescription?: string, includeSelfExit: boolean = true): string {
+// `concurrentJob` switches the Git section from the ticket-based Gitflow
+// "create a feature branch" convention to the shared-branch guidance used by
+// manual call-ins ("Start new job"): work on whatever branch is checked out and
+// assume other live sessions may be editing the same checkout at the same time.
+export function buildSystemPrompt(agent: PersistentAgent, projectDescription?: string, includeSelfExit: boolean = true, concurrentJob: boolean = false): string {
 	const lines = [
 		`You are ${agent.name}.`,
 	];
@@ -186,24 +190,42 @@ export function buildSystemPrompt(agent: PersistentAgent, projectDescription?: s
 		);
 	}
 	lines.push('', ...buildMemoryBlock(agent.id, agent.roleShort, agent.sessionCount, agent.lastSessionEnd));
+	if (concurrentJob) {
+		lines.push(
+			'',
+			'## Git Workflow (current branch — shared, concurrent work)',
+			'',
+			'You have been called in to work directly on the **branch that is currently checked out**. Do NOT create a new branch, switch branches, or use git worktrees — stay on the current branch.',
+			'',
+			'**Other sessions may be working in this same checkout at the same time.** Coordinate instead of clobbering:',
+			'- Run `git status` / `git diff` before you stage anything. Changes you did not make may belong to a teammate who is mid-edit.',
+			'- Stage only the specific files for your task. Never `git add -A` or `git commit -am` blindly.',
+			'- Do not reset, stash-drop, force-push, or otherwise discard work you did not create. If your change conflicts with someone else\'s uncommitted work, stop and flag it rather than overwriting it.',
+			'',
+			'**Commit messages**: If this work maps to a ClickUp ticket, include the ticket ID (`CU-<ticketId> <message>` or `#<ticketId>` anywhere in the message) so ClickUp tracks it. Otherwise write a normal descriptive commit message.',
+		);
+	} else {
+		lines.push(
+			'',
+			'## Git Conventions (Gitflow + ClickUp Integration)',
+			'',
+			'This project uses Gitflow. When making commits and pull requests, follow these conventions so ClickUp automatically tracks the work:',
+			'',
+			'**Branch naming**: Create a feature branch off `develop` using the Gitflow convention with the ClickUp ticket ID:',
+			'`feature/CU-<ticketId>-<short-description>` (e.g. `feature/CU-abc123-fix-login-bug`).',
+			'',
+			'**Commit messages**: Include the ticket ID in your commit messages using one of these formats:',
+			'- `CU-<ticketId> <message>` (e.g. `CU-abc123 fix null pointer in auth flow`)',
+			'- Or include `#<ticketId>` anywhere in the commit message',
+			'',
+			'**Pull request titles**: Include `CU-<ticketId>` in the PR title (e.g. `CU-abc123 Fix login authentication bug`).',
+			'',
+			'**Pull request base branch**: Always target `develop`, never `main`/`master` directly.',
+			'',
+			'**Pull request body**: Always include a link to the ClickUp ticket in the PR description.',
+		);
+	}
 	lines.push(
-		'',
-		'## Git Conventions (Gitflow + ClickUp Integration)',
-		'',
-		'This project uses Gitflow. When making commits and pull requests, follow these conventions so ClickUp automatically tracks the work:',
-		'',
-		'**Branch naming**: Create a feature branch off `develop` using the Gitflow convention with the ClickUp ticket ID:',
-		'`feature/CU-<ticketId>-<short-description>` (e.g. `feature/CU-abc123-fix-login-bug`).',
-		'',
-		'**Commit messages**: Include the ticket ID in your commit messages using one of these formats:',
-		'- `CU-<ticketId> <message>` (e.g. `CU-abc123 fix null pointer in auth flow`)',
-		'- Or include `#<ticketId>` anywhere in the commit message',
-		'',
-		'**Pull request titles**: Include `CU-<ticketId>` in the PR title (e.g. `CU-abc123 Fix login authentication bug`).',
-		'',
-		'**Pull request base branch**: Always target `develop`, never `main`/`master` directly.',
-		'',
-		'**Pull request body**: Always include a link to the ClickUp ticket in the PR description.',
 		'',
 		'## Ticket Status on Completion',
 		'',
