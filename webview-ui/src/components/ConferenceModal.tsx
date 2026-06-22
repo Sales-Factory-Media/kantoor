@@ -15,18 +15,32 @@ export function ConferenceModal({ officeState, agents, offlineAgents, onClose }:
   const [agent2, setAgent2] = useState<string | null>(null)
   const [topic, setTopic] = useState('')
 
-  const persistentOffline = offlineAgents.filter((a) => a.isPersistent)
-  const liveAgentIds = new Set(agents)
-  const conferenceEligible = persistentOffline.filter((a) => {
-    for (const id of liveAgentIds) {
-      const ch = officeState.characters.get(id)
-      if (ch && ch.persistentAgentId === a.sessionId) return false
-    }
-    return true
-  })
+  // A conference launches a fresh session for each participant, so an employee
+  // who is already running a session is still eligible — we just need to list
+  // them. Offline persistent agents come from `offlineAgents`; busy ones are
+  // excluded from that list server-side, so we pull them from the live
+  // characters too. Keyed by persistentAgentId (the id the backend expects).
+  type EligibleAgent = { id: string; name?: string; roleShort?: string; projectName?: string }
+  const eligibleById = new Map<string, EligibleAgent>()
+  for (const a of offlineAgents) {
+    if (!a.isPersistent) continue
+    eligibleById.set(a.sessionId, { id: a.sessionId, name: a.name, roleShort: a.roleShort, projectName: a.projectName })
+  }
+  for (const id of agents) {
+    const ch = officeState.characters.get(id)
+    if (!ch || ch.isSubagent || !ch.persistentAgentId) continue
+    if (eligibleById.has(ch.persistentAgentId)) continue
+    eligibleById.set(ch.persistentAgentId, {
+      id: ch.persistentAgentId,
+      name: ch.name,
+      roleShort: ch.roleShort,
+      projectName: ch.projectName || ch.folderName,
+    })
+  }
+  const conferenceEligible = [...eligibleById.values()]
 
   // Group eligible agents by project
-  const agentsByProject = new Map<string, typeof conferenceEligible>()
+  const agentsByProject = new Map<string, EligibleAgent[]>()
   for (const a of conferenceEligible) {
     const project = a.projectName || 'No project'
     const group = agentsByProject.get(project) || []
@@ -92,8 +106,8 @@ export function ConferenceModal({ officeState, agents, offlineAgents, onClose }:
             {[...agentsByProject.entries()].map(([project, groupAgents]) => (
               <optgroup key={project} label={project}>
                 {groupAgents.map((a) => (
-                  <option key={a.sessionId} value={a.sessionId} disabled={a.sessionId === agent2}>
-                    {a.name || a.sessionId.slice(0, 8)}{a.roleShort ? ` \u2014 ${a.roleShort}` : ''}
+                  <option key={a.id} value={a.id} disabled={a.id === agent2}>
+                    {a.name || a.id.slice(0, 8)}{a.roleShort ? ` \u2014 ${a.roleShort}` : ''}
                   </option>
                 ))}
               </optgroup>
@@ -125,8 +139,8 @@ export function ConferenceModal({ officeState, agents, offlineAgents, onClose }:
             {[...agentsByProject.entries()].map(([project, groupAgents]) => (
               <optgroup key={project} label={project}>
                 {groupAgents.map((a) => (
-                  <option key={a.sessionId} value={a.sessionId} disabled={a.sessionId === agent1}>
-                    {a.name || a.sessionId.slice(0, 8)}{a.roleShort ? ` \u2014 ${a.roleShort}` : ''}
+                  <option key={a.id} value={a.id} disabled={a.id === agent1}>
+                    {a.name || a.id.slice(0, 8)}{a.roleShort ? ` \u2014 ${a.roleShort}` : ''}
                   </option>
                 ))}
               </optgroup>

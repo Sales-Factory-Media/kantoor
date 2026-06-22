@@ -97,7 +97,8 @@ export function PolaroidBar({ officeState, agents, agentStatuses, onSelect }: Po
         {groupList.map(([key, members]) => {
           const ch = members[0]
           const project = ch.projectName || ch.folderName
-          const caption = [ch.name, project, ch.roleShort].filter(Boolean).join(' · ')
+          const captionParts = [ch.name, project, ch.roleShort].filter(Boolean)
+          const captionTitle = captionParts.join(' · ')
           const isHovered = hovered === key
           return (
             <button
@@ -105,7 +106,7 @@ export function PolaroidBar({ officeState, agents, agentStatuses, onSelect }: Po
               onClick={() => setProfileKey(key)}
               onMouseEnter={() => setHovered(key)}
               onMouseLeave={() => setHovered(null)}
-              title={caption || `Agent ${ch.id}`}
+              title={captionTitle || `Agent ${ch.id}`}
               style={{
                 position: 'relative',
                 display: 'flex',
@@ -164,9 +165,14 @@ export function PolaroidBar({ officeState, agents, agentStatuses, onSelect }: Po
                   textAlign: 'center',
                   lineHeight: 1.2,
                   wordBreak: 'break-word',
+                  display: 'flex',
+                  flexDirection: 'column',
                 }}
               >
-                {caption || `Agent ${ch.id}`}
+                {ch.name && <div>{ch.name}</div>}
+                {project && <div style={{ fontWeight: 'bold' }}>{project}</div>}
+                {ch.roleShort && <div>{ch.roleShort}</div>}
+                {captionParts.length === 0 && <div>{`Agent ${ch.id}`}</div>}
               </div>
               {/* Photo */}
               <EmployeeAvatar
