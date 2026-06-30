@@ -48,6 +48,14 @@ export function ConferenceModal({ officeState, agents, offlineAgents, onClose }:
     agentsByProject.set(project, group)
   }
 
+  // Sort the project groups alphabetically so the dropdowns are stable and easy
+  // to scan; "No project" sinks to the bottom.
+  const projectGroups = [...agentsByProject.entries()].sort(([a], [b]) => {
+    if (a === 'No project') return 1
+    if (b === 'No project') return -1
+    return a.localeCompare(b)
+  })
+
   const canStart = agent1 && agent2 && agent1 !== agent2 && topic.trim().length > 0
 
   return (
@@ -103,7 +111,7 @@ export function ConferenceModal({ officeState, agents, offlineAgents, onClose }:
             }}
           >
             <option value="">Select agent...</option>
-            {[...agentsByProject.entries()].map(([project, groupAgents]) => (
+            {projectGroups.map(([project, groupAgents]) => (
               <optgroup key={project} label={project}>
                 {groupAgents.map((a) => (
                   <option key={a.id} value={a.id} disabled={a.id === agent2}>
@@ -136,7 +144,7 @@ export function ConferenceModal({ officeState, agents, offlineAgents, onClose }:
             }}
           >
             <option value="">Select agent...</option>
-            {[...agentsByProject.entries()].map(([project, groupAgents]) => (
+            {projectGroups.map(([project, groupAgents]) => (
               <optgroup key={project} label={project}>
                 {groupAgents.map((a) => (
                   <option key={a.id} value={a.id} disabled={a.id === agent1}>

@@ -28,6 +28,12 @@ function taskDotColor(status: string | undefined): string {
   return '#5a8cff' // actively working
 }
 
+function taskStatusFallback(status: string | undefined): string {
+  if (status === 'permission') return 'Needs permission'
+  if (status === 'waiting') return 'Waiting for you'
+  return 'Working…'
+}
+
 /** Stable group key: one employee (persistentAgentId) or a lone session. */
 function groupKey(ch: Character): string {
   return ch.persistentAgentId ?? `id:${ch.id}`
@@ -39,11 +45,10 @@ function groupKey(ch: Character): string {
  * concurrent tasks (one iTerm tab each) shows a single card with a task-count
  * badge. Clicking opens an employee ID card listing those tasks.
  *
- * At rest the cards peek ~20% below the bottom edge; hovering floats a card the
- * same distance up so it clears the edge.
+ * The cards peek ~20% below the bottom edge, statically — no hover-raise, so
+ * their task tabs stay easy to click.
  */
 export function PolaroidBar({ officeState, agents, agentStatuses, onSelect }: PolaroidBarProps) {
-  const [hovered, setHovered] = useState<string | null>(null)
   const [profileKey, setProfileKey] = useState<string | null>(null)
   const [editing, setEditing] = useState(false)
 
@@ -99,13 +104,18 @@ export function PolaroidBar({ officeState, agents, agentStatuses, onSelect }: Po
           const project = ch.projectName || ch.folderName
           const captionParts = [ch.name, project, ch.roleShort].filter(Boolean)
           const captionTitle = captionParts.join(' · ')
-          const isHovered = hovered === key
           return (
-            <button
+            <div
               key={key}
+              role="button"
+              tabIndex={0}
               onClick={() => setProfileKey(key)}
-              onMouseEnter={() => setHovered(key)}
-              onMouseLeave={() => setHovered(null)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault()
+                  setProfileKey(key)
+                }
+              }}
               title={captionTitle || `Agent ${ch.id}`}
               style={{
                 position: 'relative',
@@ -120,13 +130,14 @@ export function PolaroidBar({ officeState, agents, agentStatuses, onSelect }: Po
                 boxShadow: '2px 2px 0px #0a0a14',
                 cursor: 'pointer',
                 flexShrink: 0,
-                // Peek ~20% below the edge at rest; float the same distance up on hover.
-                transform: isHovered ? 'translateY(-20%)' : 'translateY(20%)',
-                transition: 'transform 0.18s ease',
+                // Peek ~20% below the bottom edge, statically — no hover-raise,
+                // so the task tabs above the card stay put and easy to click.
+                transform: 'translateY(20%)',
               }}
             >
-              {/* Status tab — one colored dot per running task, sitting just
-                  above the polaroid like a folder tab. */}
+              {/* Task tab — one clickable button per running task, sitting just
+                  above the polaroid like a folder tab. The button label is the
+                  task description; clicking jumps straight to its iTerm tab. */}
               <div
                 style={{
                   position: 'absolute',
@@ -134,27 +145,69 @@ export function PolaroidBar({ officeState, agents, agentStatuses, onSelect }: Po
                   bottom: '100%',
                   transform: 'translate(-50%, 2px)', // overlap the card's top border
                   display: 'flex',
-                  alignItems: 'center',
-                  gap: 5,
-                  padding: '3px 8px',
+                  flexDirection: 'column',
+                  alignItems: 'stretch',
+                  gap: 3,
+                  padding: '4px 4px 5px',
                   background: '#f4efe2',
                   border: '2px solid #0a0a14',
                   borderBottom: 'none',
+                  maxWidth: PHOTO_SIZE + FRAME * 2,
+                  minWidth: Math.round(PHOTO_SIZE * 0.6),
                 }}
               >
-                {members.map((m) => (
-                  <span
-                    key={m.id}
-                    title={agentStatuses[m.id] === 'permission' ? 'Needs permission' : agentStatuses[m.id] === 'waiting' ? 'Waiting for you' : 'Working'}
-                    style={{
-                      width: 9,
-                      height: 9,
-                      borderRadius: '50%',
-                      background: taskDotColor(agentStatuses[m.id]),
-                      border: '1px solid #0a0a14',
-                    }}
-                  />
-                ))}
+                {members.map((m) => {
+                  const status = agentStatuses[m.id]
+                  const label = m.taskTitle || taskStatusFallback(status)
+                  return (
+                    <button
+                      key={m.id}
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        onSelect(m.id)
+                      }}
+                      title={label}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 6,
+                        padding: '3px 7px',
+                        background: '#fffaf0',
+                        border: '1px solid #0a0a14',
+                        borderRadius: 0,
+                        color: '#1e1e2e',
+                        font: 'inherit',
+                        fontSize: '13px',
+                        lineHeight: 1.2,
+                        cursor: 'pointer',
+                        textAlign: 'left',
+                        minWidth: 0,
+                      }}
+                    >
+                      <span
+                        style={{
+                          width: 8,
+                          height: 8,
+                          borderRadius: '50%',
+                          background: taskDotColor(status),
+                          border: '1px solid #0a0a14',
+                          flexShrink: 0,
+                        }}
+                      />
+                      <span
+                        style={{
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap',
+                          minWidth: 0,
+                          flex: 1,
+                        }}
+                      >
+                        {label}
+                      </span>
+                    </button>
+                  )
+                })}
               </div>
               {/* Full caption on top */}
               <div
@@ -182,7 +235,7 @@ export function PolaroidBar({ officeState, agents, agentStatuses, onSelect }: Po
                 size={PHOTO_SIZE}
                 style={{ border: '2px solid #0a0a14' }}
               />
-            </button>
+            </div>
           )
         })}
       </div>

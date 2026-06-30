@@ -61,18 +61,20 @@ on run argv
 	if cwd is not "" then
 		set cmd to "cd " & quoted form of cwd & " && "
 	end if
-	set cmd to cmd & "claude --model 'claude-opus-4-7[1m]' --resume " & sid
+	set cmd to cmd & "claude --resume " & sid
 	tell application "iTerm2"
 		activate
 		if (count of windows) = 0 then
 			create window with default profile
 			tell current session of current window
+				delay 0.5
 				write text cmd
 			end tell
 		else
 			tell current window
 				set newTab to (create tab with default profile)
 				tell current session of newTab
+					delay 0.5
 					write text cmd
 				end tell
 			end tell
@@ -113,7 +115,7 @@ on run argv
 	set initialPrompt to item 4 of argv
 	set mcpConfig to item 5 of argv
 	set extraFlags to item 6 of argv
-	set cmd to "cd " & quoted form of cwd & " && claude --model 'claude-opus-4-7[1m]' --session-id " & sid
+	set cmd to "cd " & quoted form of cwd & " && claude --session-id " & sid
 	if mcpConfig is not "" then
 		set cmd to cmd & " --mcp-config " & quoted form of mcpConfig
 	end if
@@ -129,12 +131,14 @@ on run argv
 		if (count of windows) = 0 then
 			create window with default profile
 			tell current session of current window
+				delay 0.5
 				write text cmd
 			end tell
 		else
 			tell current window
 				set newTab to (create tab with default profile)
 				tell current session of newTab
+					delay 0.5
 					write text cmd
 				end tell
 			end tell

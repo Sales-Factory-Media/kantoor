@@ -53,7 +53,6 @@ import { setCharacterTemplates } from '../office/sprites/spriteData.js'
 import { vscode } from '../vscodeApi.js'
 import { playDoneSound, setSoundEnabled } from '../notificationSound.js'
 import { CONVERSATION_MAX_ENTRIES } from '../constants.js'
-import { recordWsMessage } from '../perfOverlay.ts'
 
 const CAR_TYPES = [
   FurnitureType.CAR_SEDAN, FurnitureType.CAR_SPORT, FurnitureType.CAR_SUV,
@@ -325,9 +324,6 @@ export function useExtensionMessages(
     const handler = (e: MessageEvent) => {
       const msg = e.data
       const os = getOfficeState()
-
-      // Diagnostic counter (no-op in production once perfOverlay is removed).
-      recordWsMessage(typeof msg?.type === 'string' ? msg.type : 'unknown')
 
       if (msg.type === 'offlineAgents') {
         const incoming = msg.agents as OfflineAgent[]

@@ -5,7 +5,6 @@ import { ToolOverlay } from './office/components/ToolOverlay.js'
 import { vscode } from './vscodeApi.js'
 import { useExtensionMessages } from './hooks/useExtensionMessages.js'
 import { PULSE_ANIMATION_DURATION_SEC, ZOOM_DEFAULT_DPR_FACTOR, MAX_DEVICE_PIXEL_RATIO } from './constants.js'
-import { recordAppRender } from './perfOverlay.ts'
 import { ZoomControls } from './components/ZoomControls.js'
 import { BottomToolbar } from './components/BottomToolbar.js'
 import { BuildingSwitcher } from './components/BuildingSwitcher.js'
@@ -35,7 +34,6 @@ function defaultZoom(): number {
 }
 
 function App() {
-  recordAppRender()
   const { agents, selectedAgent, selectAgent, agentTools, agentStatuses, subagentTools, subagentCharacters, layoutReady, workspaceFolders, offlineAgents, knownProjects, saveAgentMeta, forgetAgent, clickupTickets, clickupConfigured, clickupListId, clickupNextFetchAt, workers, organogram, janDesignConfig, buildings, activeBuildingId, projectMemberships, pendingWorkers, dismissPendingWorker, identityPrompt, dismissIdentityPrompt } = useExtensionMessages(getOfficeState)
 
   const [isDebugMode, setIsDebugMode] = useState(false)
