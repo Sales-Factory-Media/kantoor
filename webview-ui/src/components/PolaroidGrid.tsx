@@ -193,14 +193,15 @@ export function PolaroidGrid({ officeState, agents, agentStatuses, onSelect }: P
   return (
     <div
       style={{
-        display: 'grid',
-        // auto-FIT (not auto-fill) collapses empty phantom tracks so the real
-        // cards stretch to fill the full row width instead of hugging a 320px
-        // minimum with dead space on the right.
-        gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))',
-        gap: 16,
+        // CSS multi-column = masonry. Unlike Grid (where every card in a row
+        // shares one row track sized to the tallest card, leaving a gap under
+        // the shorter ones), columns let each card tuck directly under the one
+        // above it. `columnWidth` fits as many ~360px columns as the width
+        // allows (≈3 on a wide screen). Trade-off: fill order is column-major
+        // (down column 1, then column 2), not left-to-right by row.
+        columnWidth: 360,
+        columnGap: 16,
         padding: 16,
-        alignItems: 'start',
       }}
     >
       {groupList.map(([key, members]) => {
@@ -211,8 +212,19 @@ export function PolaroidGrid({ officeState, agents, agentStatuses, onSelect }: P
         // Any of this employee's concurrent tasks actively working?
         const anyWorking = members.some((m) => isWorking(agentStatuses[m.id]))
         return (
+          // Column-item wrapper: `break-inside: avoid` keeps a card from being
+          // split across two columns; the bottom margin is the vertical gap
+          // between stacked cards (multicol has no row-gap). A plain block
+          // wrapper (not the flex card itself) makes the break rule reliable in
+          // Blink, which can ignore break-inside on flex containers.
           <div
             key={key}
+            style={{
+              breakInside: 'avoid',
+              marginBottom: 16,
+            }}
+          >
+          <div
             style={{
               display: 'flex',
               flexDirection: 'column',
@@ -409,6 +421,7 @@ export function PolaroidGrid({ officeState, agents, agentStatuses, onSelect }: P
                 )
               )}
             </div>
+          </div>
           </div>
         )
       })}

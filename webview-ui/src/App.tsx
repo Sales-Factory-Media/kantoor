@@ -28,7 +28,7 @@ function getOfficeState(): OfficeState {
 }
 
 function App() {
-  const { agents, selectedAgent, selectAgent, agentTools, agentStatuses, subagentTools, layoutReady, offlineAgents, knownProjects, saveAgentMeta, forgetAgent, clickupTickets, clickupConfigured, clickupListIds, clickupNextFetchAt, workers, organogram, janDesignConfig, buildings, activeBuildingId, projectMemberships, pendingWorkers, dismissPendingWorker, identityPrompt, dismissIdentityPrompt, autoMode, pendingDelegations } = useExtensionMessages(getOfficeState)
+  const { agents, selectedAgent, selectAgent, agentTools, agentStatuses, subagentTools, layoutReady, offlineAgents, knownProjects, saveAgentMeta, forgetAgent, clickupTickets, clickupConfigured, clickupListIds, clickupNextFetchAt, workers, organogram, janDesignConfig, buildings, activeBuildingId, projectMemberships, pendingWorkers, dismissPendingWorker, identityPrompt, dismissIdentityPrompt, autoMode, pendingDelegations, dispatchError, dismissDispatchError } = useExtensionMessages(getOfficeState)
 
   const [isDebugMode, setIsDebugMode] = useState(false)
   const [foremanOpen, setForemanOpen] = useState(false)
@@ -45,6 +45,13 @@ function App() {
     if (count === 0) setShowDelegationModal(false)
     prevDelegationCount.current = count
   }, [pendingDelegations.length])
+
+  // Auto-dismiss a dispatch-failure banner after a while so it doesn't linger.
+  useEffect(() => {
+    if (!dispatchError) return
+    const t = setTimeout(dismissDispatchError, 10000)
+    return () => clearTimeout(t)
+  }, [dispatchError, dismissDispatchError])
 
   const handleToggleDebugMode = useCallback(() => setIsDebugMode((prev) => !prev), [])
 
@@ -209,6 +216,53 @@ function App() {
       </div>
 
       <Credits />
+
+      {/* Dispatch-failure banner — a confirmed delegation / "start work" launch
+          failed on the hub. Without this the failure was silent. */}
+      {dispatchError && (
+        <div
+          style={{
+            position: 'fixed',
+            top: 70,
+            left: '50%',
+            transform: 'translateX(-50%)',
+            zIndex: 10003,
+            maxWidth: 560,
+            display: 'flex',
+            alignItems: 'flex-start',
+            gap: 10,
+            padding: '10px 12px',
+            background: 'var(--pixel-bg)',
+            border: '2px solid var(--pixel-danger, #e5484d)',
+            borderRadius: 0,
+            boxShadow: 'var(--pixel-shadow)',
+            color: 'var(--pixel-text)',
+            fontSize: '16px',
+            lineHeight: 1.35,
+          }}
+          role="alert"
+        >
+          <span style={{ color: 'var(--pixel-danger, #e5484d)', fontWeight: 'bold', flexShrink: 0 }}>
+            Launch failed
+          </span>
+          <span style={{ flex: 1, minWidth: 0 }}>{dispatchError}</span>
+          <button
+            onClick={dismissDispatchError}
+            title="Dismiss"
+            style={{
+              background: 'none',
+              border: 'none',
+              color: 'var(--pixel-text-dim)',
+              fontSize: '18px',
+              cursor: 'pointer',
+              padding: '0 2px',
+              flexShrink: 0,
+            }}
+          >
+            {'✕'}
+          </button>
+        </div>
+      )}
 
       {pendingWorkers.length > 0 && (
         <IdentifyWorkerModal
