@@ -13,6 +13,7 @@ import type { StandaloneAgentManager } from './standaloneAgentManager.js';
 import type { PersistentAgent } from './agentStore.js';
 import type { ClickUpConfig, ClickUpStatusGroup } from '../src/connectors/clickupClient.js';
 import type { DispatchRegistry } from './dispatchRegistry.js';
+import type { DelegationStore } from './delegationStore.js';
 import type { ProjectConnector } from '../src/connectors/types.js';
 import type { Building } from '../src/db/schema.js';
 
@@ -124,4 +125,7 @@ export interface ServerContext {
 	// Hub-only; workers don't run auto-pickup so their registry is unused.
 	// See standalone/dispatchRegistry.ts for semantics.
 	dispatchRegistry: DispatchRegistry;
+	// Auto Mode: tickets Darryl has classified that are waiting for a human to
+	// confirm the worker. Hub-only. See standalone/delegationStore.ts.
+	delegationStore: DelegationStore;
 }

@@ -4,6 +4,7 @@ import * as path from 'path';
 import { loadKnownProjects } from '../src/projectStore.js';
 import type { RosterEntry } from './systemPrompts.js';
 import { launchAgentOnTicket, handleLaunchDesigner, handleLaunchVisualDesigner, handleVisualQaReview } from './workerDispatch.js';
+import { handleDarrylRecommendation } from './delegationHandlers.js';
 import { WEBVIEW_DIR } from './serverContext.js';
 import type { ServerContext } from './serverContext.js';
 
@@ -208,6 +209,35 @@ export function createHttpServer(ctx: ServerContext): http.Server {
 							designerName: (json.designerName as string) || 'unknown',
 							workspacePath: (json.workspacePath as string) || '',
 						}, ctx);
+						res.writeHead(result.success ? 200 : 400);
+						res.end(JSON.stringify(result));
+					} catch {
+						res.writeHead(400);
+						res.end(JSON.stringify({ error: 'Invalid JSON' }));
+					}
+				});
+				return;
+			}
+
+			if (req.method === 'POST' && urlPath === '/api/darryl-recommendation') {
+				const MAX_BODY_BYTES = 64 * 1024;
+				let body = '';
+				let exceeded = false;
+				req.on('data', (chunk: Buffer) => {
+					if (exceeded) return;
+					body += chunk.toString();
+					if (Buffer.byteLength(body) > MAX_BODY_BYTES) {
+						exceeded = true;
+						res.writeHead(413);
+						res.end(JSON.stringify({ error: 'Request body too large' }));
+						req.destroy();
+					}
+				});
+				req.on('end', () => {
+					if (exceeded) return;
+					try {
+						const json = JSON.parse(body) as Record<string, unknown>;
+						const result = handleDarrylRecommendation(json, ctx);
 						res.writeHead(result.success ? 200 : 400);
 						res.end(JSON.stringify(result));
 					} catch {

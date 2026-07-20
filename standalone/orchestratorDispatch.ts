@@ -40,8 +40,11 @@ import {
 } from './launchHelpers.js';
 import {
 	buildDarrylBatchInitialTask,
+	buildDarrylClassifyInitialTask,
 	buildJanBatchInitialTask,
+	type ClassifyWorkerOption,
 } from './initialTasks.js';
+import { isDevWorker } from './capacity.js';
 import { loadKnownProjects } from '../src/projectStore.js';
 
 // ── Utilities ────────────────────────────────────────────────
@@ -177,6 +180,62 @@ export function handleDarrylBatchDispatch(
 		batch,
 		ctx,
 	);
+}
+
+/**
+ * Auto Mode: launch Darryl to CLASSIFY a single ticket (pick the best worker)
+ * without dispatching. He POSTs a recommendation to /api/darryl-recommendation;
+ * a human confirms it in the kantoor. Singleton-gated on Darryl's session, like
+ * every other orchestrator launch — never claims the dispatch registry.
+ */
+export function dispatchDarrylClassify(
+	ticket: TicketInfo,
+	ctx: ServerContext,
+): void {
+	const { persistentAgents } = ctx;
+
+	const darryl = ensureDarryl(persistentAgents);
+	if (darryl.currentSessionId) {
+		console.log(`[Standalone] Darryl already has an active session ${darryl.currentSessionId}, skipping classify of ${ticket.ticketId}`);
+		return;
+	}
+
+	const knownProjects = loadKnownProjects();
+	const workers: ClassifyWorkerOption[] = persistentAgents
+		.filter(p => p.id !== darryl.id && isDevWorker(p) && p.workspacePath)
+		.map(p => {
+			const projName = path.basename(p.workspacePath);
+			const proj = knownProjects.find(k => k.name === projName);
+			return {
+				id: p.id,
+				name: p.name,
+				roleShort: p.roleShort,
+				workspacePath: p.workspacePath,
+				projectName: proj?.name ?? projName,
+				isOnline: !!p.currentSessionId,
+			};
+		});
+
+	const roster = buildRoster(persistentAgents, darryl.id);
+	const systemPrompt = buildDarrylSystemPrompt(darryl, roster, SERVER_PORT);
+	const initialTask = buildDarrylClassifyInitialTask(
+		{ id: ticket.ticketId, name: ticket.ticketName, url: ticket.ticketUrl },
+		workers,
+		SERVER_PORT,
+	) + EXIT_REMINDER;
+
+	console.log(`[Standalone] Auto-pickup: Darryl classifying ticket ${ticket.ticketId} (${workers.length} eligible workers)`);
+	const result = launchPersistentAgentSession(
+		darryl,
+		systemPrompt,
+		initialTask,
+		ticket,
+		ctx,
+		persistentAgents,
+	);
+	if (!result.success) {
+		console.log(`[Standalone] Failed to launch Darryl to classify ticket ${ticket.ticketId}`);
+	}
 }
 
 export function handleJanBatchDispatch(

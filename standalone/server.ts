@@ -28,6 +28,8 @@ import { readJson, writeJson, getOfflineAgents, buildNewWorkerPopup } from './se
 import { preloadAssets, WORKER_IDENTITY_FILE } from './serverContext.js';
 import type { ServerContext, WorkerIdentity } from './serverContext.js';
 import { createDispatchRegistry, releaseTicket } from './dispatchRegistry.js';
+import { createDelegationStore, getPendingDelegations } from './delegationStore.js';
+import { handleConfirmDelegation, handleDiscardDelegation } from './delegationHandlers.js';
 import { runMigrations } from '../src/db/migrate.js';
 import { migrateLegacyJsonIntoDb } from '../src/db/migrateFromJson.js';
 import { initActiveBuilding, listBuildings, switchActiveBuilding } from '../src/db/activeBuilding.js';
@@ -51,6 +53,8 @@ import {
 	handleUpdateProjectDescription,
 	getJanDesignConfig,
 	handleSetJanDesignConfig,
+	handleSetAutoMode,
+	getAutoModeEnabled,
 } from './agentHandlers.js';
 import {
 	startClickupPolling,
@@ -258,6 +262,10 @@ function handleWebviewReady(ws: WebSocket, ctx: ServerContext): void {
 	const soundEnabled = getAppSetting<boolean>('soundEnabled') !== false;
 	ws.send(JSON.stringify({ type: 'settingsLoaded', soundEnabled }));
 
+	// Auto Mode state + any delegations awaiting confirmation
+	ws.send(JSON.stringify({ type: 'autoModeLoaded', enabled: getAutoModeEnabled() }));
+	ws.send(JSON.stringify({ type: 'delegationPending', delegations: getPendingDelegations(ctx.delegationStore) }));
+
 	// Send Jan's design config
 	ws.send(JSON.stringify({ type: 'janDesignConfigLoaded', config: getJanDesignConfig() }));
 
@@ -308,6 +316,18 @@ const messageHandlers: Record<string, (ws: WebSocket, msg: Record<string, unknow
 	removeRoom: (_ws, msg, ctx) => handleRemoveRoom(msg, ctx),
 	setSoundEnabled: (_ws, msg) => handleSetSoundEnabled(msg),
 	setJanDesignConfig: (_ws, msg, ctx) => handleSetJanDesignConfig(msg, ctx),
+	setAutoMode: (_ws, msg, ctx) => {
+		if (rejectIfWorker(ctx, 'setAutoMode')) return;
+		handleSetAutoMode(msg, ctx);
+	},
+	confirmDelegation: (_ws, msg, ctx) => {
+		if (rejectIfWorker(ctx, 'confirmDelegation')) return;
+		handleConfirmDelegation(msg, ctx).catch(() => {});
+	},
+	discardDelegation: (_ws, msg, ctx) => {
+		if (rejectIfWorker(ctx, 'discardDelegation')) return;
+		handleDiscardDelegation(msg, ctx);
+	},
 	clickupRefresh: (_ws, _msg, ctx) => { handleClickupRefresh(ctx).catch(() => {}); },
 	clickupStartWork: (_ws, msg, ctx) => {
 		if (rejectIfWorker(ctx, 'clickupStartWork')) return;
@@ -507,6 +527,7 @@ async function main(): Promise<void> {
 		mempalaceServerUrl: null,
 		hubWs: null,
 		dispatchRegistry: createDispatchRegistry(),
+		delegationStore: createDelegationStore(),
 	};
 
 	// ── Workspace path cache (decoded from project hash) ────

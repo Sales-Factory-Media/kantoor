@@ -139,6 +139,20 @@ export interface PendingWorker {
   reassign?: boolean
 }
 
+/** Auto Mode: a ticket Darryl classified, awaiting the human's Start/Discard. */
+export interface PendingDelegation {
+  ticketId: string
+  ticketName: string
+  ticketUrl: string
+  recommendedAgentId: string
+  recommendedAgentName: string
+  recommendedAgentRole: string
+  recommendedWorkspacePath: string
+  reasoning: string
+  brief: string
+  createdAt: number
+}
+
 /** A copy-paste prompt to make a live session aware of who it now is. */
 export interface IdentityPrompt {
   sessionId: string
@@ -247,6 +261,8 @@ export interface ExtensionMessageState {
   dismissPendingWorker: (sessionId: string) => void
   identityPrompt: IdentityPrompt | null
   dismissIdentityPrompt: () => void
+  autoMode: boolean
+  pendingDelegations: PendingDelegation[]
 }
 
 export function useExtensionMessages(
@@ -280,6 +296,8 @@ export function useExtensionMessages(
   const [projectMemberships, setProjectMemberships] = useState<ProjectMembershipEntry[]>([])
   const [pendingWorkers, setPendingWorkers] = useState<PendingWorker[]>([])
   const [identityPrompt, setIdentityPrompt] = useState<IdentityPrompt | null>(null)
+  const [autoMode, setAutoMode] = useState(false)
+  const [pendingDelegations, setPendingDelegations] = useState<PendingDelegation[]>([])
 
   // Ref to expose saveAgentMeta and forgetAgent outside the effect closure
   const saveAgentMetaRef = useRef<() => void>(() => {})
@@ -634,6 +652,10 @@ export function useExtensionMessages(
         setSoundEnabled(soundOn)
       } else if (msg.type === 'janDesignConfigLoaded') {
         setJanDesignConfig(msg.config as JanDesignConfig)
+      } else if (msg.type === 'autoModeLoaded') {
+        setAutoMode(msg.enabled === true)
+      } else if (msg.type === 'delegationPending') {
+        setPendingDelegations((msg.delegations as PendingDelegation[]) || [])
       } else if (msg.type === 'furnitureAssetsLoaded') {
         try {
           const catalog = msg.catalog as FurnitureAsset[]
@@ -805,5 +827,5 @@ export function useExtensionMessages(
     setPendingWorkers((prev) => prev.filter((w) => w.sessionId !== sessionId))
   }, [])
 
-  return { agents, selectedAgent, selectAgent: setSelectedAgent, agentTools, agentStatuses, subagentTools, subagentCharacters, layoutReady, loadedAssets, workspaceFolders, agentConversation, offlineAgents, knownProjects, saveAgentMeta, forgetAgent, clickupTickets, clickupConfigured, clickupListId, clickupNextFetchAt, activeConference, peersBrokerAvailable, workers, organogram, janDesignConfig, buildings, activeBuildingId, projectMemberships, pendingWorkers, dismissPendingWorker, identityPrompt, dismissIdentityPrompt }
+  return { agents, selectedAgent, selectAgent: setSelectedAgent, agentTools, agentStatuses, subagentTools, subagentCharacters, layoutReady, loadedAssets, workspaceFolders, agentConversation, offlineAgents, knownProjects, saveAgentMeta, forgetAgent, clickupTickets, clickupConfigured, clickupListId, clickupNextFetchAt, activeConference, peersBrokerAvailable, workers, organogram, janDesignConfig, buildings, activeBuildingId, projectMemberships, pendingWorkers, dismissPendingWorker, identityPrompt, dismissIdentityPrompt, autoMode, pendingDelegations }
 }

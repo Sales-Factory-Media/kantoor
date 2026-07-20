@@ -78,6 +78,37 @@ export function selectDarrylPickups(
 	return out;
 }
 
+export interface ClassifyCandidate {
+	id: string;
+	name: string;
+	url: string;
+}
+
+/**
+ * Pick tickets eligible for Auto Mode classification: status "to do", assigned
+ * to the auto-mode user, and NOT already excluded (a pending recommendation or
+ * an in-flight dispatch — both passed in `exclude`).
+ *
+ * Pure. The caller (autoJasperClassifyPickup) gates on the Auto Mode setting,
+ * the Darryl singleton, and slices to one ticket at a time.
+ */
+export function selectJasperClassifyPickups(
+	clickupTickets: ClickUpStatusGroup[],
+	exclude: Set<string>,
+	assigneeUsername: string,
+): ClassifyCandidate[] {
+	const out: ClassifyCandidate[] = [];
+	for (const group of clickupTickets) {
+		if (group.name.toLowerCase() !== 'to do') continue;
+		for (const task of group.tasks) {
+			if (exclude.has(task.id)) continue;
+			if (!task.assignees.some(a => a.username === assigneeUsername)) continue;
+			out.push({ id: task.id, name: task.name, url: task.url });
+		}
+	}
+	return out;
+}
+
 /**
  * Pick Jan-eligible tickets from a ClickUp snapshot, bucketed by status.
  *

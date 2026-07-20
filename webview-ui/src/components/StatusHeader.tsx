@@ -5,6 +5,9 @@ import { vscode } from '../vscodeApi.js'
 interface StatusHeaderProps {
   clickupNextFetchAt: number | null
   workers: WorkerStatusEntry[]
+  autoMode: boolean
+  pendingDelegationCount: number
+  onOpenDelegations: () => void
 }
 
 function WorkerChip({ worker }: { worker: WorkerStatusEntry }) {
@@ -62,7 +65,7 @@ function formatCountdown(ms: number): string {
  * countdown and a "Fetch now" button. Lives in the header so the bottom edge
  * is free for the polaroid worker dock.
  */
-export function StatusHeader({ clickupNextFetchAt, workers }: StatusHeaderProps) {
+export function StatusHeader({ clickupNextFetchAt, workers, autoMode, pendingDelegationCount, onOpenDelegations }: StatusHeaderProps) {
   const [hovered, setHovered] = useState(false)
   const [countdown, setCountdown] = useState<string | null>(null)
   const [fetchStartedFrom, setFetchStartedFrom] = useState<number | null>(null)
@@ -102,6 +105,10 @@ export function StatusHeader({ clickupNextFetchAt, workers }: StatusHeaderProps)
     vscode.postMessage({ type: 'clickupRefresh' })
   }
 
+  const handleToggleAutoMode = () => {
+    vscode.postMessage({ type: 'setAutoMode', enabled: !autoMode })
+  }
+
   return (
     <div
       style={{
@@ -125,6 +132,59 @@ export function StatusHeader({ clickupNextFetchAt, workers }: StatusHeaderProps)
       {workers.map((w) => (
         <WorkerChip key={`${w.hostname}:${w.name}`} worker={w} />
       ))}
+
+      <label
+        onClick={handleToggleAutoMode}
+        title="Auto Mode: when on, To Do tickets assigned to you are handed to Darryl to pick a worker — you confirm before work starts."
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 6,
+          padding: '2px 8px',
+          fontSize: '16px',
+          color: autoMode ? 'var(--pixel-text)' : 'var(--pixel-text-dim)',
+          background: 'var(--pixel-btn-bg)',
+          border: autoMode ? '2px solid var(--pixel-accent)' : '2px solid var(--pixel-border)',
+          borderRadius: 0,
+          cursor: 'pointer',
+        }}
+      >
+        <span
+          style={{
+            width: 14,
+            height: 14,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            fontSize: '12px',
+            color: 'var(--pixel-bg)',
+            background: autoMode ? 'var(--pixel-accent)' : 'transparent',
+            border: '2px solid var(--pixel-border)',
+            borderRadius: 0,
+          }}
+        >
+          {autoMode ? '✓' : ''}
+        </span>
+        <span>Auto</span>
+      </label>
+
+      {pendingDelegationCount > 0 && (
+        <button
+          onClick={onOpenDelegations}
+          title="Tickets Darryl has classified, awaiting your confirmation"
+          style={{
+            fontSize: '16px',
+            padding: '2px 8px',
+            color: 'var(--pixel-agent-text)',
+            background: 'var(--pixel-agent-bg)',
+            border: '2px solid var(--pixel-agent-border)',
+            borderRadius: 0,
+            cursor: 'pointer',
+          }}
+        >
+          Awaiting delegation ({pendingDelegationCount})
+        </button>
+      )}
 
       <span style={{ pointerEvents: 'none' }}>
         Watching... {countdown != null ? `(next fetch in ${countdown})` : 'Countdown not running'}

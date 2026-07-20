@@ -43,7 +43,23 @@ export function buildWorkerStandardInitialTask(
 	ticketName: string,
 	ticketUrl: string,
 	briefBlock: string,
+	currentBranch: boolean = false,
 ): string {
+	// Auto Mode / manual "start on current branch" dispatches (currentBranch=true)
+	// work directly on whatever branch is checked out — no feature branch, no PR
+	// gate. The default Gitflow path creates `feature/CU-...` and opens a PR.
+	if (currentBranch) {
+		return `Ticket ${ticketId}: "${ticketName}" (${ticketUrl}).
+
+${briefBlock}## Steps
+1. Move ticket to "in progress".
+2. Work directly on the branch that is currently checked out. Do NOT create a new branch, switch branches, or use git worktrees. Run \`git status\`/\`git diff\` first — other sessions may be editing this same checkout; stage only your own files.
+3. Do the work. Rely on the Brief above — only re-read the ticket if the Brief is missing something specific.
+4. Commit your changes. Commit messages must include \`CU-${ticketId}\`. Do not push or open a PR unless the Brief tells you to.
+5. Move ticket to **"qa test"**. A human reviews from there.
+
+**HARD RULE:** Never move the ticket to "ai review" — that status is human-only. Only humans flip tickets into "ai review"; you always land on "qa test".`;
+	}
 	return `Ticket ${ticketId}: "${ticketName}" (${ticketUrl}).
 
 ${briefBlock}## Steps
@@ -90,6 +106,52 @@ ${ticketLines}
 After dispatching (or skipping) every ticket above, you are DONE. Do not wait for workers to finish — they run in parallel on their own timelines. Exit cleanly.
 
 The Brief should summarise the ticket in 2–6 bullets so the worker doesn't re-read everything. Use the briefing template from your system prompt.`;
+}
+
+// ── Darryl (foreman) — Auto Mode classification ───────────────
+
+export interface ClassifyWorkerOption {
+	id: string;
+	name: string;
+	roleShort: string;
+	workspacePath: string;
+	projectName: string;
+	isOnline: boolean;
+}
+
+/**
+ * Auto Mode: Darryl classifies ONE ticket — he picks the single best worker for
+ * the job but does NOT dispatch. He POSTs his recommendation; a human confirms
+ * it in the kantoor before any work starts.
+ */
+export function buildDarrylClassifyInitialTask(
+	ticket: { id: string; name: string; url: string },
+	workers: ClassifyWorkerOption[],
+	serverPort: number,
+): string {
+	const workerLines = workers.length > 0
+		? workers.map(w =>
+			`- \`${w.id}\` — **${w.name}** (${w.roleShort || 'Dev'}) — project: ${w.projectName} — workspace: \`${w.workspacePath}\`${w.isOnline ? ' — currently BUSY' : ''}`,
+		).join('\n')
+		: '- (no dev workers registered — comment on the ticket that there is nobody to assign, then exit)';
+
+	return `**Auto Mode classification.** You have ONE ticket to classify. You are picking the single best worker for it — you do NOT dispatch, and you do NOT implement anything. A human will confirm your pick before any work starts.
+
+Ticket ${ticket.id}: "${ticket.name}" (${ticket.url})
+
+## Eligible workers (pick exactly one \`id\`)
+${workerLines}
+
+## Steps
+1. \`clickup_get_task\` + \`clickup_get_task_comments\` once to understand the work.
+2. Decide which ONE worker above is the best fit — match the ticket to the worker's project/workspace and role. "Currently BUSY" is fine to pick (workers can run more than one session); prefer a free worker only when two are equally suited.
+3. Write a tight **Brief** (2–6 bullets: goal, scope, key files/endpoints, constraints, done-when) so the worker won't have to re-read everything. Use your standard briefing template.
+4. POST your recommendation — this is your ONLY output action:
+   \`curl -X POST http://localhost:${serverPort}/api/darryl-recommendation -d '{"ticketId":"${ticket.id}","ticketName":"${ticket.name}","ticketUrl":"${ticket.url}","recommendedAgentId":"<worker id>","reasoning":"<one sentence: why this worker>","brief":"<your Brief>"}'\`
+   Only \`success:true\` counts. On \`success:false\`, read the error, fix the body, and retry once.
+5. **Do NOT** change the ticket status, dispatch a worker, or call \`/api/launch-agent\`. The human clicks Start in the kantoor to launch the worker on the current branch. Once you've posted \`success:true\`, you are DONE — exit cleanly.
+
+If the ticket is too vague to classify, comment with specific questions on the ticket and exit WITHOUT posting a recommendation — it'll be re-classified once the ticket is clearer.`;
 }
 
 // ── Jan (Art Director) ────────────────────────────────────────

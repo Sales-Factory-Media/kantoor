@@ -52,6 +52,8 @@ vi.mock('./agentHandlers.js', () => ({
 		clickupDocUrl: 'x',
 		examplesUrl: 'x',
 	}),
+	// Auto Mode off by default in these tests — autoJasperClassifyPickup no-ops.
+	getAutoModeEnabled: () => false,
 }));
 
 const addTaskCommentMock = vi.fn(() => Promise.resolve());

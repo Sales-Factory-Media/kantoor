@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from 'react'
+import { useState, useCallback, useRef, useEffect } from 'react'
 import { OfficeState } from './office/engine/officeState.js'
 import { OfficeCanvas } from './office/components/OfficeCanvas.js'
 import { ToolOverlay } from './office/components/ToolOverlay.js'
@@ -16,6 +16,7 @@ import { IdentifyWorkerModal } from './components/IdentifyWorkerModal.js'
 import { IdentityPromptModal } from './components/IdentityPromptModal.js'
 import { PolaroidBar } from './components/PolaroidBar.js'
 import { StatusHeader } from './components/StatusHeader.js'
+import { DelegationConfirmModal } from './components/DelegationConfirmModal.js'
 import { Credits } from './components/Credits.js'
 
 // Game state lives outside React — updated imperatively by message handlers
@@ -34,13 +35,25 @@ function defaultZoom(): number {
 }
 
 function App() {
-  const { agents, selectedAgent, selectAgent, agentTools, agentStatuses, subagentTools, subagentCharacters, layoutReady, workspaceFolders, offlineAgents, knownProjects, saveAgentMeta, forgetAgent, clickupTickets, clickupConfigured, clickupListId, clickupNextFetchAt, workers, organogram, janDesignConfig, buildings, activeBuildingId, projectMemberships, pendingWorkers, dismissPendingWorker, identityPrompt, dismissIdentityPrompt } = useExtensionMessages(getOfficeState)
+  const { agents, selectedAgent, selectAgent, agentTools, agentStatuses, subagentTools, subagentCharacters, layoutReady, workspaceFolders, offlineAgents, knownProjects, saveAgentMeta, forgetAgent, clickupTickets, clickupConfigured, clickupListId, clickupNextFetchAt, workers, organogram, janDesignConfig, buildings, activeBuildingId, projectMemberships, pendingWorkers, dismissPendingWorker, identityPrompt, dismissIdentityPrompt, autoMode, pendingDelegations } = useExtensionMessages(getOfficeState)
 
   const [isDebugMode, setIsDebugMode] = useState(false)
   const [zoom, setZoom] = useState(defaultZoom)
   const panRef = useRef({ x: 0, y: 0 })
   const [foremanOpen, setForemanOpen] = useState(false)
   const [artDirectorOpen, setArtDirectorOpen] = useState(false)
+  const [showDelegationModal, setShowDelegationModal] = useState(false)
+
+  // Auto-open the confirmation popup when a new delegation arrives; auto-close
+  // when the last one is resolved. Dismissing (X) leaves the list intact — the
+  // "Awaiting delegation" header button reopens it.
+  const prevDelegationCount = useRef(0)
+  useEffect(() => {
+    const count = pendingDelegations.length
+    if (count > prevDelegationCount.current) setShowDelegationModal(true)
+    if (count === 0) setShowDelegationModal(false)
+    prevDelegationCount.current = count
+  }, [pendingDelegations.length])
 
   const handleToggleDebugMode = useCallback(() => setIsDebugMode((prev) => !prev), [])
 
@@ -98,7 +111,13 @@ function App() {
 
       <BuildingSwitcher buildings={buildings} activeBuildingId={activeBuildingId} projects={projectMemberships} />
 
-      <StatusHeader clickupNextFetchAt={clickupNextFetchAt} workers={workers} />
+      <StatusHeader
+        clickupNextFetchAt={clickupNextFetchAt}
+        workers={workers}
+        autoMode={autoMode}
+        pendingDelegationCount={pendingDelegations.length}
+        onOpenDelegations={() => setShowDelegationModal(true)}
+      />
 
       {/* Vignette overlay */}
       <div
@@ -211,6 +230,13 @@ function App() {
           key={identityPrompt.sessionId}
           prompt={identityPrompt}
           onClose={dismissIdentityPrompt}
+        />
+      )}
+
+      {showDelegationModal && pendingDelegations.length > 0 && (
+        <DelegationConfirmModal
+          delegations={pendingDelegations}
+          onClose={() => setShowDelegationModal(false)}
         />
       )}
 

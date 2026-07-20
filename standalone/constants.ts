@@ -14,6 +14,13 @@ export const DARRYL_CLICKUP_USERNAME = 'Darryl Philbin';
 export const DARRYL_ESCALATION_USERNAME = 'Anne De Jong';
 export const DARRYL_WORKSPACE = '~/Projects/kantoor-workspace';
 
+// ── Auto Mode (human-gated Darryl delegation) ─────────────
+// When Auto Mode is ON, tickets in "to do" assigned to this ClickUp user are
+// handed to Darryl one at a time to classify (pick the best worker). His
+// recommendation surfaces as a confirmation popup in the kantoor; the human
+// clicks Start to actually dispatch. See standalone/delegationStore.ts.
+export const AUTO_MODE_ASSIGNEE_USERNAME = 'Jasper Kennis';
+
 // ── Jan (Art Director) ────────────────────────────────────
 export const JAN_ROLE_SHORT = 'Art Director';
 export const JAN_CLICKUP_USERNAME = 'Jan Levinson';

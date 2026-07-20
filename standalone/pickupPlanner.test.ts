@@ -1,9 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { selectDarrylPickups, selectJanPickups } from './pickupPlanner.js';
+import { selectDarrylPickups, selectJanPickups, selectJasperClassifyPickups } from './pickupPlanner.js';
 import type { ClickUpStatusGroup, ClickUpTask } from '../src/connectors/clickupClient.js';
 
 const DARRYL = 'Darryl Philbin';
 const JAN = 'Jan Levinson';
+const JASPER = 'Jasper Kennis';
 
 function makeTask(overrides: Partial<ClickUpTask> & { id: string }): ClickUpTask {
 	return {
@@ -204,5 +205,38 @@ describe('selectJanPickups + registry integration (the double-dispatch fix)', ()
 		expect(cycle2.refine).toEqual([]);
 		expect(cycle2.aiReview).toEqual([]);
 		expect(cycle2.revision).toEqual([]);
+	});
+});
+
+describe('selectJasperClassifyPickups', () => {
+	it('picks only "to do" tickets assigned to the auto-mode user', () => {
+		const tickets: ClickUpStatusGroup[] = [
+			group('to do', [
+				makeTask({ id: 'J-1', assignees: [{ username: JASPER }] }),
+				makeTask({ id: 'J-2', assignees: [{ username: 'someone-else' }] }),
+			]),
+			group('in progress', [makeTask({ id: 'J-3', assignees: [{ username: JASPER }] })]),
+		];
+		const result = selectJasperClassifyPickups(tickets, new Set(), JASPER);
+		expect(result.map(t => t.id)).toEqual(['J-1']);
+	});
+
+	it('excludes tickets already pending or in flight', () => {
+		const tickets: ClickUpStatusGroup[] = [
+			group('to do', [
+				makeTask({ id: 'J-1', assignees: [{ username: JASPER }] }),
+				makeTask({ id: 'J-2', assignees: [{ username: JASPER }] }),
+				makeTask({ id: 'J-3', assignees: [{ username: JASPER }] }),
+			]),
+		];
+		const result = selectJasperClassifyPickups(tickets, new Set(['J-1', 'J-3']), JASPER);
+		expect(result.map(t => t.id)).toEqual(['J-2']);
+	});
+
+	it('returns empty when nothing is assigned to the auto-mode user', () => {
+		const tickets: ClickUpStatusGroup[] = [
+			group('to do', [makeTask({ id: 'J-1', assignees: [{ username: DARRYL }] })]),
+		];
+		expect(selectJasperClassifyPickups(tickets, new Set(), JASPER)).toEqual([]);
 	});
 });

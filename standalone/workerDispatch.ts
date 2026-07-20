@@ -228,6 +228,9 @@ function tryLaunchDevWorkerLocal(msg: Record<string, unknown>, ctx: ServerContex
 	const ticketUrl = msg.ticketUrl as string;
 	const useTeam = msg.useTeam as boolean | undefined;
 	const aiReviewMode = msg.aiReviewMode as boolean | undefined;
+	// Auto Mode / manual "start on current branch": work directly on the checked-out
+	// branch instead of cutting a `feature/CU-...` branch + PR.
+	const currentBranch = msg.currentBranch === true;
 	const explicitAgentId = msg.agentId as string | undefined;
 	const brief = typeof msg.additionalPrompt === 'string' ? msg.additionalPrompt.trim() : '';
 
@@ -294,7 +297,7 @@ function tryLaunchDevWorkerLocal(msg: Record<string, unknown>, ctx: ServerContex
 	}
 
 	const projectDescription = getProjectDescription(pa.workspacePath);
-	const systemPrompt = buildSystemPrompt(pa, projectDescription);
+	const systemPrompt = buildSystemPrompt(pa, projectDescription, true, currentBranch && !aiReviewMode);
 
 	const briefBlock = brief
 		? `${brief}\n\n`
@@ -302,7 +305,7 @@ function tryLaunchDevWorkerLocal(msg: Record<string, unknown>, ctx: ServerContex
 
 	let initialTask = aiReviewMode
 		? buildWorkerAiReviewInitialTask(ticketId, ticketName, ticketUrl, briefBlock)
-		: buildWorkerStandardInitialTask(ticketId, ticketName, ticketUrl, briefBlock);
+		: buildWorkerStandardInitialTask(ticketId, ticketName, ticketUrl, briefBlock, currentBranch);
 	if (projectDescription) {
 		initialTask += `\n\n## Project\n${projectDescription}`;
 	}
@@ -350,7 +353,7 @@ export function launchAgentOnTicket(
 	ticketName: string,
 	ticketUrl: string,
 	ctx: ServerContext,
-	options?: { useTeam?: boolean; additionalPrompt?: string; aiReviewMode?: boolean; agentId?: string },
+	options?: { useTeam?: boolean; additionalPrompt?: string; aiReviewMode?: boolean; agentId?: string; currentBranch?: boolean },
 ): Promise<{ success: boolean; error?: string; worker?: string }> {
 	const msg: Record<string, unknown> = {
 		workspacePath,
@@ -361,6 +364,7 @@ export function launchAgentOnTicket(
 		useTeam: options?.useTeam,
 		aiReviewMode: options?.aiReviewMode,
 		agentId: options?.agentId,
+		currentBranch: options?.currentBranch,
 	};
 	const spec = options?.aiReviewMode ? devWorkerAiReviewSpec : devWorkerSpec;
 	return dispatchWorker(msg, ctx, spec);

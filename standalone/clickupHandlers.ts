@@ -9,13 +9,14 @@ import {
 	CLICKUP_POLL_INTERVAL_MS,
 	DARRYL_CLICKUP_USERNAME,
 	JAN_CLICKUP_USERNAME,
+	AUTO_MODE_ASSIGNEE_USERNAME,
 	SERVER_PORT,
 	AI_REVIEW_PICKUP_ENABLED,
 } from './constants.js';
 import {
 	buildJanSystemPrompt,
 } from './systemPrompts.js';
-import { getJanDesignConfig } from './agentHandlers.js';
+import { getJanDesignConfig, getAutoModeEnabled } from './agentHandlers.js';
 import type { ClickUpConfig, ClickUpStatusGroup } from '../src/connectors/clickupClient.js';
 import type { ServerContext } from './serverContext.js';
 import {
@@ -37,6 +38,7 @@ import {
 import {
 	selectDarrylPickups,
 	selectJanPickups,
+	selectJasperClassifyPickups,
 } from './pickupPlanner.js';
 import {
 	buildJanRefineInitialTask,
@@ -47,7 +49,9 @@ import {
 	ensureJan,
 	handleDarrylBatchDispatch,
 	handleJanBatchDispatch,
+	dispatchDarrylClassify,
 } from './orchestratorDispatch.js';
+import { pendingDelegationIds } from './delegationStore.js';
 
 // ── Polling ──────────────────────────────────────────────────
 
@@ -84,6 +88,38 @@ export function runAutoPickupNow(ctx: ServerContext): void {
 	if (ctx.isWorkerMode) return;
 	autoDarrylPickup(ctx);
 	autoJanPickup(ctx);
+	autoJasperClassifyPickup(ctx);
+}
+
+/**
+ * Auto Mode: when enabled, hand ONE "to do" ticket assigned to the auto-mode
+ * user to Darryl to classify (pick the best worker). Darryl does NOT dispatch —
+ * he posts a recommendation that a human confirms in the kantoor. Gated so a
+ * ticket already awaiting confirmation (delegation store) or in flight (dispatch
+ * registry) is never re-classified. Qualification is strictly one-at-a-time —
+ * Darryl is a singleton and we only ever hand him a single ticket per cycle.
+ */
+export function autoJasperClassifyPickup(ctx: ServerContext): void {
+	if (ctx.isWorkerMode) return;
+	if (!getAutoModeEnabled()) return;
+
+	// Skip if Darryl is already running (classifying, or dispatching a Darryl
+	// Philbin batch) — the next poll retries.
+	const darryl = ctx.persistentAgents.find(p => p.name === 'Darryl');
+	if (darryl?.currentSessionId) return;
+
+	// Exclude tickets already classified (awaiting confirmation) or in flight.
+	const exclude = pendingDelegationIds(ctx.delegationStore);
+	for (const id of claimedTicketIds(ctx.dispatchRegistry)) exclude.add(id);
+
+	const candidates = selectJasperClassifyPickups(ctx.clickupTickets, exclude, AUTO_MODE_ASSIGNEE_USERNAME);
+	if (candidates.length === 0) return;
+
+	const ticket = candidates[0];
+	dispatchDarrylClassify(
+		{ ticketId: ticket.id, ticketName: ticket.name, ticketUrl: ticket.url },
+		ctx,
+	);
 }
 
 

@@ -425,6 +425,27 @@ export function handleSetSoundEnabled(msg: Record<string, unknown>): void {
 	setAppSetting('soundEnabled', msg.enabled);
 }
 
+// ── Auto Mode ────────────────────────────────────────────────
+// Global toggle for the human-gated Darryl delegation flow (see
+// AUTO_MODE_ASSIGNEE_USERNAME). Off by default — an unset setting reads false.
+
+export function getAutoModeEnabled(): boolean {
+	return getAppSetting<boolean>('autoMode') === true;
+}
+
+export function handleSetAutoMode(msg: Record<string, unknown>, ctx: ServerContext): void {
+	const enabled = msg.enabled === true;
+	setAppSetting('autoMode', enabled);
+	ctx.broadcastSink.postMessage({ type: 'autoModeLoaded', enabled });
+	// Turning Auto Mode ON should pick up any waiting ticket promptly instead of
+	// waiting up to a full poll interval. Fire a refresh (best-effort).
+	if (enabled) {
+		import('./clickupHandlers.js')
+			.then(({ handleClickupRefresh }) => handleClickupRefresh(ctx).catch(() => {}))
+			.catch(() => {});
+	}
+}
+
 export function getJanDesignConfig(): DesignConfig {
 	const saved = getAppSetting<Partial<DesignConfig>>('janDesignConfig');
 	return {
