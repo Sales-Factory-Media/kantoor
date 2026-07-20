@@ -8,6 +8,8 @@ interface StatusHeaderProps {
   autoMode: boolean
   pendingDelegationCount: number
   onOpenDelegations: () => void
+  /** Render in-flow inside the header bar instead of absolutely at top-center. */
+  inline?: boolean
 }
 
 function WorkerChip({ worker }: { worker: WorkerStatusEntry }) {
@@ -65,7 +67,7 @@ function formatCountdown(ms: number): string {
  * countdown and a "Fetch now" button. Lives in the header so the bottom edge
  * is free for the polaroid worker dock.
  */
-export function StatusHeader({ clickupNextFetchAt, workers, autoMode, pendingDelegationCount, onOpenDelegations }: StatusHeaderProps) {
+export function StatusHeader({ clickupNextFetchAt, workers, autoMode, pendingDelegationCount, onOpenDelegations, inline }: StatusHeaderProps) {
   const [hovered, setHovered] = useState(false)
   const [countdown, setCountdown] = useState<string | null>(null)
   const [fetchStartedFrom, setFetchStartedFrom] = useState<number | null>(null)
@@ -112,17 +114,17 @@ export function StatusHeader({ clickupNextFetchAt, workers, autoMode, pendingDel
   return (
     <div
       style={{
-        position: 'absolute',
-        top: 10,
-        left: '50%',
-        transform: 'translateX(-50%)',
+        position: inline ? 'relative' : 'absolute',
+        top: inline ? undefined : 10,
+        left: inline ? undefined : '50%',
+        transform: inline ? undefined : 'translateX(-50%)',
         zIndex: 'var(--pixel-controls-z)' as unknown as number,
         display: 'flex',
         flexWrap: 'wrap',
-        justifyContent: 'center',
+        justifyContent: inline ? 'flex-end' : 'center',
         alignItems: 'center',
         gap: 6,
-        maxWidth: 'calc(100% - 360px)',
+        maxWidth: inline ? undefined : 'calc(100% - 360px)',
         fontSize: '20px',
         color: 'var(--pixel-text-dim)',
         userSelect: 'none',

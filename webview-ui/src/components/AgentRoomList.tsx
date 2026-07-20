@@ -122,7 +122,7 @@ export function AgentRoomList({
               padding: '3px 6px',
               fontSize: '18px',
               color: group.liveAgents.length > 0 ? 'var(--pixel-green)' : 'var(--pixel-text-dim)',
-              background: group.liveAgents.length > 0 ? 'rgba(90, 200, 140, 0.08)' : 'rgba(255, 255, 255, 0.03)',
+              background: group.liveAgents.length > 0 ? 'rgba(255, 176, 32, 0.10)' : 'rgba(255, 90, 31, 0.04)',
               borderBottom: '1px solid var(--pixel-border)',
               overflow: 'hidden',
               textOverflow: 'ellipsis',
@@ -279,7 +279,7 @@ export function AgentRoomList({
                       width: 6,
                       height: 6,
                       borderRadius: '50%',
-                      background: dot ? dot.color : 'rgba(255,255,255,0.2)',
+                      background: dot ? dot.color : 'rgba(255,138,76,0.25)',
                       flexShrink: 0,
                     }}
                   />
@@ -428,7 +428,7 @@ export function AgentRoomList({
                   padding: '3px 6px',
                   fontSize: '18px',
                   color: isClickable ? 'var(--pixel-accent)' : group.liveAgents.length > 0 ? 'var(--pixel-green)' : 'var(--pixel-text-dim)',
-                  background: group.liveAgents.length > 0 ? 'rgba(90, 200, 140, 0.08)' : 'rgba(255, 255, 255, 0.03)',
+                  background: group.liveAgents.length > 0 ? 'rgba(255, 176, 32, 0.10)' : 'rgba(255, 90, 31, 0.04)',
                   borderBottom: '1px solid var(--pixel-border)',
                   overflow: 'hidden',
                   textOverflow: 'ellipsis',

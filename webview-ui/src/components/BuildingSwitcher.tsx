@@ -14,6 +14,8 @@ interface Props {
   buildings: BuildingSummary[]
   activeBuildingId: string | null
   projects: ProjectMembershipEntry[]
+  /** Render in-flow (for the header bar) instead of absolutely at top-left. */
+  inline?: boolean
 }
 
 /**
@@ -23,7 +25,7 @@ interface Props {
  * all webviews. Also offers a "+ New building" entry that opens the
  * create-building modal.
  */
-export function BuildingSwitcher({ buildings, activeBuildingId, projects }: Props) {
+export function BuildingSwitcher({ buildings, activeBuildingId, projects, inline }: Props) {
   const [open, setOpen] = useState(false)
   const [creating, setCreating] = useState(false)
   const [managingProjects, setManagingProjects] = useState(false)
@@ -60,9 +62,9 @@ export function BuildingSwitcher({ buildings, activeBuildingId, projects }: Prop
     <div
       ref={ref}
       style={{
-        position: 'absolute',
-        top: 10,
-        left: 10,
+        position: inline ? 'relative' : 'absolute',
+        top: inline ? undefined : 10,
+        left: inline ? undefined : 10,
         zIndex: 'var(--pixel-controls-z)' as unknown as number,
         pointerEvents: 'auto',
         display: 'flex',
@@ -93,7 +95,7 @@ export function BuildingSwitcher({ buildings, activeBuildingId, projects }: Prop
             width: 8,
             height: 8,
             borderRadius: 0,
-            background: active.configured ? '#7BD389' : '#FFB347',
+            background: active.configured ? 'var(--pixel-accent)' : 'var(--pixel-status-permission)',
             display: 'inline-block',
           }}
           title={active.configured ? `${active.connectorType} configured` : `${active.connectorType} not configured`}
@@ -123,7 +125,10 @@ export function BuildingSwitcher({ buildings, activeBuildingId, projects }: Prop
       {open && (
         <div
           style={{
-            marginTop: 4,
+            position: 'absolute',
+            top: 'calc(100% + 4px)',
+            left: 0,
+            zIndex: 'var(--pixel-controls-z)' as unknown as number,
             background: 'var(--pixel-bg)',
             border: '2px solid var(--pixel-border)',
             borderRadius: 0,
@@ -158,7 +163,7 @@ export function BuildingSwitcher({ buildings, activeBuildingId, projects }: Prop
                 style={{
                   width: 8,
                   height: 8,
-                  background: b.configured ? '#7BD389' : '#FFB347',
+                  background: b.configured ? 'var(--pixel-accent)' : 'var(--pixel-status-permission)',
                   display: 'inline-block',
                 }}
               />

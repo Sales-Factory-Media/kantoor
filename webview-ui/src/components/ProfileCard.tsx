@@ -31,18 +31,20 @@ interface ProfileCardProps {
 }
 
 function taskStatusLabel(status: string | undefined): { text: string; color: string } {
-  if (status === 'permission') return { text: 'Needs permission', color: '#e0a93a' }
-  if (status === 'waiting') return { text: 'Waiting for you', color: '#5cc46a' }
-  return { text: 'Working', color: 'rgba(30,30,46,0.55)' }
+  if (status === 'permission') return { text: 'Needs permission', color: 'var(--pixel-status-permission)' }
+  if (status === 'waiting') return { text: 'Waiting for you', color: 'var(--pixel-status-waiting)' }
+  return { text: 'Working', color: 'var(--pixel-text-dim)' }
 }
 
-// Shared polaroid palette so the ID card matches the photos.
-const CARD_BG = '#f4efe2'
-const INK = '#1e1e2e'
-const INK_DIM = 'rgba(30,30,46,0.55)'
-const EDGE = '#0a0a14'
-/** Softer hairline for inner dividers/boxes so they don't read as harsh black. */
-const SOFT = 'rgba(30,30,46,0.22)'
+// Card family colours — sourced from the shared theme tokens so the ID card
+// matches the polaroids and the rest of the "Super Terrain 86" palette.
+const CARD_BG = 'var(--pixel-bg)'
+const INK = 'var(--pixel-text)'
+const INK_DIM = 'var(--pixel-text-dim)'
+const EDGE = 'var(--pixel-border)'
+/** Softer hairline for inner dividers/boxes. */
+const SOFT = 'var(--pixel-border-light)'
+const INSET = 'var(--pixel-surface-2)'
 const PHOTO_SIZE = 200
 
 function experienceLabel(sessionCount: number | undefined): string {
@@ -75,9 +77,9 @@ export function ProfileCard({ character: ch, tasks, onGoTo, onReassign, onStartJ
   const buttonStyle: React.CSSProperties = {
     padding: '5px 14px',
     fontSize: '16px',
-    color: CARD_BG,
-    background: INK,
-    border: `2px solid ${EDGE}`,
+    color: 'var(--pixel-agent-text)',
+    background: 'var(--pixel-agent-bg)',
+    border: '2px solid var(--pixel-agent-border)',
     borderRadius: 0,
     cursor: 'pointer',
   }
@@ -217,7 +219,7 @@ export function ProfileCard({ character: ch, tasks, onGoTo, onReassign, onStartJ
                       alignItems: 'stretch',
                       border: `1px solid ${SOFT}`,
                       borderRadius: 0,
-                      background: 'rgba(255,255,255,0.45)',
+                      background: INSET,
                     }}
                   >
                     <button
@@ -287,7 +289,7 @@ export function ProfileCard({ character: ch, tasks, onGoTo, onReassign, onStartJ
                   fontFamily: 'inherit',
                   fontSize: '14px',
                   color: INK,
-                  background: '#fff',
+                  background: INSET,
                   border: `1px solid ${SOFT}`,
                   borderRadius: 0,
                   padding: '6px 8px',

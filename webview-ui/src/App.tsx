@@ -1,25 +1,23 @@
 import { useState, useCallback, useRef, useEffect } from 'react'
 import { OfficeState } from './office/engine/officeState.js'
-import { OfficeCanvas } from './office/components/OfficeCanvas.js'
-import { ToolOverlay } from './office/components/ToolOverlay.js'
 import { vscode } from './vscodeApi.js'
 import { useExtensionMessages } from './hooks/useExtensionMessages.js'
-import { PULSE_ANIMATION_DURATION_SEC, ZOOM_DEFAULT_DPR_FACTOR, MAX_DEVICE_PIXEL_RATIO } from './constants.js'
-import { ZoomControls } from './components/ZoomControls.js'
-import { BottomToolbar } from './components/BottomToolbar.js'
-import { BuildingSwitcher } from './components/BuildingSwitcher.js'
+import { PULSE_ANIMATION_DURATION_SEC } from './constants.js'
 import { DebugView } from './components/DebugView.js'
 import { AgentSidebar } from './components/AgentSidebar.js'
 import { ForemanPanel } from './components/ForemanPanel.js'
 import { ArtDirectorPanel } from './components/ArtDirectorPanel.js'
 import { IdentifyWorkerModal } from './components/IdentifyWorkerModal.js'
 import { IdentityPromptModal } from './components/IdentityPromptModal.js'
-import { PolaroidBar } from './components/PolaroidBar.js'
-import { StatusHeader } from './components/StatusHeader.js'
+import { PolaroidGrid } from './components/PolaroidGrid.js'
+import { TopBar } from './components/TopBar.js'
 import { DelegationConfirmModal } from './components/DelegationConfirmModal.js'
 import { Credits } from './components/Credits.js'
 
-// Game state lives outside React — updated imperatively by message handlers
+// Game state lives outside React — updated imperatively by message handlers.
+// Retained (even though the pixel office is no longer rendered) because the
+// message handlers populate character identity/status/task data that the
+// polaroid grid and sidebar read from.
 const officeStateRef = { current: null as OfficeState | null }
 
 function getOfficeState(): OfficeState {
@@ -29,17 +27,10 @@ function getOfficeState(): OfficeState {
   return officeStateRef.current
 }
 
-function defaultZoom(): number {
-  const dpr = typeof devicePixelRatio === 'number' ? devicePixelRatio : 1
-  return Math.round(ZOOM_DEFAULT_DPR_FACTOR * Math.min(dpr, MAX_DEVICE_PIXEL_RATIO))
-}
-
 function App() {
-  const { agents, selectedAgent, selectAgent, agentTools, agentStatuses, subagentTools, subagentCharacters, layoutReady, workspaceFolders, offlineAgents, knownProjects, saveAgentMeta, forgetAgent, clickupTickets, clickupConfigured, clickupListId, clickupNextFetchAt, workers, organogram, janDesignConfig, buildings, activeBuildingId, projectMemberships, pendingWorkers, dismissPendingWorker, identityPrompt, dismissIdentityPrompt, autoMode, pendingDelegations } = useExtensionMessages(getOfficeState)
+  const { agents, selectedAgent, selectAgent, agentTools, agentStatuses, subagentTools, layoutReady, offlineAgents, knownProjects, saveAgentMeta, forgetAgent, clickupTickets, clickupConfigured, clickupListId, clickupNextFetchAt, workers, organogram, janDesignConfig, buildings, activeBuildingId, projectMemberships, pendingWorkers, dismissPendingWorker, identityPrompt, dismissIdentityPrompt, autoMode, pendingDelegations } = useExtensionMessages(getOfficeState)
 
   const [isDebugMode, setIsDebugMode] = useState(false)
-  const [zoom, setZoom] = useState(defaultZoom)
-  const panRef = useRef({ x: 0, y: 0 })
   const [foremanOpen, setForemanOpen] = useState(false)
   const [artDirectorOpen, setArtDirectorOpen] = useState(false)
   const [showDelegationModal, setShowDelegationModal] = useState(false)
@@ -61,10 +52,6 @@ function App() {
     vscode.postMessage({ type: 'focusAgent', id })
   }, [])
 
-  const handleCloseAgent = useCallback((id: number) => {
-    vscode.postMessage({ type: 'closeAgent', id })
-  }, [])
-
   const handleClick = useCallback((agentId: number) => {
     // If clicked agent is a sub-agent, focus the parent's terminal instead
     const os = getOfficeState()
@@ -74,23 +61,18 @@ function App() {
     vscode.postMessage({ type: 'focusAgent', id: focusId })
   }, [selectAgent])
 
-  const handleOpenClaude = useCallback(() => {
-    vscode.postMessage({ type: 'openClaude' })
-  }, [])
-
-  const containerRef = useRef<HTMLDivElement>(null)
   const officeState = getOfficeState()
 
   if (!layoutReady) {
     return (
-      <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--vscode-foreground)' }}>
+      <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--pixel-text)' }}>
         Loading...
       </div>
     )
   }
 
   return (
-    <div ref={containerRef} style={{ width: '100%', height: '100%', position: 'relative', overflow: 'hidden' }}>
+    <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', background: 'var(--pixel-paper)', overflow: 'hidden' }}>
       <style>{`
         @keyframes pixel-agents-pulse {
           0%, 100% { opacity: 1; }
@@ -99,44 +81,55 @@ function App() {
         .pixel-agents-pulse { animation: pixel-agents-pulse ${PULSE_ANIMATION_DURATION_SEC}s ease-in-out infinite; }
       `}</style>
 
-      <OfficeCanvas
-        officeState={officeState}
-        onClick={handleClick}
-        zoom={zoom}
-        onZoomChange={setZoom}
-        panRef={panRef}
-      />
-
-      <ZoomControls zoom={zoom} onZoomChange={setZoom} isDebugMode={isDebugMode} onToggleDebugMode={handleToggleDebugMode} />
-
-      <BuildingSwitcher buildings={buildings} activeBuildingId={activeBuildingId} projects={projectMemberships} />
-
-      <StatusHeader
+      <TopBar
+        buildings={buildings}
+        activeBuildingId={activeBuildingId}
+        projectMemberships={projectMemberships}
         clickupNextFetchAt={clickupNextFetchAt}
         workers={workers}
         autoMode={autoMode}
         pendingDelegationCount={pendingDelegations.length}
         onOpenDelegations={() => setShowDelegationModal(true)}
+        isDebugMode={isDebugMode}
+        onToggleDebugMode={handleToggleDebugMode}
       />
 
-      {/* Vignette overlay */}
+      {/* Body: fixed employees sidebar + scrollable polaroid grid */}
+      <div style={{ flex: 1, display: 'flex', minHeight: 0 }}>
+        <AgentSidebar
+          docked
+          officeState={officeState}
+          agents={agents}
+          selectedAgent={selectedAgent}
+          onSelectAgent={selectAgent}
+          agentTools={agentTools}
+          agentStatuses={agentStatuses}
+          offlineAgents={offlineAgents}
+          knownProjects={knownProjects}
+          onSaveAgentMeta={saveAgentMeta}
+          onForgetAgent={forgetAgent}
+          onOpenForeman={() => setForemanOpen(true)}
+          onOpenArtDirector={() => setArtDirectorOpen(true)}
+          organogram={organogram}
+        />
+
+        <main style={{ flex: 1, minWidth: 0, overflowY: 'auto', overflowX: 'hidden', position: 'relative' }}>
+          <PolaroidGrid
+            officeState={officeState}
+            agents={agents}
+            agentStatuses={agentStatuses}
+            onSelect={handleClick}
+          />
+        </main>
+      </div>
+
+      {/* Foreman / Art Director slide-over panels (opened from the sidebar) */}
       <div
         style={{
           position: 'absolute',
-          inset: 0,
-          background: 'var(--pixel-vignette)',
-          pointerEvents: 'none',
-          zIndex: 40,
-        }}
-      />
-
-      <div
-        style={{
-          position: 'absolute',
-          top: 10,
+          top: 60,
           left: 10,
-          zIndex: 'var(--pixel-controls-z)' as unknown as number,
-          height: 'calc(100% - 20px)',
+          zIndex: 'var(--pixel-overlay-selected-z)' as unknown as number,
           display: 'flex',
           flexDirection: 'row',
           gap: 10,
@@ -176,46 +169,7 @@ function App() {
         />
       </div>
 
-      <BottomToolbar
-        onOpenClaude={handleOpenClaude}
-        workspaceFolders={workspaceFolders}
-      />
-
-      <PolaroidBar
-        officeState={officeState}
-        agents={agents}
-        agentStatuses={agentStatuses}
-        onSelect={handleClick}
-      />
-
       <Credits />
-
-      <ToolOverlay
-        officeState={officeState}
-        agents={agents}
-        agentTools={agentTools}
-        subagentCharacters={subagentCharacters}
-        containerRef={containerRef}
-        zoom={zoom}
-        panRef={panRef}
-        onCloseAgent={handleCloseAgent}
-      />
-
-      <AgentSidebar
-        officeState={officeState}
-        agents={agents}
-        selectedAgent={selectedAgent}
-        onSelectAgent={selectAgent}
-        agentTools={agentTools}
-        agentStatuses={agentStatuses}
-        offlineAgents={offlineAgents}
-        knownProjects={knownProjects}
-        onSaveAgentMeta={saveAgentMeta}
-        onForgetAgent={forgetAgent}
-        onOpenForeman={() => setForemanOpen(true)}
-        onOpenArtDirector={() => setArtDirectorOpen(true)}
-        organogram={organogram}
-      />
 
       {pendingWorkers.length > 0 && (
         <IdentifyWorkerModal

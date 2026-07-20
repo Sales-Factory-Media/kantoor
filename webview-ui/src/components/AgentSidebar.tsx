@@ -32,6 +32,10 @@ interface AgentSidebarProps {
   onOpenArtDirector?: () => void
   peersBrokerAvailable?: boolean
   organogram?: OrganogramPayload | null
+  /** Render as a fixed full-height left column (flat layout) rather than a
+   *  floating panel. Hides the redundant "Working" quick-view and the collapse
+   *  toggle; the agent grid already surfaces who's active. */
+  docked?: boolean
 }
 
 export function AgentSidebar({
@@ -49,8 +53,11 @@ export function AgentSidebar({
   onOpenArtDirector,
   peersBrokerAvailable,
   organogram,
+  docked,
 }: AgentSidebarProps) {
   const [collapsed, setCollapsed] = useState(false)
+  // In the docked column the sidebar is always expanded (no floating collapse).
+  const isCollapsed = docked ? false : collapsed
   const [showOrganogram, setShowOrganogram] = useState(false)
   const [editingAgentId, setEditingAgentId] = useState<number | null>(null)
   const [editingOfflineAgent, setEditingOfflineAgent] = useState<OfflineAgent | undefined>(undefined)
@@ -118,8 +125,9 @@ export function AgentSidebar({
         />
       )}
 
-      {/* Working Employees quick-view panel */}
-      {!collapsed && (
+      {/* Working Employees quick-view panel \u2014 redundant with the agent grid
+          in the docked/flat layout. */}
+      {!docked && !isCollapsed && (
         <WorkingEmployees
           officeState={officeState}
           agents={agents}
@@ -132,21 +140,25 @@ export function AgentSidebar({
 
       <div
         style={{
-          position: 'absolute',
-          top: 10,
-          right: 10,
+          position: docked ? 'relative' : 'absolute',
+          top: docked ? undefined : 10,
+          right: docked ? undefined : 10,
           zIndex: 'var(--pixel-controls-z)',
           display: 'flex',
           flexDirection: 'column',
           gap: 0,
           background: 'var(--pixel-bg)',
-          border: '2px solid var(--pixel-border)',
+          border: docked ? 'none' : '2px solid var(--pixel-border)',
+          borderRight: docked ? '2px solid var(--pixel-border)' : undefined,
           borderRadius: 0,
-          boxShadow: 'var(--pixel-shadow)',
-          minWidth: collapsed ? undefined : 180,
-          maxWidth: 300,
-          maxHeight: 'calc(100% - 20px)',
-          overflow: 'hidden',
+          boxShadow: docked ? 'none' : 'var(--pixel-shadow)',
+          width: docked ? 264 : undefined,
+          minWidth: docked ? 264 : isCollapsed ? undefined : 180,
+          maxWidth: docked ? 264 : 300,
+          height: docked ? '100%' : undefined,
+          maxHeight: docked ? undefined : 'calc(100% - 20px)',
+          overflowY: docked ? 'auto' : 'hidden',
+          overflowX: 'hidden',
         }}
       >
         {/* Header */}
@@ -156,21 +168,23 @@ export function AgentSidebar({
             alignItems: 'center',
             justifyContent: 'space-between',
             padding: '4px 6px',
-            borderBottom: collapsed ? 'none' : '2px solid var(--pixel-border)',
-            cursor: 'pointer',
+            borderBottom: isCollapsed ? 'none' : '2px solid var(--pixel-border)',
+            cursor: docked ? 'default' : 'pointer',
           }}
-          onClick={() => setCollapsed((p) => !p)}
+          onClick={docked ? undefined : () => setCollapsed((p) => !p)}
         >
           <span style={{ fontSize: '22px', color: 'var(--pixel-text)', userSelect: 'none' }}>
             Employees ({agents.length})
           </span>
-          <span style={{ fontSize: '18px', color: 'var(--pixel-text-dim)', userSelect: 'none', marginLeft: 6 }}>
-            {collapsed ? '\u25B6' : '\u25BC'}
-          </span>
+          {!docked && (
+            <span style={{ fontSize: '18px', color: 'var(--pixel-text-dim)', userSelect: 'none', marginLeft: 6 }}>
+              {collapsed ? '\u25B6' : '\u25BC'}
+            </span>
+          )}
         </div>
 
         {/* Conference button */}
-        {!collapsed && (
+        {!isCollapsed && (
           <button
             onClick={() => setShowConferenceModal(true)}
             disabled={peersBrokerAvailable === false}
@@ -194,7 +208,7 @@ export function AgentSidebar({
         )}
 
         {/* Organogram button */}
-        {!collapsed && (
+        {!isCollapsed && (
           <button
             onClick={() => setShowOrganogram(true)}
             title="Show team organogram (design teams + reporting lines)"
@@ -216,7 +230,7 @@ export function AgentSidebar({
         )}
 
         {/* Agent list grouped by room */}
-        {!collapsed && (
+        {!isCollapsed && (
           <AgentRoomList
             officeState={officeState}
             agents={agents}
