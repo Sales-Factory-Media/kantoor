@@ -19,7 +19,7 @@ import {
 	pruneDeadSessions,
 	seedDesignTeams,
 } from './agentStore.js';
-import { initProjectStore, loadKnownProjects, listAllProjectsWithMembership, setProjectMembership } from '../src/projectStore.js';
+import { initProjectStore, loadKnownProjects, listAllProjectsWithMembership, setProjectMembership, setProjectLogo } from '../src/projectStore.js';
 import { initSeatStore, loadSeats } from '../src/db/seatStore.js';
 import { initWorkerAssignmentStore, loadWorkerAssignments } from '../src/db/workerAssignmentStore.js';
 import { initSessionHistoryStore } from '../src/db/sessionHistoryStore.js';
@@ -225,6 +225,30 @@ export async function handleSetProjectMembership(msg: Record<string, unknown>, c
 	ctx.broadcastSink.postMessage({ type: 'knownProjects', projects: loadKnownProjects() });
 
 	// Push fresh global pool with membership flags (drives the modal)
+	const allProjects = await listAllProjectsWithMembership();
+	ctx.broadcastSink.postMessage({
+		type: 'projectsList',
+		projects: allProjects,
+		activeBuildingId: ctx.activeBuilding?.id ?? null,
+	});
+}
+
+/**
+ * Set or clear a project's logo (data URI, or empty/null to clear). Rebroadcasts
+ * the active-building project list (drives sidebar + agent-card logos) and a
+ * fresh global pool (drives the membership modal's per-row logo).
+ */
+export async function handleSetProjectLogo(msg: Record<string, unknown>, ctx: ServerContext): Promise<void> {
+	if (ctx.isWorkerMode) return;
+	const workspacePath = msg.workspacePath as string | undefined;
+	if (!workspacePath) return;
+	const raw = msg.logo;
+	const logo = typeof raw === 'string' && raw.trim() ? raw : null;
+
+	await setProjectLogo(workspacePath, logo);
+
+	ctx.broadcastSink.postMessage({ type: 'knownProjects', projects: loadKnownProjects() });
+
 	const allProjects = await listAllProjectsWithMembership();
 	ctx.broadcastSink.postMessage({
 		type: 'projectsList',

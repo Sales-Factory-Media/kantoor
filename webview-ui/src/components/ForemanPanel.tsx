@@ -256,7 +256,7 @@ function renderTask(
         ) : (
           <>
             <button
-              onClick={() => window.open(task.url, '_blank')}
+              onClick={() => vscode.postMessage({ type: 'openExternalUrl', url: task.url })}
               title="Open in ClickUp"
               style={{
                 padding: '2px 6px',

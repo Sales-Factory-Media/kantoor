@@ -16,8 +16,9 @@
     "build:prod": "node esbuild-standalone.js --production && npm run build:webview",
     "check-types": "tsc --noEmit",
     "lint": "eslint src standalone",
-    "start": "node dist/standalone.js --no-local-dev",
+    "start": "node dist/standalone.js",
     "start:local": "node dist/standalone.js",
+    "start:no-local-dev": "node dist/standalone.js --no-local-dev",
     "import-tileset": "tsx scripts/import-tileset-cli.ts",
     "test": "vitest run",
     "test:watch": "vitest"

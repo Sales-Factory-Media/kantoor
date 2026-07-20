@@ -1,12 +1,14 @@
 import { useState, useRef, useEffect } from 'react'
 import { vscode } from '../vscodeApi.js'
 import type { BuildingSummary } from '../hooks/useExtensionMessages.js'
+import { ProjectLogo, fileToLogoDataUri } from './ProjectLogo.js'
 
 export interface ProjectMembershipEntry {
   id: number
   name: string
   workspacePath: string
   description?: string
+  logo?: string
   belongsToActive: boolean
 }
 
@@ -228,6 +230,20 @@ function ProjectMembershipModal({ buildingName, projects, onClose }: ProjectMemb
     })
   }
 
+  async function uploadLogo(p: ProjectMembershipEntry, file: File | undefined) {
+    if (!file) return
+    try {
+      const logo = await fileToLogoDataUri(file)
+      vscode.postMessage({ type: 'setProjectLogo', workspacePath: p.workspacePath, logo })
+    } catch (err) {
+      console.error('[ProjectLogo] upload failed:', err)
+    }
+  }
+
+  function clearLogo(p: ProjectMembershipEntry) {
+    vscode.postMessage({ type: 'setProjectLogo', workspacePath: p.workspacePath, logo: '' })
+  }
+
   return (
     <div
       style={{
@@ -269,33 +285,61 @@ function ProjectMembershipModal({ buildingName, projects, onClose }: ProjectMemb
               No projects discovered yet. Start a Claude session in a project directory to add it.
             </div>
           ) : projects.map(p => (
-            <label
+            <div
               key={p.id}
               style={{
                 display: 'flex',
                 alignItems: 'center',
                 gap: 10,
                 padding: '6px 10px',
-                cursor: 'pointer',
                 fontSize: 12,
                 background: p.belongsToActive ? 'rgba(123, 211, 137, 0.15)' : 'transparent',
               }}
-              onMouseEnter={e => { if (!p.belongsToActive) (e.currentTarget.style.background = 'var(--pixel-btn-bg)') }}
-              onMouseLeave={e => { if (!p.belongsToActive) (e.currentTarget.style.background = 'transparent') }}
             >
-              <input
-                type="checkbox"
-                checked={p.belongsToActive}
-                onChange={() => toggle(p)}
-                style={{ width: 14, height: 14, cursor: 'pointer' }}
-              />
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontWeight: p.belongsToActive ? 'bold' : 'normal' }}>{p.name}</div>
-                <div style={{ fontSize: 10, opacity: 0.6, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {p.workspacePath}
+              <label style={{ display: 'flex', alignItems: 'center', gap: 10, flex: 1, minWidth: 0, cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={p.belongsToActive}
+                  onChange={() => toggle(p)}
+                  style={{ width: 14, height: 14, cursor: 'pointer' }}
+                />
+                <ProjectLogo logo={p.logo} size={24} />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontWeight: p.belongsToActive ? 'bold' : 'normal' }}>{p.name}</div>
+                  <div style={{ fontSize: 10, opacity: 0.6, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {p.workspacePath}
+                  </div>
                 </div>
-              </div>
-            </label>
+              </label>
+              <label
+                title={p.logo ? 'Replace logo' : 'Upload logo'}
+                style={{
+                  flexShrink: 0, cursor: 'pointer', fontSize: 11, padding: '2px 6px',
+                  border: '2px solid var(--pixel-border)', background: 'var(--pixel-btn-bg)',
+                }}
+              >
+                {p.logo ? 'Change' : 'Logo'}
+                <input
+                  type="file"
+                  accept="image/*"
+                  style={{ display: 'none' }}
+                  onChange={e => { void uploadLogo(p, e.target.files?.[0]); e.currentTarget.value = '' }}
+                />
+              </label>
+              {p.logo && (
+                <button
+                  type="button"
+                  onClick={() => clearLogo(p)}
+                  title="Remove logo"
+                  style={{
+                    flexShrink: 0, cursor: 'pointer', fontSize: 11, padding: '2px 6px',
+                    border: '2px solid var(--pixel-border)', background: 'var(--pixel-btn-bg)', color: 'var(--pixel-fg)',
+                  }}
+                >
+                  ✕
+                </button>
+              )}
+            </div>
           ))}
         </div>
 

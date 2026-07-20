@@ -16,10 +16,47 @@ import {
 	addPendingDelegation,
 	getPendingDelegation,
 	getPendingDelegations,
+	postponeDelegation,
 	removePendingDelegation,
 	type PendingDelegation,
 } from './delegationStore.js';
+import {
+	deletePersistedDelegation,
+	loadPersistedDelegations,
+	persistDelegation,
+} from './delegationPersistence.js';
+import { DELEGATION_POSTPONE_MS } from './constants.js';
 import { launchAgentOnTicket } from './workerDispatch.js';
+
+/** Find a ticket's connector date_updated (epoch ms) in the current cache. */
+function ticketUpdatedAt(ctx: ServerContext, ticketId: string): number | undefined {
+	for (const group of ctx.clickupTickets) {
+		for (const task of group.tasks) {
+			if (task.id === ticketId) {
+				const raw = (task as { dateUpdated?: string }).dateUpdated;
+				const n = raw != null ? Number(raw) : NaN;
+				return Number.isFinite(n) ? n : undefined;
+			}
+		}
+	}
+	return undefined;
+}
+
+/**
+ * Rehydrate the in-memory delegation store from Postgres at boot. Restores the
+ * "Awaiting delegation" popups that used to vanish on every restart.
+ */
+export async function loadDelegationsIntoStore(ctx: ServerContext): Promise<void> {
+	try {
+		const rows = await loadPersistedDelegations();
+		for (const d of rows) addPendingDelegation(ctx.delegationStore, d);
+		if (rows.length > 0) {
+			console.log(`[Standalone] Restored ${rows.length} pending delegation(s) from DB`);
+		}
+	} catch (err) {
+		console.error('[Standalone] Failed to load pending delegations:', err);
+	}
+}
 
 /** Push the full current delegation list to every connected client. */
 export function broadcastDelegations(ctx: ServerContext): void {
@@ -52,6 +89,10 @@ export function handleDarrylRecommendation(
 	if (!agent) return { success: false, error: `Recommended agent "${recommendedAgentId}" not found.` };
 	if (!agent.workspacePath) return { success: false, error: `Recommended agent "${agent.name}" has no workspace path.` };
 
+	// Preserve the original createdAt when re-classifying (ticket was updated),
+	// but always refresh the evaluation timestamp + the ticket's date_updated.
+	const now = Date.now();
+	const existing = getPendingDelegation(ctx.delegationStore, ticketId);
 	const delegation: PendingDelegation = {
 		ticketId,
 		ticketName,
@@ -62,10 +103,16 @@ export function handleDarrylRecommendation(
 		recommendedWorkspacePath: agent.workspacePath,
 		reasoning,
 		brief,
-		createdAt: Date.now(),
+		createdAt: existing?.createdAt ?? now,
+		lastEvaluatedAt: now,
+		ticketUpdatedAt: ticketUpdatedAt(ctx, ticketId),
+		buildingId: ctx.activeBuilding?.id,
+		// Re-evaluation clears any prior snooze — a fresh recommendation should
+		// surface, not stay hidden behind a stale postpone.
 	};
 
 	addPendingDelegation(ctx.delegationStore, delegation);
+	persistDelegation(delegation);
 	console.log(`[Standalone] Darryl recommendation for ticket ${ticketId}: "${agent.name}" (${agent.id})`);
 	broadcastDelegations(ctx);
 	return { success: true };
@@ -99,6 +146,7 @@ export async function handleConfirmDelegation(msg: Record<string, unknown>, ctx:
 
 	if (result.success) {
 		removePendingDelegation(ctx.delegationStore, ticketId);
+		deletePersistedDelegation(ticketId);
 		broadcastDelegations(ctx);
 		console.log(`[Standalone] confirmDelegation: launched "${result.worker ?? delegation.recommendedAgentName}" for ticket ${ticketId}`);
 	} else {
@@ -111,7 +159,24 @@ export async function handleConfirmDelegation(msg: Record<string, unknown>, ctx:
 export function handleDiscardDelegation(msg: Record<string, unknown>, ctx: ServerContext): void {
 	const ticketId = msg.ticketId as string;
 	if (removePendingDelegation(ctx.delegationStore, ticketId)) {
+		deletePersistedDelegation(ticketId);
 		console.log(`[Standalone] discardDelegation: dropped recommendation for ticket ${ticketId}`);
+		broadcastDelegations(ctx);
+	}
+}
+
+/**
+ * Human hit Postpone — snooze the recommendation for DELEGATION_POSTPONE_MS.
+ * The pick is kept (and persisted) but hidden from the popup until it expires;
+ * the ticket is NOT re-classified in the meantime (it's still "decided").
+ */
+export function handlePostponeDelegation(msg: Record<string, unknown>, ctx: ServerContext): void {
+	const ticketId = msg.ticketId as string;
+	const until = Date.now() + DELEGATION_POSTPONE_MS;
+	const updated = postponeDelegation(ctx.delegationStore, ticketId, until);
+	if (updated) {
+		persistDelegation(updated);
+		console.log(`[Standalone] postponeDelegation: snoozed ticket ${ticketId} until ${new Date(until).toISOString()}`);
 		broadcastDelegations(ctx);
 	}
 }

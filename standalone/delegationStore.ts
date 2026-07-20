@@ -17,9 +17,10 @@
  *     its recommendation is still waiting (that's the "once classified, leave
  *     it waiting" requirement).
  *
- * In-memory, hub-only. A server restart drops pending recommendations and the
- * affected tickets get re-classified on the next poll — acceptable, same
- * durability model as the dispatch registry.
+ * In-memory during a run, but mirrored to Postgres (see delegationPersistence.ts)
+ * so pending recommendations survive a hub restart. `lastEvaluatedAt` +
+ * `ticketUpdatedAt` let auto-pickup re-classify a ticket that was edited after
+ * Darryl looked at it (see delegationsNeedingReeval).
  */
 
 export interface PendingDelegation {
@@ -38,6 +39,14 @@ export interface PendingDelegation {
 	brief: string;
 	/** epoch ms */
 	createdAt: number;
+	/** epoch ms — when Darryl last classified/evaluated this ticket. */
+	lastEvaluatedAt: number;
+	/** Connector date_updated (epoch ms) snapshotted at evaluation time. */
+	ticketUpdatedAt?: number;
+	/** Snoozed-until (epoch ms). While in the future, the popup hides it. */
+	postponedUntil?: number;
+	/** Building this delegation belongs to — for scoped persistence. */
+	buildingId?: string;
 }
 
 export type DelegationStore = Map<string, PendingDelegation>;
@@ -58,6 +67,23 @@ export function removePendingDelegation(store: DelegationStore, ticketId: string
 	return store.delete(ticketId);
 }
 
+/**
+ * Snooze a pending delegation until `until` (epoch ms). While snoozed the popup
+ * hides it, but it stays in the store (still excluded from re-classification
+ * unless the ticket itself is updated). Returns the mutated delegation, or
+ * undefined if there was nothing to postpone.
+ */
+export function postponeDelegation(
+	store: DelegationStore,
+	ticketId: string,
+	until: number,
+): PendingDelegation | undefined {
+	const existing = store.get(ticketId);
+	if (!existing) return undefined;
+	existing.postponedUntil = until;
+	return existing;
+}
+
 export function getPendingDelegation(store: DelegationStore, ticketId: string): PendingDelegation | undefined {
 	return store.get(ticketId);
 }
@@ -74,4 +100,29 @@ export function getPendingDelegations(store: DelegationStore): PendingDelegation
 /** Snapshot of ticket IDs with a pending recommendation — for auto-pickup filtering. */
 export function pendingDelegationIds(store: DelegationStore): Set<string> {
 	return new Set(store.keys());
+}
+
+/**
+ * Build the auto-pickup exclude set from the store, honouring re-evaluation.
+ *
+ * A ticket with a pending recommendation is normally excluded (leave it
+ * waiting for a human). BUT if the ticket has been updated since Darryl last
+ * evaluated it — `currentUpdatedAt(ticketId)` is newer than the stored
+ * `ticketUpdatedAt` — it's no longer excluded, so it gets re-classified and the
+ * stale recommendation is replaced.
+ *
+ * Pure: the caller supplies a lookup of the live connector date_updated (epoch
+ * ms) per ticket id; unknown/absent means "no change signal", stays excluded.
+ */
+export function delegationExcludeSet(
+	store: DelegationStore,
+	currentUpdatedAt: (ticketId: string) => number | undefined,
+): Set<string> {
+	const exclude = new Set<string>();
+	for (const [ticketId, d] of store) {
+		const live = currentUpdatedAt(ticketId);
+		const stale = d.ticketUpdatedAt != null && live != null && live > d.ticketUpdatedAt;
+		if (!stale) exclude.add(ticketId);
+	}
+	return exclude;
 }

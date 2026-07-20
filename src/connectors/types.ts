@@ -25,6 +25,9 @@ export interface Ticket {
 	priority: { id: string } | null;
 	/** Parent ticket id, if this is a subtask. */
 	parent: string | null;
+	/** Last-modified time (epoch ms as a string), when the connector exposes it.
+	 *  Used to detect that a ticket changed since it was last evaluated. */
+	dateUpdated?: string;
 }
 
 export interface StatusGroup {

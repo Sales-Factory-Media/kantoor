@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import type { Character } from '../office/types.js'
 import { EmployeeAvatar } from './EmployeeAvatar.js'
+import { ProjectLogo } from './ProjectLogo.js'
 import { timeAgo } from './agentSidebarUtils.js'
 import { ActivityBars } from './ActivityBars.js'
 
@@ -28,6 +29,8 @@ interface ProfileCardProps {
   onStartJob?: (callInTask: string) => void
   /** Open the employee editor (name/role/avatar). */
   onEdit?: () => void
+  /** Project logo (data URI) shown before the project name. */
+  projectLogo?: string
   onClose: () => void
 }
 
@@ -61,7 +64,7 @@ function experienceLabel(sessionCount: number | undefined): string {
  * proportions (3.375" × 2.125" landscape), with all details beside the photo.
  * Lists every running task (with what it's working on) and can start a new job.
  */
-export function ProfileCard({ character: ch, tasks, onGoTo, onReassign, onStartJob, onEdit, onClose }: ProfileCardProps) {
+export function ProfileCard({ character: ch, tasks, onGoTo, onReassign, onStartJob, onEdit, projectLogo, onClose }: ProfileCardProps) {
   const project = ch.projectName || ch.folderName
   const [composing, setComposing] = useState(false)
   const [jobText, setJobText] = useState('')
@@ -172,7 +175,10 @@ export function ProfileCard({ character: ch, tasks, onGoTo, onReassign, onStartJ
             {project && (
               <div>
                 <div style={labelStyle}>Project</div>
-                <div style={valueStyle}>{project}</div>
+                <div style={{ ...valueStyle, display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <ProjectLogo logo={projectLogo} size={18} />
+                  <span>{project}</span>
+                </div>
               </div>
             )}
 

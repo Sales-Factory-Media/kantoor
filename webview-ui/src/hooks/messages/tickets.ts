@@ -16,7 +16,7 @@ export function handleClickupConfigured(msg: Record<string, unknown>, ctx: Handl
   if (Array.isArray(msg.listIds)) ctx.setClickupListIds(msg.listIds as string[])
 }
 
-export function handleClickupError(msg: Record<string, unknown>): void {
+export function handleClickupError(msg: Record<string, unknown>, _ctx: HandlerCtx): void {
   console.error('[ClickUp]', msg.error)
 }
 

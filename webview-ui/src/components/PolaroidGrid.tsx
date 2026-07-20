@@ -1,6 +1,8 @@
 import { useState, useRef, useLayoutEffect } from 'react'
 import type { OfficeState } from '../office/engine/officeState.js'
 import type { Character } from '../office/types.js'
+import type { KnownProject } from '../hooks/useExtensionMessages.js'
+import { ProjectLogo, makeProjectLogoLookup } from './ProjectLogo.js'
 import { vscode } from '../vscodeApi.js'
 import { EmployeeAvatar } from './EmployeeAvatar.js'
 import { ProfileCard } from './ProfileCard.js'
@@ -86,6 +88,8 @@ interface PolaroidGridProps {
   agents: number[]
   /** Per-agent status, e.g. 'waiting' | 'permission' (active agents are absent) */
   agentStatuses: Record<number, string>
+  /** Known projects — supplies the per-project logo shown before the name. */
+  knownProjects: KnownProject[]
   /** Focus the agent's iTerm tab + select it in the office */
   onSelect: (id: number) => void
 }
@@ -129,7 +133,8 @@ function groupKey(ch: Character): string {
  * Clicking the photo opens the full employee ID card (ProfileCard); the pencil
  * opens the employee editor (EmployeeFile).
  */
-export function PolaroidGrid({ officeState, agents, agentStatuses, onSelect }: PolaroidGridProps) {
+export function PolaroidGrid({ officeState, agents, agentStatuses, knownProjects, onSelect }: PolaroidGridProps) {
+  const projectLogo = makeProjectLogoLookup(knownProjects)
   const [profileKey, setProfileKey] = useState<string | null>(null)
   const [editing, setEditing] = useState(false)
   const [composingKey, setComposingKey] = useState<string | null>(null)
@@ -289,7 +294,12 @@ export function PolaroidGrid({ officeState, agents, agentStatuses, onSelect }: P
                     {'✎'}
                   </button>
                 </div>
-                {project && <div style={{ fontSize: 16, fontWeight: 'bold', color: INK }}>{project}</div>}
+                {project && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 16, fontWeight: 'bold', color: INK }}>
+                    <ProjectLogo logo={projectLogo(ch.workspacePath, project)} size={18} />
+                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{project}</span>
+                  </div>
+                )}
                 {ch.roleShort && <div style={{ fontSize: 15, color: INK_DIM }}>{ch.roleShort}</div>}
               </div>
             </div>
@@ -453,6 +463,7 @@ export function PolaroidGrid({ officeState, agents, agentStatuses, onSelect }: P
               : undefined
           }
           onEdit={() => setEditing(true)}
+          projectLogo={projectLogo(profileChar.workspacePath, profileChar.projectName || profileChar.folderName)}
           onClose={() => { setEditing(false); setProfileKey(null) }}
         />
       )}

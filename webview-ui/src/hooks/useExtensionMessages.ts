@@ -82,6 +82,8 @@ export interface KnownProject {
   name: string
   workspacePath: string
   description?: string
+  /** Optional logo as a data URI, rendered before the project name. */
+  logo?: string
 }
 
 export interface OfflineAgent {
@@ -137,6 +139,10 @@ export interface PendingDelegation {
   reasoning: string
   brief: string
   createdAt: number
+  /** epoch ms — when Darryl last evaluated this ticket. */
+  lastEvaluatedAt?: number
+  /** Snoozed-until (epoch ms). While in the future, the popup hides it. */
+  postponedUntil?: number
 }
 
 /** A copy-paste prompt to make a live session aware of who it now is. */
@@ -212,6 +218,7 @@ export interface ProjectMembershipEntry {
   name: string
   workspacePath: string
   description?: string
+  logo?: string
   belongsToActive: boolean
 }
 

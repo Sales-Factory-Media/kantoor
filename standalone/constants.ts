@@ -21,6 +21,15 @@ export const DARRYL_WORKSPACE = '~/Projects/kantoor-workspace';
 // clicks Start to actually dispatch. See standalone/delegationStore.ts.
 export const AUTO_MODE_ASSIGNEE_USERNAME = 'Jasper Kennis';
 
+// Which browser app external ticket links open in. The dashboard itself may run
+// in a different browser (e.g. Firefox), but the user does ticket work in Chrome.
+// macOS `open -a` application name.
+export const EXTERNAL_BROWSER_APP = 'Google Chrome';
+
+// How long "Postpone" snoozes a pending delegation before it resurfaces in the
+// confirmation popup. The pick stays decided (not re-classified) while snoozed.
+export const DELEGATION_POSTPONE_MS = 30 * 60_000; // 30 minutes
+
 // ── Jan (Art Director) ────────────────────────────────────
 export const JAN_ROLE_SHORT = 'Art Director';
 export const JAN_CLICKUP_USERNAME = 'Jan Levinson';

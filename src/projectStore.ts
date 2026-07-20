@@ -7,6 +7,8 @@ export interface KnownProject {
 	name: string;
 	workspacePath: string;
 	description?: string;
+	/** Optional logo as a data URI, rendered before the project name in the UI. */
+	logo?: string;
 }
 
 export interface ProjectMembership extends KnownProject {
@@ -27,6 +29,7 @@ export async function initProjectStore(): Promise<void> {
 			name: projects.name,
 			workspacePath: projects.workspacePath,
 			description: projects.description,
+			logo: projects.logo,
 		})
 		.from(buildingProjects)
 		.innerJoin(projects, eq(projects.id, buildingProjects.projectId))
@@ -35,6 +38,7 @@ export async function initProjectStore(): Promise<void> {
 		name: r.name,
 		workspacePath: r.workspacePath,
 		description: r.description ?? undefined,
+		logo: r.logo ?? undefined,
 	}));
 }
 
@@ -151,6 +155,7 @@ export async function listAllProjectsWithMembership(): Promise<ProjectMembership
 		name: p.name,
 		workspacePath: p.workspacePath,
 		description: p.description ?? undefined,
+		logo: p.logo ?? undefined,
 		belongsToActive: inActive.has(p.id),
 	}));
 }
@@ -181,6 +186,20 @@ export async function setProjectMembership(workspacePath: string, included: bool
 		));
 		cache = cache.filter(p => p.workspacePath !== workspacePath);
 		return false;
+	}
+}
+
+/**
+ * Set (or clear, with null) a project's logo. Logos are global to the project
+ * (not building-scoped), so this writes the DB unconditionally and updates the
+ * active-building cache entry if the project happens to be in it.
+ */
+export async function setProjectLogo(workspacePath: string, logo: string | null): Promise<void> {
+	const db = getDb();
+	await db.update(projects).set({ logo }).where(eq(projects.workspacePath, workspacePath));
+	const idx = cache.findIndex(p => p.workspacePath === workspacePath);
+	if (idx !== -1) {
+		cache[idx] = { ...cache[idx], logo: logo ?? undefined };
 	}
 }
 

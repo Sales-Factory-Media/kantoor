@@ -53,7 +53,7 @@ import {
 	clearWorkerTicket,
 } from './workerRegistry.js';
 import { loadKnownProjects } from '../src/projectStore.js';
-import { findBusyDevSlot, findBusyVisualSlot, findFreeDevWorker, isDevWorker } from './capacity.js';
+import { findBusyDevSlot, findBusyVisualSlot, findDevWorkerForWorkspace, findFreeDevWorker, isDevWorker } from './capacity.js';
 import { expandHome } from './agentStore.js';
 import {
 	EXIT_REMINDER,
@@ -261,39 +261,53 @@ function tryLaunchDevWorkerLocal(msg: Record<string, unknown>, ctx: ServerContex
 	let pa = explicitAgentId
 		? ctx.persistentAgents.find(p => p.id === explicitAgentId && isDevWorker(p))
 		: undefined;
-	if (!pa) {
-		pa = findFreeDevWorker(ctx.persistentAgents, workspacePath);
-	}
-	if (!pa) {
-		// No FREE worker matches; check whether ANY dev worker exists for the
-		// workspace. If yes, we still need to surface slotBusy so the dispatcher
-		// cascades — but with the canonical agent's id attached.
-		const anyForWorkspace = ctx.persistentAgents.find(p =>
-			isDevWorker(p) && expandHome(p.workspacePath ?? '') === expandHome(workspacePath),
-		);
-		if (anyForWorkspace) {
+
+	if (ctx.serialDev) {
+		// ── Legacy serial mode: one dev session per machine ──────────
+		if (!pa) {
+			pa = findFreeDevWorker(ctx.persistentAgents, workspacePath);
+		}
+		if (!pa) {
+			// No FREE worker matches; check whether ANY dev worker exists for the
+			// workspace. If yes, we still need to surface slotBusy so the dispatcher
+			// cascades — but with the canonical agent's id attached.
+			const anyForWorkspace = ctx.persistentAgents.find(p =>
+				isDevWorker(p) && expandHome(p.workspacePath ?? '') === expandHome(workspacePath),
+			);
+			if (anyForWorkspace) {
+				return {
+					success: false,
+					slotBusy: true,
+					agentId: anyForWorkspace.id,
+					error: `Local dev slot busy: "${anyForWorkspace.name}" is already running on this machine.`,
+				};
+			}
+			return { success: false, error: `No free dev worker available for workspace "${workspacePath}".` };
+		}
+
+		// Per-machine dev slot lock — same shape as Jan's visual-slot lock. The
+		// hub takes ONE dev ticket at a time; further work cascades to idle remote
+		// workers via the fleet RPC.
+		const busySlot = findBusyDevSlot(ctx.persistentAgents);
+		if (busySlot) {
 			return {
 				success: false,
 				slotBusy: true,
-				agentId: anyForWorkspace.id,
-				error: `Local dev slot busy: "${anyForWorkspace.name}" is already running on this machine.`,
+				agentId: pa.id,
+				error: `Local dev slot busy: "${busySlot.name}" is already running on this machine.`,
 			};
 		}
-		return { success: false, error: `No free dev worker available for workspace "${workspacePath}".` };
-	}
-
-	// Per-machine dev slot lock — same shape as Jan's visual-slot lock. The
-	// hub takes ONE dev ticket at a time; further work cascades to idle remote
-	// workers via the fleet RPC. Without this, every Darryl curl found the
-	// same first-free hub agent and piled all dispatches onto a single machine.
-	const busySlot = findBusyDevSlot(ctx.persistentAgents);
-	if (busySlot) {
-		return {
-			success: false,
-			slotBusy: true,
-			agentId: pa.id,
-			error: `Local dev slot busy: "${busySlot.name}" is already running on this machine.`,
-		};
+	} else {
+		// ── Parallel mode (default): multiple concurrent dev sessions ──
+		// No machine-wide slot lock. A busy worker may take a second session
+		// (an employee juggling several tabs against the same codebase — Jasper
+		// coordinates non-overlapping work manually; see the multi-session model).
+		if (!pa) {
+			pa = findDevWorkerForWorkspace(ctx.persistentAgents, workspacePath);
+		}
+		if (!pa) {
+			return { success: false, error: `No dev worker available for workspace "${workspacePath}".` };
+		}
 	}
 
 	const projectDescription = getProjectDescription(pa.workspacePath);

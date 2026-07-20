@@ -36,6 +36,20 @@
       "when": 1778396030000,
       "tag": "0004_session_history",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1778396040000,
+      "tag": "0005_pending_delegations",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1778396050000,
+      "tag": "0006_project_logo",
+      "breakpoints": true
     }
   ]
 }

@@ -8,6 +8,7 @@ import { getActivity, getDotInfo, groupByRoom, deleteButtonStyle } from './agent
 import type { ClickUpTicketRef } from './agentSidebarUtils.js'
 import { OfflineAgentRow } from './OfflineAgentRow.js'
 import { EmployeeAvatar } from './EmployeeAvatar.js'
+import { ProjectLogo, makeProjectLogoLookup } from './ProjectLogo.js'
 
 export interface AgentRoomListProps {
   officeState: OfficeState
@@ -70,6 +71,7 @@ export function AgentRoomList({
   const [descDraft, setDescDraft] = useState('')
 
   const roomGroups = groupByRoom(agents, officeState, offlineAgents, knownProjects)
+  const projectLogo = makeProjectLogoLookup(knownProjects)
 
   const collapsedRooms = useMemo(() => {
     const result = new Set<string>()
@@ -138,6 +140,7 @@ export function AgentRoomList({
               <span style={{ fontSize: '14px', color: 'var(--pixel-text-dim)', flexShrink: 0 }}>
                 {collapsedRooms.has(projectName) ? '\u25B6' : '\u25BC'}
               </span>
+              <ProjectLogo logo={projectLogo(group.workspacePath, projectName)} size={16} />
               <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
                 {projectName || 'Unassigned'}
               </span>

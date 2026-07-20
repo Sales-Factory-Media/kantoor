@@ -35,16 +35,33 @@ function App() {
   const [artDirectorOpen, setArtDirectorOpen] = useState(false)
   const [showDelegationModal, setShowDelegationModal] = useState(false)
 
-  // Auto-open the confirmation popup when a new delegation arrives; auto-close
-  // when the last one is resolved. Dismissing (X) leaves the list intact — the
-  // "Awaiting delegation" header button reopens it.
+  // Tick periodically so snoozed (postponed) delegations reappear when their
+  // snooze window elapses, even without a fresh server broadcast.
+  const [nowTick, setNowTick] = useState(() => Date.now())
+  useEffect(() => {
+    const t = setInterval(() => setNowTick(Date.now()), 30000)
+    return () => clearInterval(t)
+  }, [])
+
+  // Delegations currently snoozed via Postpone. These stay in the pending list
+  // (header button + modal) — Postpone only suppresses the AUTO-popup, it does
+  // NOT drop the delegation. They "un-snooze" once the window elapses (nowTick)
+  // or the ticket is updated (server re-broadcast).
+  const activeDelegations = pendingDelegations.filter(
+    (d) => !d.postponedUntil || d.postponedUntil <= nowTick,
+  )
+
+  // Auto-open the confirmation popup when a new NON-snoozed delegation arrives;
+  // auto-close only when nothing is left to act on right now. Postponed ones
+  // still count toward the header button (see pendingDelegations.length below),
+  // so the button remains while any delegation is pending.
   const prevDelegationCount = useRef(0)
   useEffect(() => {
-    const count = pendingDelegations.length
+    const count = activeDelegations.length
     if (count > prevDelegationCount.current) setShowDelegationModal(true)
     if (count === 0) setShowDelegationModal(false)
     prevDelegationCount.current = count
-  }, [pendingDelegations.length])
+  }, [activeDelegations.length])
 
   // Auto-dismiss a dispatch-failure banner after a while so it doesn't linger.
   useEffect(() => {
@@ -166,6 +183,7 @@ function App() {
             officeState={officeState}
             agents={agents}
             agentStatuses={agentStatuses}
+            knownProjects={knownProjects}
             onSelect={handleClick}
           />
         </main>

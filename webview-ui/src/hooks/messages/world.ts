@@ -72,19 +72,19 @@ export function handleLayoutLoaded(_msg: Record<string, unknown>, ctx: HandlerCt
   ctx.setLayoutReady(true)
 }
 
-export function handleCharacterSpritesLoaded(msg: Record<string, unknown>): void {
+export function handleCharacterSpritesLoaded(msg: Record<string, unknown>, _ctx: HandlerCtx): void {
   const characters = msg.characters as Array<{ down: string[][][]; up: string[][][]; right: string[][][] }>
   console.log(`[Webview] Received ${characters.length} pre-colored character sprites`)
   setCharacterTemplates(characters)
 }
 
-export function handleFloorTilesLoaded(msg: Record<string, unknown>): void {
+export function handleFloorTilesLoaded(msg: Record<string, unknown>, _ctx: HandlerCtx): void {
   const sprites = msg.sprites as string[][][]
   console.log(`[Webview] Received ${sprites.length} floor tile patterns`)
   setFloorSprites(sprites)
 }
 
-export function handleWallTilesLoaded(msg: Record<string, unknown>): void {
+export function handleWallTilesLoaded(msg: Record<string, unknown>, _ctx: HandlerCtx): void {
   const sprites = msg.sprites as string[][][]
   console.log(`[Webview] Received ${sprites.length} wall tile sprites`)
   setWallSprites(sprites)
@@ -95,7 +95,7 @@ export function handleWorkspaceFolders(msg: Record<string, unknown>, ctx: Handle
   ctx.setWorkspaceFolders(folders)
 }
 
-export function handleSettingsLoaded(msg: Record<string, unknown>): void {
+export function handleSettingsLoaded(msg: Record<string, unknown>, _ctx: HandlerCtx): void {
   const soundOn = msg.soundEnabled as boolean
   setSoundEnabled(soundOn)
 }
@@ -143,13 +143,13 @@ export function handleBuildingSwitched(msg: Record<string, unknown>, ctx: Handle
   // immediately after this message; the existing handlers pick those up.
 }
 
-export function handleBuildingConfigured(): void {
+export function handleBuildingConfigured(_msg: Record<string, unknown>, _ctx: HandlerCtx): void {
   // Server has merged a new connector config; just refresh the building
   // list so the dropdown's "configured" badge updates.
   vscode.postMessage({ type: 'listBuildings' })
 }
 
-export function handleBuildingCreateError(msg: Record<string, unknown>): void {
+export function handleBuildingCreateError(msg: Record<string, unknown>, _ctx: HandlerCtx): void {
   console.error('[Buildings] create failed:', msg.error)
 }
 

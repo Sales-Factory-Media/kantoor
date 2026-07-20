@@ -51,7 +51,7 @@ import {
 	handleJanBatchDispatch,
 	dispatchDarrylClassify,
 } from './orchestratorDispatch.js';
-import { pendingDelegationIds } from './delegationStore.js';
+import { delegationExcludeSet } from './delegationStore.js';
 
 // ── Polling ──────────────────────────────────────────────────
 
@@ -99,6 +99,25 @@ export function runAutoPickupNow(ctx: ServerContext): void {
  * registry) is never re-classified. Qualification is strictly one-at-a-time —
  * Darryl is a singleton and we only ever hand him a single ticket per cycle.
  */
+/**
+ * Index the current ticket cache by id → connector date_updated (epoch ms).
+ * Used to decide whether a pending delegation's ticket changed since it was
+ * last evaluated.
+ */
+function buildTicketUpdatedAtLookup(
+	clickupTickets: ClickUpStatusGroup[],
+): (ticketId: string) => number | undefined {
+	const byId = new Map<string, number>();
+	for (const group of clickupTickets) {
+		for (const task of group.tasks) {
+			const raw = (task as { dateUpdated?: string }).dateUpdated;
+			const n = raw != null ? Number(raw) : NaN;
+			if (Number.isFinite(n)) byId.set(task.id, n);
+		}
+	}
+	return (ticketId: string) => byId.get(ticketId);
+}
+
 export function autoJasperClassifyPickup(ctx: ServerContext): void {
 	if (ctx.isWorkerMode) return;
 	if (!getAutoModeEnabled()) return;
@@ -109,7 +128,10 @@ export function autoJasperClassifyPickup(ctx: ServerContext): void {
 	if (darryl?.currentSessionId) return;
 
 	// Exclude tickets already classified (awaiting confirmation) or in flight.
-	const exclude = pendingDelegationIds(ctx.delegationStore);
+	// A pending recommendation whose ticket was UPDATED since Darryl evaluated it
+	// is dropped from the exclude set so it gets re-classified (fresh info).
+	const liveUpdatedAt = buildTicketUpdatedAtLookup(ctx.clickupTickets);
+	const exclude = delegationExcludeSet(ctx.delegationStore, liveUpdatedAt);
 	for (const id of claimedTicketIds(ctx.dispatchRegistry)) exclude.add(id);
 
 	const candidates = selectJasperClassifyPickups(ctx.clickupTickets, exclude, AUTO_MODE_ASSIGNEE_USERNAME);

@@ -15,6 +15,7 @@ interface GitHubIssue {
 	assignees: Array<{ login: string }>;
 	labels: Array<{ name: string; color: string }>;
 	user: { login: string };
+	updated_at?: string; // ISO 8601
 	pull_request?: unknown; // present on PRs — we filter them out
 }
 
@@ -127,6 +128,7 @@ class GitHubConnector implements ProjectConnector {
 				assignees: issue.assignees.map(a => ({ username: a.login })),
 				priority: null,
 				parent: null,
+				dateUpdated: issue.updated_at ? String(Date.parse(issue.updated_at)) : undefined,
 			};
 			let group = groups.get(status.status);
 			if (!group) {

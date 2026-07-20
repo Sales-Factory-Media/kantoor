@@ -8,6 +8,8 @@ export interface ClickUpTask {
 	url: string;
 	priority: { id: string } | null;
 	parent: string | null;
+	/** ClickUp date_updated — epoch ms as a string. */
+	dateUpdated?: string;
 }
 
 export interface ClickUpStatusGroup {
@@ -76,6 +78,7 @@ type ClickUpTaskApi = {
 	url: string;
 	priority: { id: string } | null;
 	parent: string | null;
+	date_updated?: string;
 };
 
 export async function fetchListTasks(config: ClickUpConfig): Promise<ClickUpStatusGroup[]> {
@@ -116,6 +119,7 @@ export async function fetchListTasks(config: ClickUpConfig): Promise<ClickUpStat
 			url: task.url,
 			priority: task.priority,
 			parent: task.parent || null,
+			dateUpdated: task.date_updated,
 		});
 	}
 
