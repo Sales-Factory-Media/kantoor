@@ -316,8 +316,10 @@ export function handleAgentConversationHistory(msg: Record<string, unknown>, ctx
   const entries = msg.entries as ConversationEntry[]
   ctx.setAgentConversation((prev) => {
     const existing = prev[id] || []
-    const merged = [...existing, ...entries]
-    return { ...prev, [id]: merged.length > CONVERSATION_MAX_ENTRIES ? merged.slice(-CONVERSATION_MAX_ENTRIES) : merged }
+    // Only load history if we don't already have entries for this agent —
+    // otherwise history arriving after live streaming duplicates messages.
+    if (existing.length > 0) return prev
+    return { ...prev, [id]: entries.slice(-CONVERSATION_MAX_ENTRIES) }
   })
 }
 

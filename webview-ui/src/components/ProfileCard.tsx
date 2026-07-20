@@ -245,7 +245,10 @@ export function ProfileCard({ character: ch, tasks, onGoTo, onReassign, onStartJ
                         cursor: 'pointer',
                       }}
                     >
-                      <span style={{ width: 8, height: 8, borderRadius: '50%', background: st.color, flexShrink: 0 }} />
+                      <span
+                        className={t.status === 'waiting' ? 'pixel-agents-waiting-glow' : undefined}
+                        style={{ width: 8, height: 8, borderRadius: '50%', background: st.color, flexShrink: 0 }}
+                      />
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <div
                           style={{ fontSize: '15px', color: INK, lineHeight: 1.3, wordBreak: 'break-word', overflowWrap: 'anywhere' }}

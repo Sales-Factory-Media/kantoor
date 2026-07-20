@@ -103,6 +103,17 @@ function App() {
           50% { opacity: 0.3; }
         }
         .pixel-agents-pulse { animation: pixel-agents-pulse ${PULSE_ANIMATION_DURATION_SEC}s ease-in-out infinite; }
+        /* "Waiting for input" dot: bright white core fading radially out to the
+           deep blue (#0313A6), with a pulsating blue glow. The gradient uses
+           !important to override the inline solid background at every dot site. */
+        @keyframes pixel-agents-waiting-glow {
+          0%, 100% { box-shadow: 0 0 3px 1px rgba(3, 19, 166, 0.55); }
+          50%      { box-shadow: 0 0 9px 3px rgba(60, 90, 255, 0.95); }
+        }
+        .pixel-agents-waiting-glow {
+          background: radial-gradient(circle at 50% 42%, #ffffff 0%, #6f7cff 42%, #0313A6 100%) !important;
+          animation: pixel-agents-waiting-glow 1.6s ease-in-out infinite;
+        }
       `}</style>
 
       {/* CRT barrel-distortion filter — referenced by EmployeeAvatar via

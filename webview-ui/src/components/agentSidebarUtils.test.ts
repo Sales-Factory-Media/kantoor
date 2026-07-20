@@ -178,12 +178,19 @@ describe('groupByRoom', () => {
     expect(result.get('myproj')?.workspacePath).toBe('/home/user/myproj');
   });
 
-  it('marks special rooms from officeState', () => {
+  it('marks Foreman/Art Director as special and drops decorative rooms', () => {
     const rooms = [
       { projectName: 'Conference', isConferenceRoom: true },
+      { projectName: 'Foreman', isForeman: true },
+      { projectName: 'Art Director', isArtDirector: true },
     ];
     const result = groupByRoom([], makeOfficeState(new Map(), rooms), [], []);
-    expect(result.get('Conference')?.isSpecialRoom).toBe(true);
+    // Decorative pixel-office rooms (conference/garage/kitchen) are dropped
+    // from the flat-layout sidebar.
+    expect(result.has('Conference')).toBe(false);
+    // Foreman + Art Director survive as special — their rows open those panels.
+    expect(result.get('Foreman')?.isSpecialRoom).toBe(true);
+    expect(result.get('Art Director')?.isSpecialRoom).toBe(true);
   });
 
   it('hides agents whose project is not in the active building (multi-building filter)', () => {

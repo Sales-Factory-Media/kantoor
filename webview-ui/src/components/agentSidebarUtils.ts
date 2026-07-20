@@ -55,7 +55,7 @@ export function getDotInfo(
   agentTools: Record<number, ToolActivity[]>,
   agentStatuses: Record<number, string>,
   isActive: boolean,
-): { color: string; pulse: boolean } | null {
+): { color: string; pulse: boolean; waiting?: boolean } | null {
   const tools = agentTools[agentId]
   const hasPermission = tools?.some((t) => t.permissionWait && !t.done)
   const hasActiveTools = tools?.some((t) => !t.done)
@@ -65,7 +65,9 @@ export function getDotInfo(
     return { color: 'var(--pixel-status-permission)', pulse: true }
   }
   if (status === 'waiting') {
-    return { color: 'var(--pixel-status-waiting)', pulse: false }
+    // Deep-blue pulsating glow instead of the opacity pulse (see
+    // .pixel-agents-waiting-glow) to flag "waiting for input".
+    return { color: 'var(--pixel-status-waiting)', pulse: false, waiting: true }
   }
   if (isActive && hasActiveTools) {
     return { color: 'var(--pixel-status-active)', pulse: false }

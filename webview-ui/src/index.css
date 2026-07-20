@@ -55,13 +55,17 @@
   --pixel-hint-bg: var(--t86-orange);
   --pixel-reset-text: var(--t86-amber);
   --pixel-danger-bg: #b0241a;
+  /* Danger foreground (banner border + "Launch failed" text) — theme red. */
+  --pixel-danger: var(--t86-red);
 
   /* Vignette — retired in the flat layout */
   --pixel-vignette: none;
 
-  /* Status dot colors (kept semantically distinct, all warm) */
+  /* Status dot colors (kept semantically distinct) */
   --pixel-status-permission: var(--t86-red);
-  --pixel-status-waiting: var(--t86-amber);
+  /* "Waiting for input" is deep blue with a pulsating glow (see
+     .pixel-agents-waiting-glow) — keep the glow rgba in sync with this. */
+  --pixel-status-waiting: #0313A6;
   --pixel-status-active: var(--t86-orange);
 
   /* z-index layers */

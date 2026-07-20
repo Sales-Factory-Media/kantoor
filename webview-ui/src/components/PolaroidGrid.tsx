@@ -343,13 +343,13 @@ export function PolaroidGrid({ officeState, agents, agentStatuses, knownProjects
                         }}
                       >
                         <span
+                          className={status === 'waiting' ? 'pixel-agents-waiting-glow' : undefined}
                           style={{
                             width: 10,
                             height: 10,
                             marginTop: 3,
                             borderRadius: '50%',
                             background: taskDotColor(status),
-                            border: `1px solid ${EDGE}`,
                             flexShrink: 0,
                           }}
                         />

@@ -197,11 +197,22 @@ describe('conversation + identity', () => {
     expect(next[1]).toHaveLength(1)
   })
 
-  it('agentConversationHistory appends entries', () => {
+  it('agentConversationHistory loads history when the agent has no entries yet', () => {
     const { ctx } = makeCtx()
     handleAgentConversationHistory({ type: 'agentConversationHistory', id: 1, entries: [{ role: 'user', text: 'hi' }] }, ctx)
     const next = resolveSet(ctx.setAgentConversation, {} as Record<number, unknown[]>)
     expect(next[1]).toHaveLength(1)
+  })
+
+  it('agentConversationHistory is a no-op when entries already exist (no duplication)', () => {
+    const { ctx } = makeCtx()
+    handleAgentConversationHistory({ type: 'agentConversationHistory', id: 1, entries: [{ role: 'user', text: 'history' }] }, ctx)
+    // Live entries already present → history must NOT append/duplicate.
+    const prev = { 1: [{ role: 'user', text: 'live' }] } as Record<number, unknown[]>
+    const next = resolveSet(ctx.setAgentConversation, prev)
+    expect(next).toBe(prev)
+    expect(next[1]).toHaveLength(1)
+    expect(next[1][0]).toEqual({ role: 'user', text: 'live' })
   })
 
   it('agentIdentitySaved links persistentAgentId by session and applies fields', () => {
