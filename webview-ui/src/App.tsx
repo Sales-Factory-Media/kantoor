@@ -28,7 +28,7 @@ function getOfficeState(): OfficeState {
 }
 
 function App() {
-  const { agents, selectedAgent, selectAgent, agentTools, agentStatuses, subagentTools, layoutReady, offlineAgents, knownProjects, saveAgentMeta, forgetAgent, clickupTickets, clickupConfigured, clickupListId, clickupNextFetchAt, workers, organogram, janDesignConfig, buildings, activeBuildingId, projectMemberships, pendingWorkers, dismissPendingWorker, identityPrompt, dismissIdentityPrompt, autoMode, pendingDelegations } = useExtensionMessages(getOfficeState)
+  const { agents, selectedAgent, selectAgent, agentTools, agentStatuses, subagentTools, layoutReady, offlineAgents, knownProjects, saveAgentMeta, forgetAgent, clickupTickets, clickupConfigured, clickupListIds, clickupNextFetchAt, workers, organogram, janDesignConfig, buildings, activeBuildingId, projectMemberships, pendingWorkers, dismissPendingWorker, identityPrompt, dismissIdentityPrompt, autoMode, pendingDelegations } = useExtensionMessages(getOfficeState)
 
   const [isDebugMode, setIsDebugMode] = useState(false)
   const [foremanOpen, setForemanOpen] = useState(false)
@@ -81,6 +81,45 @@ function App() {
         .pixel-agents-pulse { animation: pixel-agents-pulse ${PULSE_ANIMATION_DURATION_SEC}s ease-in-out infinite; }
       `}</style>
 
+      {/* CRT barrel-distortion filter — referenced by EmployeeAvatar via
+          filter: url(#crt-barrel) to bulge the face/pixels like a curved tube.
+          The displacement map is an inline SVG: red encodes horizontal push
+          (0→left … 1→right), green vertical, so pixels spread outward from the
+          centre = a magnifying screen bulge. */}
+      <svg width="0" height="0" style={{ position: 'absolute' }} aria-hidden>
+        <filter id="crt-barrel" x="0" y="0" width="100%" height="100%" colorInterpolationFilters="sRGB">
+          <feImage
+            preserveAspectRatio="none"
+            x="0"
+            y="0"
+            width="100%"
+            height="100%"
+            result="map"
+            href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='100' height='100'%3E%3Cdefs%3E%3ClinearGradient id='rx' x1='0' y1='0' x2='1' y2='0'%3E%3Cstop offset='0' stop-color='%23000'/%3E%3Cstop offset='1' stop-color='%23f00'/%3E%3C/linearGradient%3E%3ClinearGradient id='gy' x1='0' y1='0' x2='0' y2='1'%3E%3Cstop offset='0' stop-color='%23000'/%3E%3Cstop offset='1' stop-color='%230f0'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='100' height='100' fill='url(%23rx)'/%3E%3Crect width='100' height='100' fill='url(%23gy)' style='mix-blend-mode:screen'/%3E%3C/svg%3E"
+          />
+          <feDisplacementMap in="SourceGraphic" in2="map" scale="10" xChannelSelector="R" yChannelSelector="G" />
+        </filter>
+
+        {/* Constant TV snow — fractal-noise static whose seed regenerates every
+            frame (SMIL animate) so it churns like an untuned old TV. Referenced
+            by EmployeeAvatar's snow overlay via filter: url(#crt-snow). */}
+        <filter id="crt-snow" x="0" y="0" width="100%" height="100%" colorInterpolationFilters="sRGB">
+          <feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="2" stitchTiles="stitch" seed="1" result="noise">
+            <animate
+              attributeName="seed"
+              values="1;5;2;8;3;9;4;7;6;10"
+              dur="0.5s"
+              calcMode="discrete"
+              repeatCount="indefinite"
+            />
+          </feTurbulence>
+          <feColorMatrix in="noise" type="saturate" values="0" result="gray" />
+          <feComponentTransfer in="gray">
+            <feFuncA type="linear" slope="1.6" intercept="-0.25" />
+          </feComponentTransfer>
+        </filter>
+      </svg>
+
       <TopBar
         buildings={buildings}
         activeBuildingId={activeBuildingId}
@@ -92,6 +131,8 @@ function App() {
         onOpenDelegations={() => setShowDelegationModal(true)}
         isDebugMode={isDebugMode}
         onToggleDebugMode={handleToggleDebugMode}
+        clickupConfigured={clickupConfigured}
+        clickupListIds={clickupListIds}
       />
 
       {/* Body: fixed employees sidebar + scrollable polaroid grid */}
@@ -142,7 +183,6 @@ function App() {
           onClose={() => setForemanOpen(false)}
           clickupTickets={clickupTickets}
           clickupConfigured={clickupConfigured}
-          clickupListId={clickupListId}
           offlineAgents={offlineAgents}
           officeState={officeState}
           agents={agents}
@@ -157,7 +197,6 @@ function App() {
           onClose={() => setArtDirectorOpen(false)}
           clickupTickets={clickupTickets}
           clickupConfigured={clickupConfigured}
-          clickupListId={clickupListId}
           offlineAgents={offlineAgents}
           officeState={officeState}
           agents={agents}

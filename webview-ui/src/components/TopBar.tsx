@@ -15,6 +15,8 @@ interface TopBarProps {
   onOpenDelegations: () => void
   isDebugMode: boolean
   onToggleDebugMode: () => void
+  clickupConfigured: boolean
+  clickupListIds: string[]
 }
 
 /**
@@ -34,6 +36,8 @@ export function TopBar({
   onOpenDelegations,
   isDebugMode,
   onToggleDebugMode,
+  clickupConfigured,
+  clickupListIds,
 }: TopBarProps) {
   const [settingsOpen, setSettingsOpen] = useState(false)
 
@@ -103,6 +107,8 @@ export function TopBar({
           onClose={() => setSettingsOpen(false)}
           isDebugMode={isDebugMode}
           onToggleDebugMode={onToggleDebugMode}
+          clickupConfigured={clickupConfigured}
+          clickupListIds={clickupListIds}
         />
       </div>
     </header>

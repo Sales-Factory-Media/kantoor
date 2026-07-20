@@ -17,7 +17,7 @@ import {
 	buildJanSystemPrompt,
 } from './systemPrompts.js';
 import { getJanDesignConfig, getAutoModeEnabled } from './agentHandlers.js';
-import type { ClickUpConfig, ClickUpStatusGroup } from '../src/connectors/clickupClient.js';
+import { normalizeListIds, type ClickUpConfig, type ClickUpStatusGroup } from '../src/connectors/clickupClient.js';
 import type { ServerContext } from './serverContext.js';
 import {
 	getActiveBuildingConnectorConfig,
@@ -310,15 +310,23 @@ export function autoJanPickup(ctx: ServerContext): void {
 
 export async function handleClickupConfigure(msg: Record<string, unknown>, ctx: ServerContext): Promise<void> {
 	const apiToken = msg.apiToken as string | undefined;
-	const listId = msg.listId as string | undefined;
+	// New shape: listIds: string[]. Accept the legacy single listId too.
+	const rawListIds = Array.isArray(msg.listIds)
+		? (msg.listIds as unknown[])
+		: (typeof msg.listId === 'string' ? [msg.listId] : undefined);
 
 	const patch: Record<string, unknown> = {};
 	if (apiToken !== undefined) patch.apiToken = apiToken;
-	if (listId !== undefined) patch.listId = listId;
+	if (rawListIds !== undefined) {
+		patch.listIds = rawListIds;
+		// Clear the legacy single-list key so a stale value can't linger and get
+		// re-merged by normalizeListIds. (undefined is dropped on JSONB write.)
+		patch.listId = undefined;
+	}
 
 	const merged = await patchActiveBuildingConnectorConfig(patch);
 	const mergedToken = merged.apiToken as string | undefined;
-	const mergedListId = merged.listId as string | undefined;
+	const mergedListIds = normalizeListIds(merged);
 
 	// Rebuild the connector from the patched config so polling sees the change.
 	const { connectorForBuilding } = await import('../src/connectors/registry.js');
@@ -328,15 +336,15 @@ export async function handleClickupConfigure(msg: Record<string, unknown>, ctx: 
 		ctx.connector = connectorForBuilding(refreshed);
 	}
 
-	if (!mergedToken || !mergedListId) {
+	if (!mergedToken || mergedListIds.length === 0) {
 		ctx.clickupConfig = null;
-		ctx.broadcastSink.postMessage({ type: 'clickupConfigured', configured: false });
+		ctx.broadcastSink.postMessage({ type: 'clickupConfigured', configured: false, listIds: [] });
 		return;
 	}
 
-	const config: ClickUpConfig = { apiToken: mergedToken, listId: mergedListId };
+	const config: ClickUpConfig = { apiToken: mergedToken, listIds: mergedListIds };
 	ctx.clickupConfig = config;
-	ctx.broadcastSink.postMessage({ type: 'clickupConfigured', configured: true, listId: config.listId });
+	ctx.broadcastSink.postMessage({ type: 'clickupConfigured', configured: true, listIds: config.listIds });
 
 	startClickupPolling(ctx);
 	handleClickupRefresh(ctx).catch(() => {});
@@ -350,9 +358,9 @@ export async function handleClickupConfigure(msg: Record<string, unknown>, ctx: 
 export async function loadActiveClickupConfig(): Promise<ClickUpConfig | null> {
 	const cfg = await getActiveBuildingConnectorConfig();
 	const apiToken = cfg.apiToken as string | undefined;
-	const listId = cfg.listId as string | undefined;
-	if (!apiToken || !listId) return null;
-	return { apiToken, listId };
+	const listIds = normalizeListIds(cfg);
+	if (!apiToken || listIds.length === 0) return null;
+	return { apiToken, listIds };
 }
 
 // ── Jan single-ticket design briefing (legacy webview message) ──

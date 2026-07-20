@@ -99,28 +99,23 @@ html, body, #root {
   animation: pixel-spin 1s linear infinite;
 }
 
-/* 90s sci-fi videophone: drifting static grain + signal flicker, used on
-   employee avatars (see EmployeeAvatar.tsx). The flicker dips are INSTANT
-   (1%-wide bands → abrupt jumps under linear timing) and fire at irregular
-   points in the cycle; each avatar gets a random duration + phase in JS so
-   no two feeds flicker in sync. */
-@keyframes crt-static {
-  0%   { background-position: 0 0; }
-  100% { background-position: -34px 52px; }
+/* 90s sci-fi videophone (employee avatars, see EmployeeAvatar.tsx): the
+   constant TV snow is an animated SVG turbulence filter (#crt-snow, defined in
+   App.tsx); the occasional per-avatar signal blip is crt-signal below. */
+
+/* Dashboard-style "equalizer" bars — each bar dances up and down. Applied per
+   bar with a staggered delay/duration so they ripple (see ActivityBars.tsx). */
+@keyframes eq-bounce {
+  0%, 100% { transform: scaleY(0.28); }
+  50%      { transform: scaleY(1); }
 }
-@keyframes crt-flicker {
-  0%   { opacity: 0.5; }
-  11%  { opacity: 0.5; }
-  12%  { opacity: 0.18; }
-  13%  { opacity: 0.5; }
-  36%  { opacity: 0.5; }
-  37%  { opacity: 0.30; }
-  38%  { opacity: 0.5; }
-  63%  { opacity: 0.5; }
-  64%  { opacity: 0.12; }
-  66%  { opacity: 0.5; }
-  89%  { opacity: 0.5; }
-  90%  { opacity: 0.34; }
-  91%  { opacity: 0.5; }
-  100% { opacity: 0.5; }
+
+/* Occasional "signal dip" flash on a videophone feed — mostly invisible, with a
+   quick double-blink once per (random, per-avatar) cycle. See EmployeeAvatar. */
+@keyframes crt-signal {
+  0%, 100% { opacity: 0; }
+  1.5%     { opacity: 0.42; }
+  2.2%     { opacity: 0.06; }
+  2.9%     { opacity: 0.30; }
+  3.6%     { opacity: 0; }
 }

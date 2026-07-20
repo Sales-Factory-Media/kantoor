@@ -277,7 +277,7 @@ function handleWebviewReady(ws: WebSocket, ctx: ServerContext): void {
 	agentManager.sendAgentStatuses(wsSink);
 
 	// Send ClickUp state
-	ws.send(JSON.stringify({ type: 'clickupConfigured', configured: !!ctx.clickupConfig, listId: ctx.clickupConfig?.listId }));
+	ws.send(JSON.stringify({ type: 'clickupConfigured', configured: !!ctx.clickupConfig, listIds: ctx.clickupConfig?.listIds ?? [] }));
 	if (ctx.clickupTickets.length > 0) {
 		ws.send(JSON.stringify({ type: 'clickupTickets', statuses: ctx.clickupTickets, nextFetchAt: ctx.clickupNextFetchAt }));
 	}

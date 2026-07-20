@@ -93,12 +93,12 @@ function isOrgWideWorkspace(workspacePath: string | undefined): boolean {
  *
  *  Only projects in `knownProjects` (the active building's membership) are
  *  shown. Agents whose workspacePath isn't in that allowed set are skipped —
- *  their project belongs to another building. Special rooms (conference,
- *  garage, Foreman, Art Director, fillers) always show regardless of
- *  workspace path because they're not project-scoped. Org-wide agents
- *  (Jan, QAs, designers — workspace = kantoor-workspace) bypass the filter
- *  for the same reason: they're staff of every building, not tied to one
- *  building's project list.
+ *  their project belongs to another building. The old office-metaphor rooms
+ *  (conference, garage, kitchen/filler) are dropped entirely; only Foreman
+ *  and Art Director survive as special rooms (their rows open the panels).
+ *  Org-wide agents (Jan, QAs, designers — workspace = kantoor-workspace)
+ *  bypass the building filter because they're staff of every building, not
+ *  tied to one building's project list.
  */
 export function groupByRoom(
   agents: number[],
@@ -123,11 +123,16 @@ export function groupByRoom(
     allowedNames.add(kp.name)
   }
 
-  // Seed with special rooms from officeState. Skip non-special rooms whose
-  // projectName isn't in the active building — they'll only resurface if
-  // the user re-ticks the project.
+  // Seed with special rooms from officeState. The old pixel-office metaphor
+  // rooms (conference, garage, kitchen/filler) are dropped entirely in the
+  // flat layout — they were decorative locations, not real staffing rooms.
+  // Only Foreman and Art Director survive as "special" because their sidebar
+  // rows are the entry points that open those panels. Skip non-special rooms
+  // whose projectName isn't in the active building — they'll only resurface
+  // if the user re-ticks the project.
   for (const room of officeState.rooms) {
-    const isSpecial = !!(room.isConferenceRoom || room.isGarage || room.isForeman || room.isArtDirector || room.isFiller)
+    if (room.isConferenceRoom || room.isGarage || room.isFiller) continue
+    const isSpecial = !!(room.isForeman || room.isArtDirector)
     if (!isSpecial && !allowedNames.has(room.projectName)) continue
     const g = ensure(room.projectName)
     if (isSpecial) g.isSpecialRoom = true

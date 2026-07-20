@@ -9,8 +9,11 @@ export const TEXT_IDLE_DELAY_MS = 5000;
 // ── Display Truncation ──────────────────────────────────────
 export const BASH_COMMAND_DISPLAY_MAX_LENGTH = 30;
 export const TASK_DESCRIPTION_DISPLAY_MAX_LENGTH = 40;
-/** Max length of the per-session task title shown on an employee's ID card. */
-export const SESSION_TASK_TITLE_MAX_LENGTH = 100;
+/** Safety bound on the per-session task title (the agent's opening prompt).
+ *  The employee cards wrap and grow to fit the full text, so this is only a
+ *  runaway guard against a pathologically long paste — realistic task prompts
+ *  are shown in full. */
+export const SESSION_TASK_TITLE_MAX_LENGTH = 1200;
 /** Bytes read from the head of a JSONL to find the session's opening prompt. */
 export const SESSION_TASK_TITLE_SCAN_BYTES = 65536;
 

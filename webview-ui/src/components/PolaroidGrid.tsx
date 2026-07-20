@@ -1,10 +1,84 @@
-import { useState } from 'react'
+import { useState, useRef, useLayoutEffect } from 'react'
 import type { OfficeState } from '../office/engine/officeState.js'
 import type { Character } from '../office/types.js'
 import { vscode } from '../vscodeApi.js'
 import { EmployeeAvatar } from './EmployeeAvatar.js'
 import { ProfileCard } from './ProfileCard.js'
 import { EmployeeFile } from './EmployeeFile.js'
+import { ActivityBars } from './ActivityBars.js'
+
+/** True while a task is actively working (not waiting/permission). */
+function isWorking(status: string | undefined): boolean {
+  return status !== 'permission' && status !== 'waiting'
+}
+
+/** How many lines of task text to show before the "More" toggle appears. */
+const TASK_CLAMP_LINES = 4
+
+/**
+ * Task text clamped to a few lines with a clickable More/Less toggle. The
+ * toggle only appears when the text actually overflows the clamp (measured via
+ * a ResizeObserver so it re-checks as the card width changes).
+ */
+function TaskText({ text, tooltip }: { text: string; tooltip?: string }) {
+  const ref = useRef<HTMLDivElement>(null)
+  const [expanded, setExpanded] = useState(false)
+  const [overflowing, setOverflowing] = useState(false)
+
+  useLayoutEffect(() => {
+    const el = ref.current
+    if (!el || expanded) return
+    const measure = () => setOverflowing(el.scrollHeight > el.clientHeight + 1)
+    measure()
+    const ro = new ResizeObserver(measure)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [text, expanded])
+
+  return (
+    <>
+      <div
+        ref={ref}
+        title={tooltip}
+        style={{
+          fontSize: 16,
+          color: 'var(--pixel-text)',
+          lineHeight: 1.3,
+          wordBreak: 'break-word',
+          overflowWrap: 'anywhere',
+          ...(expanded
+            ? {}
+            : {
+                display: '-webkit-box',
+                WebkitBoxOrient: 'vertical',
+                WebkitLineClamp: TASK_CLAMP_LINES,
+                overflow: 'hidden',
+              }),
+        }}
+      >
+        {text}
+      </div>
+      {(overflowing || expanded) && (
+        <button
+          onClick={(e) => { e.stopPropagation(); setExpanded((v) => !v) }}
+          style={{
+            marginTop: 3,
+            padding: 0,
+            background: 'none',
+            border: 'none',
+            color: 'var(--pixel-accent)',
+            fontFamily: 'inherit',
+            fontSize: 13,
+            fontWeight: 'bold',
+            cursor: 'pointer',
+          }}
+        >
+          {expanded ? '▴ Less' : '▾ More'}
+        </button>
+      )}
+    </>
+  )
+}
 
 interface PolaroidGridProps {
   officeState: OfficeState
@@ -120,7 +194,10 @@ export function PolaroidGrid({ officeState, agents, agentStatuses, onSelect }: P
     <div
       style={{
         display: 'grid',
-        gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))',
+        // auto-FIT (not auto-fill) collapses empty phantom tracks so the real
+        // cards stretch to fill the full row width instead of hugging a 320px
+        // minimum with dead space on the right.
+        gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))',
         gap: 16,
         padding: 16,
         alignItems: 'start',
@@ -131,6 +208,8 @@ export function PolaroidGrid({ officeState, agents, agentStatuses, onSelect }: P
         const project = ch.projectName || ch.folderName
         const persistentAgentId = ch.persistentAgentId
         const isComposing = composingKey === key
+        // Any of this employee's concurrent tasks actively working?
+        const anyWorking = members.some((m) => isWorking(agentStatuses[m.id]))
         return (
           <div
             key={key}
@@ -150,7 +229,7 @@ export function PolaroidGrid({ officeState, agents, agentStatuses, onSelect }: P
               <button
                 onClick={() => setProfileKey(key)}
                 title="Open employee card"
-                style={{ padding: 0, border: 'none', background: 'none', cursor: 'pointer', flexShrink: 0, lineHeight: 0 }}
+                style={{ position: 'relative', padding: 0, border: 'none', background: 'none', cursor: 'pointer', flexShrink: 0, lineHeight: 0 }}
               >
                 <EmployeeAvatar
                   id={persistentAgentId || ch.sessionId}
@@ -159,6 +238,28 @@ export function PolaroidGrid({ officeState, agents, agentStatuses, onSelect }: P
                   size={PHOTO_SIZE}
                   style={{ border: `2px solid ${EDGE}` }}
                 />
+                {/* Live "working" indicator — an equalizer badge on the feed
+                    while any of this employee's tasks is active. */}
+                {anyWorking && (
+                  <span
+                    style={{
+                      position: 'absolute',
+                      left: 4,
+                      bottom: 4,
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 4,
+                      padding: '2px 5px',
+                      background: 'rgba(12, 7, 8, 0.72)',
+                      border: `1px solid ${EDGE}`,
+                    }}
+                  >
+                    <ActivityBars height={11} />
+                    <span style={{ fontSize: 11, color: 'var(--pixel-accent)', fontWeight: 'bold', letterSpacing: '0.04em' }}>
+                      LIVE
+                    </span>
+                  </span>
+                )}
               </button>
 
               <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 2 }}>
@@ -202,27 +303,28 @@ export function PolaroidGrid({ officeState, agents, agentStatuses, onSelect }: P
                         background: INSET,
                       }}
                     >
-                      <button
+                      <div
                         onClick={() => onSelect(m.id)}
+                        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelect(m.id) } }}
+                        role="button"
+                        tabIndex={0}
                         title="Go to this tab"
                         style={{
                           display: 'flex',
-                          alignItems: 'center',
+                          alignItems: 'flex-start',
                           gap: 8,
                           padding: '8px 10px',
                           flex: 1,
                           minWidth: 0,
                           textAlign: 'left',
-                          border: 'none',
-                          background: 'none',
                           cursor: 'pointer',
-                          font: 'inherit',
                         }}
                       >
                         <span
                           style={{
                             width: 10,
                             height: 10,
+                            marginTop: 3,
                             borderRadius: '50%',
                             background: taskDotColor(status),
                             border: `1px solid ${EDGE}`,
@@ -230,15 +332,13 @@ export function PolaroidGrid({ officeState, agents, agentStatuses, onSelect }: P
                           }}
                         />
                         <div style={{ flex: 1, minWidth: 0 }}>
-                          <div
-                            style={{ fontSize: 16, color: INK, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
-                            title={m.taskTitle || undefined}
-                          >
-                            {label}
+                          <TaskText text={label} tooltip={m.taskTitle || undefined} />
+                          <div style={{ fontSize: 13, color: INK_DIM, display: 'flex', alignItems: 'center', marginTop: 2 }}>
+                            {isWorking(status) && <ActivityBars height={10} />}
+                            {taskStatusFallback(status)}
                           </div>
-                          <div style={{ fontSize: 13, color: INK_DIM }}>{taskStatusFallback(status)}</div>
                         </div>
-                      </button>
+                      </div>
                       {m.sessionId && (
                         <button
                           onClick={() => vscode.postMessage({ type: 'reassignTask', sessionId: m.sessionId })}

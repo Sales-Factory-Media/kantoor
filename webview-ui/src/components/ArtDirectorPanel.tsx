@@ -11,7 +11,6 @@ interface ArtDirectorPanelProps {
   onClose: () => void
   clickupTickets: ClickUpStatusGroup[]
   clickupConfigured: boolean
-  clickupListId: string | null
   offlineAgents: OfflineAgent[]
   officeState: OfficeState
   agents: number[]
@@ -680,7 +679,7 @@ export function ArtDirectorPanel({
             </div>
           ) : !clickupConfigured ? (
             <div style={{ padding: '12px 8px', fontSize: '18px', color: 'var(--pixel-text-dim)' }}>
-              ClickUp not configured. Set it up in Darryl's Office first.
+              ClickUp not configured. Set it up in Settings (gear, top-right) first.
             </div>
           ) : clickupTickets.length === 0 ? (
             <div style={{ padding: '12px 8px', fontSize: '18px', color: 'var(--pixel-text-dim)' }}>

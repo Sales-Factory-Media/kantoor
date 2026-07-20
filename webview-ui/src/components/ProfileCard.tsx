@@ -2,6 +2,7 @@ import { useState } from 'react'
 import type { Character } from '../office/types.js'
 import { EmployeeAvatar } from './EmployeeAvatar.js'
 import { timeAgo } from './agentSidebarUtils.js'
+import { ActivityBars } from './ActivityBars.js'
 
 /** One running task (= one live session / iTerm tab) for this employee. */
 export interface ProfileTask {
@@ -241,12 +242,15 @@ export function ProfileCard({ character: ch, tasks, onGoTo, onReassign, onStartJ
                       <span style={{ width: 8, height: 8, borderRadius: '50%', background: st.color, flexShrink: 0 }} />
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <div
-                          style={{ fontSize: '15px', color: INK, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                          style={{ fontSize: '15px', color: INK, lineHeight: 1.3, wordBreak: 'break-word', overflowWrap: 'anywhere' }}
                           title={t.title || undefined}
                         >
                           {t.title || `Tab ${i + 1}`}
                         </div>
-                        <div style={{ fontSize: '13px', color: INK_DIM }}>{st.text}</div>
+                        <div style={{ fontSize: '13px', color: INK_DIM, display: 'flex', alignItems: 'center' }}>
+                          {t.status !== 'permission' && t.status !== 'waiting' && <ActivityBars height={10} />}
+                          {st.text}
+                        </div>
                       </div>
                     </button>
                     {onReassign && t.sessionId && (

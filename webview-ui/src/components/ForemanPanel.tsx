@@ -11,7 +11,6 @@ interface ForemanPanelProps {
   onClose: () => void
   clickupTickets: ClickUpStatusGroup[]
   clickupConfigured: boolean
-  clickupListId: string | null
   offlineAgents: OfflineAgent[]
   officeState: OfficeState
   agents: number[]
@@ -158,95 +157,6 @@ function WorkerPicker({
           additionalPrompt={additionalPrompt.trim() || undefined}
           onTicketAssigned={onClose}
         />
-      </div>
-    </div>
-  )
-}
-
-function ConfigurePanel({ onDone, isUpdate, initialListId }: { onDone: () => void; isUpdate?: boolean; initialListId?: string }) {
-  const [apiToken, setApiToken] = useState('')
-  const [listId, setListId] = useState(initialListId ?? '')
-
-  const canSave = listId && (apiToken || isUpdate)
-
-  const handleSave = () => {
-    if (!canSave) return
-    vscode.postMessage({ type: 'clickupConfigure', apiToken: apiToken || undefined, listId })
-    onDone()
-  }
-
-  const inputStyle: React.CSSProperties = {
-    width: '100%',
-    padding: '4px 6px',
-    fontSize: '20px',
-    color: 'var(--pixel-text)',
-    background: 'var(--pixel-bg)',
-    border: '2px solid var(--pixel-border)',
-    borderRadius: 0,
-    outline: 'none',
-    boxSizing: 'border-box',
-  }
-
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: '8px 0' }}>
-      <div style={{ fontSize: '20px', color: 'var(--pixel-text)', fontWeight: 'bold' }}>
-        Configure ClickUp
-      </div>
-      <div>
-        <div style={{ fontSize: '18px', color: 'var(--pixel-text-dim)', marginBottom: 2 }}>
-          API Token
-        </div>
-        <input
-          style={inputStyle}
-          value={apiToken}
-          onChange={(e) => setApiToken(e.target.value)}
-          placeholder={isUpdate ? 'Leave blank to keep current' : 'pk_...'}
-          type="password"
-        />
-      </div>
-      <div>
-        <div style={{ fontSize: '18px', color: 'var(--pixel-text-dim)', marginBottom: 2 }}>
-          List ID
-        </div>
-        <input
-          style={inputStyle}
-          value={listId}
-          onChange={(e) => setListId(e.target.value)}
-          placeholder="901521570151"
-        />
-      </div>
-      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-        {isUpdate && (
-          <button
-            onClick={onDone}
-            style={{
-              padding: '6px 12px',
-              fontSize: '20px',
-              color: 'var(--pixel-text)',
-              background: 'var(--pixel-bg)',
-              border: '2px solid var(--pixel-border)',
-              borderRadius: 0,
-              cursor: 'pointer',
-            }}
-          >
-            Cancel
-          </button>
-        )}
-        <button
-          onClick={handleSave}
-          disabled={!canSave}
-          style={{
-            padding: '6px 12px',
-            fontSize: '20px',
-            color: 'var(--pixel-agent-text)',
-            background: !canSave ? 'var(--pixel-text-dim)' : 'var(--pixel-agent-bg)',
-            border: '2px solid var(--pixel-agent-border)',
-            borderRadius: 0,
-            cursor: !canSave ? 'default' : 'pointer',
-          }}
-        >
-          Save
-        </button>
       </div>
     </div>
   )
@@ -603,7 +513,6 @@ export function ForemanPanel({
   onClose,
   clickupTickets,
   clickupConfigured,
-  clickupListId,
   offlineAgents,
   officeState,
   agents,
@@ -614,7 +523,6 @@ export function ForemanPanel({
 }: ForemanPanelProps) {
   const [pickerTicket, setPickerTicket] = useState<{ id: string; name: string; url: string } | null>(null)
   const [collapsedStatuses, setCollapsedStatuses] = useState<Set<string>>(new Set())
-  const [showSettings, setShowSettings] = useState(false)
   const [otherTasksOpen, setOtherTasksOpen] = useState(false)
 
   if (!visible) return null
@@ -721,20 +629,6 @@ export function ForemanPanel({
               {'\u21BB'}
             </button>
             <button
-              onClick={() => setShowSettings((p) => !p)}
-              title="ClickUp settings"
-              style={{
-                background: 'none',
-                border: 'none',
-                color: showSettings ? 'var(--pixel-accent)' : 'var(--pixel-text-dim)',
-                fontSize: '18px',
-                cursor: 'pointer',
-                padding: '0 4px',
-              }}
-            >
-              {'\u2699'}
-            </button>
-            <button
               onClick={onClose}
               style={{
                 background: 'none',
@@ -757,9 +651,9 @@ export function ForemanPanel({
 
         {/* Content */}
         <div style={{ overflowY: 'auto', flex: 1, padding: '4px 0' }}>
-          {!clickupConfigured || showSettings ? (
-            <div style={{ padding: '0 8px' }}>
-              <ConfigurePanel onDone={() => setShowSettings(false)} isUpdate={clickupConfigured} initialListId={clickupListId ?? undefined} />
+          {!clickupConfigured ? (
+            <div style={{ padding: '12px 8px', fontSize: '18px', color: 'var(--pixel-text-dim)' }}>
+              ClickUp isn't configured. Open Settings (gear, top-right) to add your API token and lists.
             </div>
           ) : clickupTickets.length === 0 ? (
             <div style={{ padding: '12px 8px', fontSize: '18px', color: 'var(--pixel-text-dim)' }}>

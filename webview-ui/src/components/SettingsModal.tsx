@@ -1,12 +1,15 @@
 import { useState } from 'react'
 import { vscode, isStandalone } from '../vscodeApi.js'
 import { isSoundEnabled, setSoundEnabled } from '../notificationSound.js'
+import { ClickUpConfigForm } from './ClickUpConfig.js'
 
 interface SettingsModalProps {
   isOpen: boolean
   onClose: () => void
   isDebugMode: boolean
   onToggleDebugMode: () => void
+  clickupConfigured: boolean
+  clickupListIds: string[]
 }
 
 const menuItemBase: React.CSSProperties = {
@@ -24,9 +27,10 @@ const menuItemBase: React.CSSProperties = {
   textAlign: 'left',
 }
 
-export function SettingsModal({ isOpen, onClose, isDebugMode, onToggleDebugMode }: SettingsModalProps) {
+export function SettingsModal({ isOpen, onClose, isDebugMode, onToggleDebugMode, clickupConfigured, clickupListIds }: SettingsModalProps) {
   const [hovered, setHovered] = useState<string | null>(null)
   const [soundLocal, setSoundLocal] = useState(isSoundEnabled)
+  const [clickupOpen, setClickupOpen] = useState(false)
 
   if (!isOpen) return null
 
@@ -58,7 +62,7 @@ export function SettingsModal({ isOpen, onClose, isDebugMode, onToggleDebugMode 
           borderRadius: 0,
           padding: '4px',
           boxShadow: 'var(--pixel-shadow)',
-          minWidth: 200,
+          minWidth: clickupOpen ? 280 : 200,
         }}
       >
         {/* Header with title and X button */}
@@ -164,6 +168,29 @@ export function SettingsModal({ isOpen, onClose, isDebugMode, onToggleDebugMode 
             />
           )}
         </button>
+        <button
+          onClick={() => setClickupOpen((v) => !v)}
+          onMouseEnter={() => setHovered('clickup')}
+          onMouseLeave={() => setHovered(null)}
+          style={{
+            ...menuItemBase,
+            background: hovered === 'clickup' ? 'var(--pixel-btn-hover-bg)' : 'transparent',
+          }}
+        >
+          <span>ClickUp Connection</span>
+          <span style={{ fontSize: '18px', color: 'var(--pixel-text-dim)', flexShrink: 0 }}>
+            {clickupConfigured ? (clickupOpen ? '–' : 'Edit') : 'Set up'}
+          </span>
+        </button>
+        {clickupOpen && (
+          <div style={{ padding: '0 10px' }}>
+            <ClickUpConfigForm
+              isUpdate={clickupConfigured}
+              initialListIds={clickupListIds}
+              onDone={() => setClickupOpen(false)}
+            />
+          </div>
+        )}
       </div>
     </>
   )

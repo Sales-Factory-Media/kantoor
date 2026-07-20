@@ -24,6 +24,7 @@ import { initSeatStore, loadSeats } from '../src/db/seatStore.js';
 import { initWorkerAssignmentStore, loadWorkerAssignments } from '../src/db/workerAssignmentStore.js';
 import { initSessionHistoryStore } from '../src/db/sessionHistoryStore.js';
 import { connectorForBuilding } from '../src/connectors/registry.js';
+import { normalizeListIds } from '../src/connectors/clickupClient.js';
 import { stopClickupPolling, startClickupPolling, handleClickupRefresh } from './clickupHandlers.js';
 import { buildOrganogram } from './organogram.js';
 import { getOfflineAgents } from './serverHelpers.js';
@@ -112,8 +113,8 @@ export async function handleSwitchBuilding(msg: Record<string, unknown>, ctx: Se
 	// Reflect ClickUp config alias for legacy callers
 	const cfg = newBuilding.connectorConfig as Record<string, unknown>;
 	const apiToken = cfg.apiToken as string | undefined;
-	const listId = cfg.listId as string | undefined;
-	ctx.clickupConfig = (apiToken && listId) ? { apiToken, listId } : null;
+	const listIds = normalizeListIds(cfg);
+	ctx.clickupConfig = (apiToken && listIds.length > 0) ? { apiToken, listIds } : null;
 
 	// Broadcast new state to all webviews
 	ctx.broadcastSink.postMessage({
@@ -127,7 +128,7 @@ export async function handleSwitchBuilding(msg: Record<string, unknown>, ctx: Se
 	ctx.broadcastSink.postMessage({
 		type: 'clickupConfigured',
 		configured: !!(newConnector && newConnector.isConfigured()),
-		listId: ctx.clickupConfig?.listId,
+		listIds: ctx.clickupConfig?.listIds ?? [],
 	});
 	ctx.broadcastSink.postMessage({ type: 'clickupTickets', statuses: [], nextFetchAt: null });
 
@@ -265,8 +266,8 @@ export async function handleConfigureBuildingConnector(msg: Record<string, unkno
 	// Sync legacy clickupConfig alias for any callers that still read it.
 	if (refreshed.connectorType === 'clickup') {
 		const apiToken = merged.apiToken as string | undefined;
-		const listId = merged.listId as string | undefined;
-		ctx.clickupConfig = (apiToken && listId) ? { apiToken, listId } : null;
+		const listIds = normalizeListIds(merged);
+		ctx.clickupConfig = (apiToken && listIds.length > 0) ? { apiToken, listIds } : null;
 	} else {
 		ctx.clickupConfig = null;
 	}
