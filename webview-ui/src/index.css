@@ -1,47 +1,74 @@
 @import url('https://fonts.googleapis.com/css2?family=Open+Sans:wght@400;600;700&display=swap');
 
 :root {
-  --pixel-bg: #1e1e2e;
-  --pixel-border: #4a4a6a;
-  --pixel-border-light: #6a6a8a;
-  --pixel-accent: #5a8cff;
-  --pixel-green: #5ac88c;
-  --pixel-shadow: 2px 2px 0px #0a0a14;
+  /* "SUPER TERRAIN 86" palette — retro-terminal: near-black warm background,
+     neon orange-red outlines/text, amber-gold accent. Every surface/line/text
+     colour flows from these tokens so the theme stays consistent. */
 
-  /* Button base */
-  --pixel-text: rgba(255, 255, 255, 0.8);
-  --pixel-text-dim: rgba(255, 255, 255, 0.7);
-  --pixel-btn-bg: rgba(255, 255, 255, 0.08);
-  --pixel-btn-hover-bg: rgba(255, 255, 255, 0.15);
+  /* Raw palette (the source of truth) */
+  --t86-black: #0c0708;          /* page background */
+  --t86-panel: #17090b;          /* panel / card surface (a hair above black) */
+  --t86-raised: #210d0f;         /* inputs / inset rows */
+  --t86-orange: #ff5a1f;         /* neon orange — primary lines & borders */
+  --t86-orange-soft: rgba(255, 90, 31, 0.35);
+  --t86-flame: #ff8a4c;          /* readable orange text + primary-button fill */
+  --t86-flame-hi: #ffa066;       /* primary-button hover */
+  --t86-flame-dim: rgba(255, 138, 76, 0.55);
+  --t86-amber: #ffb020;          /* amber-gold accent (the logo colour) */
+  --t86-amber-hi: #ffc247;
+  --t86-red: #ff3b3b;            /* alerts / needs-attention */
+  --t86-ink: #1a0a00;            /* dark ink for text on amber fills */
+
+  /* Semantic mapping onto the app's existing token names */
+  --pixel-paper: var(--t86-black);   /* page / main content background */
+  --pixel-bg: var(--t86-panel);      /* panel + card surface */
+  --pixel-surface-2: var(--t86-raised);
+  --pixel-fg: var(--t86-flame);      /* foreground (used by BuildingSwitcher) */
+  --pixel-border: var(--t86-orange); /* neon edge */
+  --pixel-border-light: var(--t86-orange-soft);
+  --pixel-accent: var(--t86-amber);  /* amber highlight */
+  --pixel-green: var(--t86-amber);   /* "ok/live" — amber (no green in theme) */
+  --pixel-shadow: 2px 2px 0px #000000;
+
+  /* Text */
+  --pixel-text: var(--t86-flame);
+  --pixel-text-dim: var(--t86-flame-dim);
+  --pixel-btn-bg: rgba(255, 90, 31, 0.08);
+  --pixel-btn-hover-bg: rgba(255, 90, 31, 0.18);
   --pixel-btn-disabled-opacity: 0.35;
 
-  /* Active/selected button state */
-  --pixel-active-bg: rgba(90, 140, 255, 0.25);
+  /* Active/selected row — translucent orange wash */
+  --pixel-active-bg: rgba(255, 90, 31, 0.30);
 
-  /* Agent button */
-  --pixel-agent-bg: rgba(90, 200, 140, 0.15);
-  --pixel-agent-hover-bg: rgba(90, 200, 140, 0.3);
-  --pixel-agent-border: #5ac88c;
-  --pixel-agent-text: rgba(200, 255, 220, 0.95);
+  /* Primary action button — flame-orange fill, neon-orange edge, dark ink.
+     One token drives every CTA (+ New task, Launch, Call In, Save…). */
+  --pixel-agent-bg: var(--t86-flame);
+  --pixel-agent-hover-bg: var(--t86-flame-hi);
+  --pixel-agent-border: var(--t86-orange);
+  --pixel-agent-text: var(--t86-ink);
 
   /* Close button */
-  --pixel-close-text: rgba(255, 255, 255, 0.5);
-  --pixel-close-hover: #e55;
+  --pixel-close-text: var(--t86-flame-dim);
+  --pixel-close-hover: var(--t86-red);
 
   /* Hints & confirmations */
-  --pixel-hint-bg: #3278c8;
-  --pixel-reset-text: #ecc;
-  --pixel-danger-bg: #a33;
+  --pixel-hint-bg: var(--t86-orange);
+  --pixel-reset-text: var(--t86-amber);
+  --pixel-danger-bg: #b0241a;
+  /* Danger foreground (banner border + "Launch failed" text) — theme red. */
+  --pixel-danger: var(--t86-red);
 
-  /* Vignette */
-  --pixel-vignette: radial-gradient(ellipse at center, transparent 50%, rgba(0, 0, 0, 0.6) 100%);
+  /* Vignette — retired in the flat layout */
+  --pixel-vignette: none;
 
-  /* Status dot colors (fallbacks for standalone browser mode) */
-  --pixel-status-permission: var(--vscode-charts-red, #e51400);
-  --pixel-status-waiting: var(--vscode-charts-yellow, #cca700);
-  --pixel-status-active: var(--vscode-charts-blue, #3794ff);
+  /* Status dot colors (kept semantically distinct) */
+  --pixel-status-permission: var(--t86-red);
+  /* "Waiting for input" is deep blue with a pulsating glow (see
+     .pixel-agents-waiting-glow) — keep the glow rgba in sync with this. */
+  --pixel-status-waiting: #0313A6;
+  --pixel-status-active: var(--t86-orange);
 
-  /* ToolOverlay z-index layers */
+  /* z-index layers */
   --pixel-overlay-z: 100;
   --pixel-overlay-selected-z: 110;
   --pixel-controls-z: 50;
@@ -53,8 +80,13 @@ html, body, #root {
   height: 100%;
   overflow: hidden;
   font-family: 'Open Sans', sans-serif;
-  background-color: var(--vscode-editor-background, #1e1e2e);
-  color: var(--vscode-foreground, rgba(255, 255, 255, 0.8));
+  color: var(--pixel-fg, #ff8a4c);
+  /* Near-black base with a faint neon grid, echoing the terrain blueprint. */
+  background-color: var(--pixel-paper, #0c0708);
+  background-image:
+    linear-gradient(rgba(255, 90, 31, 0.05) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 90, 31, 0.05) 1px, transparent 1px);
+  background-size: 24px 24px;
 }
 
 * {
@@ -69,4 +101,25 @@ html, body, #root {
 .pixel-spinner {
   display: inline-block;
   animation: pixel-spin 1s linear infinite;
+}
+
+/* 90s sci-fi videophone (employee avatars, see EmployeeAvatar.tsx): the
+   constant TV snow is an animated SVG turbulence filter (#crt-snow, defined in
+   App.tsx); the occasional per-avatar signal blip is crt-signal below. */
+
+/* Dashboard-style "equalizer" bars — each bar dances up and down. Applied per
+   bar with a staggered delay/duration so they ripple (see ActivityBars.tsx). */
+@keyframes eq-bounce {
+  0%, 100% { transform: scaleY(0.28); }
+  50%      { transform: scaleY(1); }
+}
+
+/* Occasional "signal dip" flash on a videophone feed — mostly invisible, with a
+   quick double-blink once per (random, per-avatar) cycle. See EmployeeAvatar. */
+@keyframes crt-signal {
+  0%, 100% { opacity: 0; }
+  1.5%     { opacity: 0.42; }
+  2.2%     { opacity: 0.06; }
+  2.9%     { opacity: 0.30; }
+  3.6%     { opacity: 0; }
 }

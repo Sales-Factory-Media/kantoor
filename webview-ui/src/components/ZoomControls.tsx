@@ -172,6 +172,8 @@ export function ZoomControls({ zoom, onZoomChange, isDebugMode, onToggleDebugMod
             onClose={() => setIsSettingsOpen(false)}
             isDebugMode={isDebugMode}
             onToggleDebugMode={onToggleDebugMode}
+            clickupConfigured={false}
+            clickupListIds={[]}
           />
         </div>
       </div>

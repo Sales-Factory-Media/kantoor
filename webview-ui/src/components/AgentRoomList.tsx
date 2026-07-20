@@ -8,6 +8,7 @@ import { getActivity, getDotInfo, groupByRoom, deleteButtonStyle } from './agent
 import type { ClickUpTicketRef } from './agentSidebarUtils.js'
 import { OfflineAgentRow } from './OfflineAgentRow.js'
 import { EmployeeAvatar } from './EmployeeAvatar.js'
+import { ProjectLogo, makeProjectLogoLookup } from './ProjectLogo.js'
 
 export interface AgentRoomListProps {
   officeState: OfficeState
@@ -70,6 +71,7 @@ export function AgentRoomList({
   const [descDraft, setDescDraft] = useState('')
 
   const roomGroups = groupByRoom(agents, officeState, offlineAgents, knownProjects)
+  const projectLogo = makeProjectLogoLookup(knownProjects)
 
   const collapsedRooms = useMemo(() => {
     const result = new Set<string>()
@@ -122,7 +124,7 @@ export function AgentRoomList({
               padding: '3px 6px',
               fontSize: '18px',
               color: group.liveAgents.length > 0 ? 'var(--pixel-green)' : 'var(--pixel-text-dim)',
-              background: group.liveAgents.length > 0 ? 'rgba(90, 200, 140, 0.08)' : 'rgba(255, 255, 255, 0.03)',
+              background: group.liveAgents.length > 0 ? 'rgba(255, 176, 32, 0.10)' : 'rgba(255, 90, 31, 0.04)',
               borderBottom: '1px solid var(--pixel-border)',
               overflow: 'hidden',
               textOverflow: 'ellipsis',
@@ -138,6 +140,7 @@ export function AgentRoomList({
               <span style={{ fontSize: '14px', color: 'var(--pixel-text-dim)', flexShrink: 0 }}>
                 {collapsedRooms.has(projectName) ? '\u25B6' : '\u25BC'}
               </span>
+              <ProjectLogo logo={projectLogo(group.workspacePath, projectName)} size={16} />
               <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
                 {projectName || 'Unassigned'}
               </span>
@@ -274,12 +277,12 @@ export function AgentRoomList({
                     style={{ marginRight: 4 }}
                   />
                   <span
-                    className={dot?.pulse ? 'pixel-agents-pulse' : undefined}
+                    className={dot?.waiting ? 'pixel-agents-waiting-glow' : dot?.pulse ? 'pixel-agents-pulse' : undefined}
                     style={{
                       width: 6,
                       height: 6,
                       borderRadius: '50%',
-                      background: dot ? dot.color : 'rgba(255,255,255,0.2)',
+                      background: dot ? dot.color : 'rgba(255,138,76,0.25)',
                       flexShrink: 0,
                     }}
                   />
@@ -428,7 +431,7 @@ export function AgentRoomList({
                   padding: '3px 6px',
                   fontSize: '18px',
                   color: isClickable ? 'var(--pixel-accent)' : group.liveAgents.length > 0 ? 'var(--pixel-green)' : 'var(--pixel-text-dim)',
-                  background: group.liveAgents.length > 0 ? 'rgba(90, 200, 140, 0.08)' : 'rgba(255, 255, 255, 0.03)',
+                  background: group.liveAgents.length > 0 ? 'rgba(255, 176, 32, 0.10)' : 'rgba(255, 90, 31, 0.04)',
                   borderBottom: '1px solid var(--pixel-border)',
                   overflow: 'hidden',
                   textOverflow: 'ellipsis',

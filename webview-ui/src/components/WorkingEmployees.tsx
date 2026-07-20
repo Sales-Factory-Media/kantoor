@@ -80,7 +80,7 @@ export function WorkingEmployees({
             >
               <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
                 <span
-                  className={dot?.pulse ? 'pixel-agents-pulse' : undefined}
+                  className={dot?.waiting ? 'pixel-agents-waiting-glow' : dot?.pulse ? 'pixel-agents-pulse' : undefined}
                   style={{
                     width: 6,
                     height: 6,

@@ -98,6 +98,7 @@ interface TestCtxOverrides {
 	persistentAgents?: PersistentAgent[];
 	workers?: Map<string, WorkerInfo>;
 	hubRoles?: string[];
+	serialDev?: boolean;
 }
 
 function makeTestCtx(overrides: TestCtxOverrides = {}): ServerContext {
@@ -114,6 +115,7 @@ function makeTestCtx(overrides: TestCtxOverrides = {}): ServerContext {
 		isWorkerMode: overrides.isWorkerMode ?? false,
 		workerIdentity: { name: 'Hub', color: '#000', roles: overrides.hubRoles ?? ['dev', 'designer'] },
 		noLocalDev: false,
+		serialDev: overrides.serialDev ?? false,
 		workers: overrides.workers ?? new Map(),
 		workerAssignments: [],
 		pendingWorkerRequests: new Map(),
@@ -355,6 +357,7 @@ describe('invariant 4b: only one dev ticket per machine at a time', () => {
 		// remote workers connected, the second dispatch must fail loudly
 		// rather than piling onto the same machine.
 		const ctx = makeTestCtx({
+				serialDev: true,
 			persistentAgents: [
 				{ id: 'worker-1', name: 'Worker A', roleShort: 'Dev', roleFull: '', workspacePath: '~/project' },
 				{ id: 'worker-2', name: 'Worker B', roleShort: 'Dev', roleFull: '', workspacePath: '~/project' },
@@ -379,6 +382,7 @@ describe('invariant 4b: only one dev ticket per machine at a time', () => {
 		// fleet, finds no remote workers, returns failure. The new ticket
 		// must NOT be claimed (otherwise the next cycle would skip it forever).
 		const ctx = makeTestCtx({
+				serialDev: true,
 			persistentAgents: [
 				{
 					id: 'worker-1',
@@ -402,6 +406,7 @@ describe('invariant 4b: only one dev ticket per machine at a time', () => {
 		// per-machine slot lock and fails (no remote fleet). Worker A's session
 		// id and ticket must survive untouched, and Worker B must remain idle.
 		const ctx = makeTestCtx({
+				serialDev: true,
 			persistentAgents: [
 				{ id: 'worker-1', name: 'Worker A', roleShort: 'Dev', roleFull: '', workspacePath: '~/project' },
 				{ id: 'worker-2', name: 'Worker B', roleShort: 'Dev', roleFull: '', workspacePath: '~/project' },
@@ -422,6 +427,45 @@ describe('invariant 4b: only one dev ticket per machine at a time', () => {
 		// was already taken by Worker A.
 		expect(ctx.persistentAgents[1].currentSessionId).toBeUndefined();
 		expect(ctx.persistentAgents[1].currentTicketId).toBeUndefined();
+	});
+});
+
+// ── Parallel dispatch (the default) ───────────────────────────
+
+describe('parallel dispatch: multiple concurrent dev sessions per machine', () => {
+	it('a second dispatch launches even while the first worker is busy', async () => {
+		// Default mode (serialDev unset): no per-machine slot lock. With a single
+		// worker for the workspace, a second ticket reuses that employee for a
+		// second concurrent session instead of returning slotBusy.
+		const ctx = makeTestCtx({
+			persistentAgents: [
+				{ id: 'worker-1', name: 'Pam', roleShort: 'Dev', roleFull: '', workspacePath: '~/project' },
+			],
+		});
+
+		const first = await launchAgentOnTicket('~/project', 'T-1', 'Task T-1', 'https://clickup.test/T-1', ctx);
+		expect(first.success).toBe(true);
+
+		const second = await launchAgentOnTicket('~/project', 'T-2', 'Task T-2', 'https://clickup.test/T-2', ctx);
+		expect(second.success).toBe(true);
+		// Both dispatches actually launched a session (no slot-busy short-circuit).
+		// (The crypto.randomUUID mock returns a constant, so the two sessions
+		// dedup in-store — the two launch calls are the real signal here.)
+		expect(launchAgentSessionMock).toHaveBeenCalledTimes(2);
+	});
+
+	it('spreads across idle workers before doubling up on a busy one', async () => {
+		const ctx = makeTestCtx({
+			persistentAgents: [
+				{ id: 'worker-1', name: 'Pam', roleShort: 'Dev', roleFull: '', workspacePath: '~/project', currentSessionId: 'busy' },
+				{ id: 'worker-2', name: 'Jim', roleShort: 'Dev', roleFull: '', workspacePath: '~/project' },
+			],
+		});
+
+		const result = await launchAgentOnTicket('~/project', 'T-1', 'Task T-1', 'https://clickup.test/T-1', ctx);
+		expect(result.success).toBe(true);
+		// Idle Jim picked, not the already-busy Pam.
+		expect(ctx.persistentAgents[1].currentSessionId).toBeTruthy();
 	});
 });
 

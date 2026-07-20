@@ -114,6 +114,13 @@ export interface ServerContext {
 	 * sends them).
 	 */
 	noLocalDev: boolean;
+	/**
+	 * When true, the hub runs at most ONE dev session at a time (the legacy
+	 * "one machine = one task" cap). Default is false: multiple concurrent dev
+	 * sessions may run on the same machine, including several sessions owned by
+	 * the same employee. Opt in via `--serial-dev` / `SERIAL_DEV`. Hub-only.
+	 */
+	serialDev: boolean;
 	workers: Map<string, WorkerInfo>; // keyed by worker name
 	workerAssignments: WorkerAssignment[];
 	pendingWorkerRequests: Map<string, PendingWorkerRequest>; // keyed by requestId

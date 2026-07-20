@@ -272,12 +272,12 @@ Toggle via "Layout" button. Tools: SELECT (default), Floor paint, Wall paint, Er
 ```sh
 npm install        # also installs webview-ui deps via postinstall
 npm run build      # esbuild (server) → dist/standalone.js + Vite (webview) → dist/webview/
-npm start          # node dist/standalone.js --no-local-dev (hub delegates dev work to remote workers)
+npm start          # node dist/standalone.js (hub runs dev work locally by default)
 ```
 - `npm run build` = `node esbuild-standalone.js && npm run build:webview` (server bundle + assets copy + migrations copy + Vite webview).
 - `npm run build:prod` = same with `--production` (minified server bundle).
 - `npm run build:server` = server bundle only (skip webview).
-- `npm start` runs with `--no-local-dev`; use `npm run start:local` to let the hub also run dev work locally.
+- `npm start` runs the hub with local dev enabled (Darryl/Auto-Mode dev work launches on this machine). Use `npm run start:no-local-dev` for the hub-only-orchestrator mode that delegates all dev work to remote workers (`start:local` is a kept alias of the default).
 - `npm run check-types` = `tsc --noEmit` (tsconfig.json covers `standalone/**` + the shared `src/` modules). `npm run lint` = `eslint src standalone`. `npm test` = vitest.
 
 ## TypeScript Constraints

@@ -26,6 +26,7 @@ vi.mock('../src/fileWatcher.js', () => ({ startFileWatching: vi.fn() }));
 vi.mock('../src/timerManager.js', () => ({ cancelWaitingTimer: vi.fn(), cancelPermissionTimer: vi.fn() }));
 
 import { extractSessionTaskTitle } from './standaloneAgentManager.js';
+import { SESSION_TASK_TITLE_MAX_LENGTH } from '../src/constants.js';
 
 function jsonl(...records: unknown[]): string {
 	return records.map(r => JSON.stringify(r)).join('\n') + '\n';
@@ -69,10 +70,10 @@ describe('extractSessionTaskTitle', () => {
 	});
 
 	it('collapses whitespace and truncates very long prompts with an ellipsis', () => {
-		const long = 'A'.repeat(250);
+		const long = 'A'.repeat(SESSION_TASK_TITLE_MAX_LENGTH + 500);
 		fileContent = jsonl({ type: 'user', message: { content: long } });
 		const out = extractSessionTaskTitle('/x.jsonl')!;
-		expect(out.length).toBeLessThanOrEqual(100);
+		expect(out.length).toBeLessThanOrEqual(SESSION_TASK_TITLE_MAX_LENGTH);
 		expect(out.endsWith('…')).toBe(true);
 	});
 

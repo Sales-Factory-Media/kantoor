@@ -1,25 +1,23 @@
 import { useState, useCallback, useRef, useEffect } from 'react'
 import { OfficeState } from './office/engine/officeState.js'
-import { OfficeCanvas } from './office/components/OfficeCanvas.js'
-import { ToolOverlay } from './office/components/ToolOverlay.js'
 import { vscode } from './vscodeApi.js'
 import { useExtensionMessages } from './hooks/useExtensionMessages.js'
-import { PULSE_ANIMATION_DURATION_SEC, ZOOM_DEFAULT_DPR_FACTOR, MAX_DEVICE_PIXEL_RATIO } from './constants.js'
-import { ZoomControls } from './components/ZoomControls.js'
-import { BottomToolbar } from './components/BottomToolbar.js'
-import { BuildingSwitcher } from './components/BuildingSwitcher.js'
+import { PULSE_ANIMATION_DURATION_SEC } from './constants.js'
 import { DebugView } from './components/DebugView.js'
 import { AgentSidebar } from './components/AgentSidebar.js'
 import { ForemanPanel } from './components/ForemanPanel.js'
 import { ArtDirectorPanel } from './components/ArtDirectorPanel.js'
 import { IdentifyWorkerModal } from './components/IdentifyWorkerModal.js'
 import { IdentityPromptModal } from './components/IdentityPromptModal.js'
-import { PolaroidBar } from './components/PolaroidBar.js'
-import { StatusHeader } from './components/StatusHeader.js'
+import { PolaroidGrid } from './components/PolaroidGrid.js'
+import { TopBar } from './components/TopBar.js'
 import { DelegationConfirmModal } from './components/DelegationConfirmModal.js'
 import { Credits } from './components/Credits.js'
 
-// Game state lives outside React — updated imperatively by message handlers
+// Game state lives outside React — updated imperatively by message handlers.
+// Retained (even though the pixel office is no longer rendered) because the
+// message handlers populate character identity/status/task data that the
+// polaroid grid and sidebar read from.
 const officeStateRef = { current: null as OfficeState | null }
 
 function getOfficeState(): OfficeState {
@@ -29,40 +27,53 @@ function getOfficeState(): OfficeState {
   return officeStateRef.current
 }
 
-function defaultZoom(): number {
-  const dpr = typeof devicePixelRatio === 'number' ? devicePixelRatio : 1
-  return Math.round(ZOOM_DEFAULT_DPR_FACTOR * Math.min(dpr, MAX_DEVICE_PIXEL_RATIO))
-}
-
 function App() {
-  const { agents, selectedAgent, selectAgent, agentTools, agentStatuses, subagentTools, subagentCharacters, layoutReady, workspaceFolders, offlineAgents, knownProjects, saveAgentMeta, forgetAgent, clickupTickets, clickupConfigured, clickupListId, clickupNextFetchAt, workers, organogram, janDesignConfig, buildings, activeBuildingId, projectMemberships, pendingWorkers, dismissPendingWorker, identityPrompt, dismissIdentityPrompt, autoMode, pendingDelegations } = useExtensionMessages(getOfficeState)
+  const { agents, selectedAgent, selectAgent, agentTools, agentStatuses, subagentTools, layoutReady, offlineAgents, knownProjects, saveAgentMeta, forgetAgent, clickupTickets, clickupConfigured, clickupListIds, clickupNextFetchAt, workers, organogram, janDesignConfig, buildings, activeBuildingId, projectMemberships, pendingWorkers, dismissPendingWorker, identityPrompt, dismissIdentityPrompt, autoMode, pendingDelegations, dispatchError, dismissDispatchError } = useExtensionMessages(getOfficeState)
 
   const [isDebugMode, setIsDebugMode] = useState(false)
-  const [zoom, setZoom] = useState(defaultZoom)
-  const panRef = useRef({ x: 0, y: 0 })
   const [foremanOpen, setForemanOpen] = useState(false)
   const [artDirectorOpen, setArtDirectorOpen] = useState(false)
   const [showDelegationModal, setShowDelegationModal] = useState(false)
 
-  // Auto-open the confirmation popup when a new delegation arrives; auto-close
-  // when the last one is resolved. Dismissing (X) leaves the list intact — the
-  // "Awaiting delegation" header button reopens it.
+  // Tick periodically so snoozed (postponed) delegations reappear when their
+  // snooze window elapses, even without a fresh server broadcast.
+  const [nowTick, setNowTick] = useState(() => Date.now())
+  useEffect(() => {
+    const t = setInterval(() => setNowTick(Date.now()), 30000)
+    return () => clearInterval(t)
+  }, [])
+
+  // Delegations currently snoozed via Postpone. These stay in the pending list
+  // (header button + modal) — Postpone only suppresses the AUTO-popup, it does
+  // NOT drop the delegation. They "un-snooze" once the window elapses (nowTick)
+  // or the ticket is updated (server re-broadcast).
+  const activeDelegations = pendingDelegations.filter(
+    (d) => !d.postponedUntil || d.postponedUntil <= nowTick,
+  )
+
+  // Auto-open the confirmation popup when a new NON-snoozed delegation arrives;
+  // auto-close only when nothing is left to act on right now. Postponed ones
+  // still count toward the header button (see pendingDelegations.length below),
+  // so the button remains while any delegation is pending.
   const prevDelegationCount = useRef(0)
   useEffect(() => {
-    const count = pendingDelegations.length
+    const count = activeDelegations.length
     if (count > prevDelegationCount.current) setShowDelegationModal(true)
     if (count === 0) setShowDelegationModal(false)
     prevDelegationCount.current = count
-  }, [pendingDelegations.length])
+  }, [activeDelegations.length])
+
+  // Auto-dismiss a dispatch-failure banner after a while so it doesn't linger.
+  useEffect(() => {
+    if (!dispatchError) return
+    const t = setTimeout(dismissDispatchError, 10000)
+    return () => clearTimeout(t)
+  }, [dispatchError, dismissDispatchError])
 
   const handleToggleDebugMode = useCallback(() => setIsDebugMode((prev) => !prev), [])
 
   const handleSelectAgent = useCallback((id: number) => {
     vscode.postMessage({ type: 'focusAgent', id })
-  }, [])
-
-  const handleCloseAgent = useCallback((id: number) => {
-    vscode.postMessage({ type: 'closeAgent', id })
   }, [])
 
   const handleClick = useCallback((agentId: number) => {
@@ -74,69 +85,128 @@ function App() {
     vscode.postMessage({ type: 'focusAgent', id: focusId })
   }, [selectAgent])
 
-  const handleOpenClaude = useCallback(() => {
-    vscode.postMessage({ type: 'openClaude' })
-  }, [])
-
-  const containerRef = useRef<HTMLDivElement>(null)
   const officeState = getOfficeState()
 
   if (!layoutReady) {
     return (
-      <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--vscode-foreground)' }}>
+      <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--pixel-text)' }}>
         Loading...
       </div>
     )
   }
 
   return (
-    <div ref={containerRef} style={{ width: '100%', height: '100%', position: 'relative', overflow: 'hidden' }}>
+    <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', background: 'var(--pixel-paper)', overflow: 'hidden' }}>
       <style>{`
         @keyframes pixel-agents-pulse {
           0%, 100% { opacity: 1; }
           50% { opacity: 0.3; }
         }
         .pixel-agents-pulse { animation: pixel-agents-pulse ${PULSE_ANIMATION_DURATION_SEC}s ease-in-out infinite; }
+        /* "Waiting for input" dot: bright white core fading radially out to the
+           deep blue (#0313A6), with a pulsating blue glow. The gradient uses
+           !important to override the inline solid background at every dot site. */
+        @keyframes pixel-agents-waiting-glow {
+          0%, 100% { box-shadow: 0 0 3px 1px rgba(3, 19, 166, 0.55); }
+          50%      { box-shadow: 0 0 9px 3px rgba(60, 90, 255, 0.95); }
+        }
+        .pixel-agents-waiting-glow {
+          background: radial-gradient(circle at 50% 42%, #ffffff 0%, #6f7cff 42%, #0313A6 100%) !important;
+          animation: pixel-agents-waiting-glow 1.6s ease-in-out infinite;
+        }
       `}</style>
 
-      <OfficeCanvas
-        officeState={officeState}
-        onClick={handleClick}
-        zoom={zoom}
-        onZoomChange={setZoom}
-        panRef={panRef}
-      />
+      {/* CRT barrel-distortion filter — referenced by EmployeeAvatar via
+          filter: url(#crt-barrel) to bulge the face/pixels like a curved tube.
+          The displacement map is an inline SVG: red encodes horizontal push
+          (0→left … 1→right), green vertical, so pixels spread outward from the
+          centre = a magnifying screen bulge. */}
+      <svg width="0" height="0" style={{ position: 'absolute' }} aria-hidden>
+        <filter id="crt-barrel" x="0" y="0" width="100%" height="100%" colorInterpolationFilters="sRGB">
+          <feImage
+            preserveAspectRatio="none"
+            x="0"
+            y="0"
+            width="100%"
+            height="100%"
+            result="map"
+            href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='100' height='100'%3E%3Cdefs%3E%3ClinearGradient id='rx' x1='0' y1='0' x2='1' y2='0'%3E%3Cstop offset='0' stop-color='%23000'/%3E%3Cstop offset='1' stop-color='%23f00'/%3E%3C/linearGradient%3E%3ClinearGradient id='gy' x1='0' y1='0' x2='0' y2='1'%3E%3Cstop offset='0' stop-color='%23000'/%3E%3Cstop offset='1' stop-color='%230f0'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='100' height='100' fill='url(%23rx)'/%3E%3Crect width='100' height='100' fill='url(%23gy)' style='mix-blend-mode:screen'/%3E%3C/svg%3E"
+          />
+          <feDisplacementMap in="SourceGraphic" in2="map" scale="10" xChannelSelector="R" yChannelSelector="G" />
+        </filter>
 
-      <ZoomControls zoom={zoom} onZoomChange={setZoom} isDebugMode={isDebugMode} onToggleDebugMode={handleToggleDebugMode} />
+        {/* Constant TV snow — fractal-noise static whose seed regenerates every
+            frame (SMIL animate) so it churns like an untuned old TV. Referenced
+            by EmployeeAvatar's snow overlay via filter: url(#crt-snow). */}
+        <filter id="crt-snow" x="0" y="0" width="100%" height="100%" colorInterpolationFilters="sRGB">
+          <feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="2" stitchTiles="stitch" seed="1" result="noise">
+            <animate
+              attributeName="seed"
+              values="1;5;2;8;3;9;4;7;6;10"
+              dur="0.5s"
+              calcMode="discrete"
+              repeatCount="indefinite"
+            />
+          </feTurbulence>
+          <feColorMatrix in="noise" type="saturate" values="0" result="gray" />
+          <feComponentTransfer in="gray">
+            <feFuncA type="linear" slope="1.6" intercept="-0.25" />
+          </feComponentTransfer>
+        </filter>
+      </svg>
 
-      <BuildingSwitcher buildings={buildings} activeBuildingId={activeBuildingId} projects={projectMemberships} />
-
-      <StatusHeader
+      <TopBar
+        buildings={buildings}
+        activeBuildingId={activeBuildingId}
+        projectMemberships={projectMemberships}
         clickupNextFetchAt={clickupNextFetchAt}
         workers={workers}
         autoMode={autoMode}
         pendingDelegationCount={pendingDelegations.length}
         onOpenDelegations={() => setShowDelegationModal(true)}
+        isDebugMode={isDebugMode}
+        onToggleDebugMode={handleToggleDebugMode}
+        clickupConfigured={clickupConfigured}
+        clickupListIds={clickupListIds}
       />
 
-      {/* Vignette overlay */}
+      {/* Body: fixed employees sidebar + scrollable polaroid grid */}
+      <div style={{ flex: 1, display: 'flex', minHeight: 0 }}>
+        <AgentSidebar
+          docked
+          officeState={officeState}
+          agents={agents}
+          selectedAgent={selectedAgent}
+          onSelectAgent={selectAgent}
+          agentTools={agentTools}
+          agentStatuses={agentStatuses}
+          offlineAgents={offlineAgents}
+          knownProjects={knownProjects}
+          onSaveAgentMeta={saveAgentMeta}
+          onForgetAgent={forgetAgent}
+          onOpenForeman={() => setForemanOpen(true)}
+          onOpenArtDirector={() => setArtDirectorOpen(true)}
+          organogram={organogram}
+        />
+
+        <main style={{ flex: 1, minWidth: 0, overflowY: 'auto', overflowX: 'hidden', position: 'relative' }}>
+          <PolaroidGrid
+            officeState={officeState}
+            agents={agents}
+            agentStatuses={agentStatuses}
+            knownProjects={knownProjects}
+            onSelect={handleClick}
+          />
+        </main>
+      </div>
+
+      {/* Foreman / Art Director slide-over panels (opened from the sidebar) */}
       <div
         style={{
           position: 'absolute',
-          inset: 0,
-          background: 'var(--pixel-vignette)',
-          pointerEvents: 'none',
-          zIndex: 40,
-        }}
-      />
-
-      <div
-        style={{
-          position: 'absolute',
-          top: 10,
+          top: 60,
           left: 10,
-          zIndex: 'var(--pixel-controls-z)' as unknown as number,
-          height: 'calc(100% - 20px)',
+          zIndex: 'var(--pixel-overlay-selected-z)' as unknown as number,
           display: 'flex',
           flexDirection: 'row',
           gap: 10,
@@ -149,7 +219,6 @@ function App() {
           onClose={() => setForemanOpen(false)}
           clickupTickets={clickupTickets}
           clickupConfigured={clickupConfigured}
-          clickupListId={clickupListId}
           offlineAgents={offlineAgents}
           officeState={officeState}
           agents={agents}
@@ -164,7 +233,6 @@ function App() {
           onClose={() => setArtDirectorOpen(false)}
           clickupTickets={clickupTickets}
           clickupConfigured={clickupConfigured}
-          clickupListId={clickupListId}
           offlineAgents={offlineAgents}
           officeState={officeState}
           agents={agents}
@@ -176,46 +244,54 @@ function App() {
         />
       </div>
 
-      <BottomToolbar
-        onOpenClaude={handleOpenClaude}
-        workspaceFolders={workspaceFolders}
-      />
-
-      <PolaroidBar
-        officeState={officeState}
-        agents={agents}
-        agentStatuses={agentStatuses}
-        onSelect={handleClick}
-      />
-
       <Credits />
 
-      <ToolOverlay
-        officeState={officeState}
-        agents={agents}
-        agentTools={agentTools}
-        subagentCharacters={subagentCharacters}
-        containerRef={containerRef}
-        zoom={zoom}
-        panRef={panRef}
-        onCloseAgent={handleCloseAgent}
-      />
-
-      <AgentSidebar
-        officeState={officeState}
-        agents={agents}
-        selectedAgent={selectedAgent}
-        onSelectAgent={selectAgent}
-        agentTools={agentTools}
-        agentStatuses={agentStatuses}
-        offlineAgents={offlineAgents}
-        knownProjects={knownProjects}
-        onSaveAgentMeta={saveAgentMeta}
-        onForgetAgent={forgetAgent}
-        onOpenForeman={() => setForemanOpen(true)}
-        onOpenArtDirector={() => setArtDirectorOpen(true)}
-        organogram={organogram}
-      />
+      {/* Dispatch-failure banner — a confirmed delegation / "start work" launch
+          failed on the hub. Without this the failure was silent. */}
+      {dispatchError && (
+        <div
+          style={{
+            position: 'fixed',
+            top: 70,
+            left: '50%',
+            transform: 'translateX(-50%)',
+            zIndex: 10003,
+            maxWidth: 560,
+            display: 'flex',
+            alignItems: 'flex-start',
+            gap: 10,
+            padding: '10px 12px',
+            background: 'var(--pixel-bg)',
+            border: '2px solid var(--pixel-danger, #e5484d)',
+            borderRadius: 0,
+            boxShadow: 'var(--pixel-shadow)',
+            color: 'var(--pixel-text)',
+            fontSize: '16px',
+            lineHeight: 1.35,
+          }}
+          role="alert"
+        >
+          <span style={{ color: 'var(--pixel-danger, #e5484d)', fontWeight: 'bold', flexShrink: 0 }}>
+            Launch failed
+          </span>
+          <span style={{ flex: 1, minWidth: 0 }}>{dispatchError}</span>
+          <button
+            onClick={dismissDispatchError}
+            title="Dismiss"
+            style={{
+              background: 'none',
+              border: 'none',
+              color: 'var(--pixel-text-dim)',
+              fontSize: '18px',
+              cursor: 'pointer',
+              padding: '0 2px',
+              flexShrink: 0,
+            }}
+          >
+            {'✕'}
+          </button>
+        </div>
+      )}
 
       {pendingWorkers.length > 0 && (
         <IdentifyWorkerModal

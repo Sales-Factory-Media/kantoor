@@ -5,6 +5,7 @@ import {
 	jsonb,
 	timestamp,
 	integer,
+	bigint,
 	boolean,
 	primaryKey,
 } from 'drizzle-orm/pg-core';
@@ -89,6 +90,9 @@ export const projects = pgTable('projects', {
 	name: text('name').notNull(),
 	workspacePath: text('workspace_path').notNull().unique(),
 	description: text('description'),
+	/** Optional project logo as a data URI (e.g. data:image/png;base64,...).
+	 *  Rendered in front of the project name in the sidebar and on agent cards. */
+	logo: text('logo'),
 });
 
 /**
@@ -140,6 +144,36 @@ export const workerAssignments = pgTable('worker_assignments', {
 export const appSettings = pgTable('app_settings', {
 	key: text('key').primaryKey(),
 	value: jsonb('value').$type<unknown>().notNull(),
+});
+
+/**
+ * Auto Mode pending delegations — Darryl's classification results awaiting a
+ * human's Start/Discard/Postpone decision. Previously in-memory only (lost on
+ * restart); persisted here so recommendations survive a hub reboot.
+ *
+ * `lastEvaluatedAt` records when Darryl last classified the ticket and
+ * `ticketUpdatedAt` snapshots the connector's date_updated at that moment. When
+ * the ticket is updated after evaluation, auto-pickup re-classifies it (a stale
+ * recommendation shouldn't outlive the ticket it was made against). Keyed by
+ * ticket id (globally unique across connectors).
+ */
+export const pendingDelegations = pgTable('pending_delegations', {
+	ticketId: text('ticket_id').primaryKey(),
+	buildingId: uuid('building_id').references(() => buildings.id, { onDelete: 'cascade' }),
+	ticketName: text('ticket_name').notNull().default(''),
+	ticketUrl: text('ticket_url').notNull().default(''),
+	recommendedAgentId: text('recommended_agent_id').notNull(),
+	recommendedAgentName: text('recommended_agent_name').notNull().default(''),
+	recommendedAgentRole: text('recommended_agent_role').notNull().default(''),
+	recommendedWorkspacePath: text('recommended_workspace_path').notNull().default(''),
+	reasoning: text('reasoning').notNull().default(''),
+	brief: text('brief').notNull().default(''),
+	createdAt: bigint('created_at', { mode: 'number' }).notNull(),
+	lastEvaluatedAt: bigint('last_evaluated_at', { mode: 'number' }).notNull(),
+	/** Connector date_updated (epoch ms) snapshotted at evaluation time. */
+	ticketUpdatedAt: bigint('ticket_updated_at', { mode: 'number' }),
+	/** Snoozed-until (epoch ms); null = visible now. */
+	postponedUntil: bigint('postponed_until', { mode: 'number' }),
 });
 
 export type Building = typeof buildings.$inferSelect;

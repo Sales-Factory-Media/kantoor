@@ -8,6 +8,8 @@ export interface ClickUpTask {
 	url: string;
 	priority: { id: string } | null;
 	parent: string | null;
+	/** ClickUp date_updated — epoch ms as a string. */
+	dateUpdated?: string;
 }
 
 export interface ClickUpStatusGroup {
@@ -18,7 +20,25 @@ export interface ClickUpStatusGroup {
 
 export interface ClickUpConfig {
 	apiToken: string;
-	listId: string;
+	/** One or more ClickUp list IDs to poll. Tickets from all lists are merged
+	 *  (deduped by task id) and grouped by status. */
+	listIds: string[];
+}
+
+/**
+ * Normalize a raw connector_config into a deduped list-id array. Accepts the
+ * new `listIds: string[]` shape and the legacy single `listId: string` shape
+ * (older DB rows) so existing buildings keep working without a migration.
+ */
+export function normalizeListIds(raw: Record<string, unknown>): string[] {
+	const ids: string[] = [];
+	if (Array.isArray(raw.listIds)) {
+		for (const v of raw.listIds) {
+			if (typeof v === 'string' && v.trim()) ids.push(v.trim());
+		}
+	}
+	if (typeof raw.listId === 'string' && raw.listId.trim()) ids.push(raw.listId.trim());
+	return [...new Set(ids)];
 }
 
 const FETCH_TIMEOUT_MS = 15000;
@@ -58,20 +78,30 @@ type ClickUpTaskApi = {
 	url: string;
 	priority: { id: string } | null;
 	parent: string | null;
+	date_updated?: string;
 };
 
 export async function fetchListTasks(config: ClickUpConfig): Promise<ClickUpStatusGroup[]> {
 	const allTasks: ClickUpTaskApi[] = [];
-	for (let page = 0; page < CLICKUP_MAX_PAGES; page++) {
-		const url = `https://api.clickup.com/api/v2/list/${config.listId}/task?include_closed=false&subtasks=true&page=${page}`;
-		const data = await fetchJson(url, { Authorization: config.apiToken }) as {
-			tasks: ClickUpTaskApi[];
-			last_page?: boolean;
-		};
-		const tasks = data.tasks ?? [];
-		allTasks.push(...tasks);
-		if (data.last_page === true) break;
-		if (tasks.length < CLICKUP_PAGE_SIZE) break;
+	// A task can belong to multiple lists (ClickUp's multi-list feature), so
+	// dedupe by task id across every configured list.
+	const seenTaskIds = new Set<string>();
+	for (const listId of config.listIds) {
+		for (let page = 0; page < CLICKUP_MAX_PAGES; page++) {
+			const url = `https://api.clickup.com/api/v2/list/${listId}/task?include_closed=false&subtasks=true&page=${page}`;
+			const data = await fetchJson(url, { Authorization: config.apiToken }) as {
+				tasks: ClickUpTaskApi[];
+				last_page?: boolean;
+			};
+			const tasks = data.tasks ?? [];
+			for (const t of tasks) {
+				if (seenTaskIds.has(t.id)) continue;
+				seenTaskIds.add(t.id);
+				allTasks.push(t);
+			}
+			if (data.last_page === true) break;
+			if (tasks.length < CLICKUP_PAGE_SIZE) break;
+		}
 	}
 
 	// Group tasks by status
@@ -89,6 +119,7 @@ export async function fetchListTasks(config: ClickUpConfig): Promise<ClickUpStat
 			url: task.url,
 			priority: task.priority,
 			parent: task.parent || null,
+			dateUpdated: task.date_updated,
 		});
 	}
 

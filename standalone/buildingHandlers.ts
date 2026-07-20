@@ -19,11 +19,12 @@ import {
 	pruneDeadSessions,
 	seedDesignTeams,
 } from './agentStore.js';
-import { initProjectStore, loadKnownProjects, listAllProjectsWithMembership, setProjectMembership } from '../src/projectStore.js';
+import { initProjectStore, loadKnownProjects, listAllProjectsWithMembership, setProjectMembership, setProjectLogo } from '../src/projectStore.js';
 import { initSeatStore, loadSeats } from '../src/db/seatStore.js';
 import { initWorkerAssignmentStore, loadWorkerAssignments } from '../src/db/workerAssignmentStore.js';
 import { initSessionHistoryStore } from '../src/db/sessionHistoryStore.js';
 import { connectorForBuilding } from '../src/connectors/registry.js';
+import { normalizeListIds } from '../src/connectors/clickupClient.js';
 import { stopClickupPolling, startClickupPolling, handleClickupRefresh } from './clickupHandlers.js';
 import { buildOrganogram } from './organogram.js';
 import { getOfflineAgents } from './serverHelpers.js';
@@ -112,8 +113,8 @@ export async function handleSwitchBuilding(msg: Record<string, unknown>, ctx: Se
 	// Reflect ClickUp config alias for legacy callers
 	const cfg = newBuilding.connectorConfig as Record<string, unknown>;
 	const apiToken = cfg.apiToken as string | undefined;
-	const listId = cfg.listId as string | undefined;
-	ctx.clickupConfig = (apiToken && listId) ? { apiToken, listId } : null;
+	const listIds = normalizeListIds(cfg);
+	ctx.clickupConfig = (apiToken && listIds.length > 0) ? { apiToken, listIds } : null;
 
 	// Broadcast new state to all webviews
 	ctx.broadcastSink.postMessage({
@@ -127,7 +128,7 @@ export async function handleSwitchBuilding(msg: Record<string, unknown>, ctx: Se
 	ctx.broadcastSink.postMessage({
 		type: 'clickupConfigured',
 		configured: !!(newConnector && newConnector.isConfigured()),
-		listId: ctx.clickupConfig?.listId,
+		listIds: ctx.clickupConfig?.listIds ?? [],
 	});
 	ctx.broadcastSink.postMessage({ type: 'clickupTickets', statuses: [], nextFetchAt: null });
 
@@ -232,6 +233,30 @@ export async function handleSetProjectMembership(msg: Record<string, unknown>, c
 	});
 }
 
+/**
+ * Set or clear a project's logo (data URI, or empty/null to clear). Rebroadcasts
+ * the active-building project list (drives sidebar + agent-card logos) and a
+ * fresh global pool (drives the membership modal's per-row logo).
+ */
+export async function handleSetProjectLogo(msg: Record<string, unknown>, ctx: ServerContext): Promise<void> {
+	if (ctx.isWorkerMode) return;
+	const workspacePath = msg.workspacePath as string | undefined;
+	if (!workspacePath) return;
+	const raw = msg.logo;
+	const logo = typeof raw === 'string' && raw.trim() ? raw : null;
+
+	await setProjectLogo(workspacePath, logo);
+
+	ctx.broadcastSink.postMessage({ type: 'knownProjects', projects: loadKnownProjects() });
+
+	const allProjects = await listAllProjectsWithMembership();
+	ctx.broadcastSink.postMessage({
+		type: 'projectsList',
+		projects: allProjects,
+		activeBuildingId: ctx.activeBuilding?.id ?? null,
+	});
+}
+
 function serializeBuilding(b: Building): Record<string, unknown> {
 	const conn = connectorForBuilding(b);
 	return {
@@ -265,8 +290,8 @@ export async function handleConfigureBuildingConnector(msg: Record<string, unkno
 	// Sync legacy clickupConfig alias for any callers that still read it.
 	if (refreshed.connectorType === 'clickup') {
 		const apiToken = merged.apiToken as string | undefined;
-		const listId = merged.listId as string | undefined;
-		ctx.clickupConfig = (apiToken && listId) ? { apiToken, listId } : null;
+		const listIds = normalizeListIds(merged);
+		ctx.clickupConfig = (apiToken && listIds.length > 0) ? { apiToken, listIds } : null;
 	} else {
 		ctx.clickupConfig = null;
 	}

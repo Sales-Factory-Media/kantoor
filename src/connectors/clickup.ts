@@ -1,5 +1,5 @@
 import type { ProjectConnector, ConnectorFactory, ConnectorConfig, StatusGroup } from './types.js';
-import { fetchListTasks, addTaskComment, type ClickUpConfig } from './clickupClient.js';
+import { fetchListTasks, addTaskComment, normalizeListIds, type ClickUpConfig } from './clickupClient.js';
 
 class ClickUpConnector implements ProjectConnector {
 	readonly type = 'clickup';
@@ -7,8 +7,8 @@ class ClickUpConnector implements ProjectConnector {
 
 	constructor(rawConfig: ConnectorConfig) {
 		const apiToken = rawConfig.apiToken as string | undefined;
-		const listId = rawConfig.listId as string | undefined;
-		this.config = (apiToken && listId) ? { apiToken, listId } : null;
+		const listIds = normalizeListIds(rawConfig as Record<string, unknown>);
+		this.config = (apiToken && listIds.length > 0) ? { apiToken, listIds } : null;
 	}
 
 	isConfigured(): boolean {

@@ -79,6 +79,22 @@ export function findFreeDevWorker(
 }
 
 /**
+ * Find ANY dev worker for the workspace — free or busy. Used in parallel-dispatch
+ * mode (the default) where a busy worker may take a second concurrent session
+ * (an employee juggling multiple tabs). Prefers a free worker when one exists so
+ * work spreads across idle employees before doubling up.
+ */
+export function findDevWorkerForWorkspace(
+	persistentAgents: PersistentAgent[],
+	workspacePath: string,
+): PersistentAgent | undefined {
+	const forWorkspace = persistentAgents.filter(p =>
+		isDevWorker(p) && samePath(p.workspacePath, workspacePath),
+	);
+	return forWorkspace.find(p => !p.currentSessionId) ?? forWorkspace[0];
+}
+
+/**
  * Find the agent currently occupying THIS machine's visual-task slot, if any.
  * Every visual role (UX Designer, Visual Designer, Visual QA) shares the same
  * slot because they all compete for the local Figma instance and for finite

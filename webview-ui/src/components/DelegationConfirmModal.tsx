@@ -28,8 +28,16 @@ export function DelegationConfirmModal({ delegations, onClose }: DelegationConfi
   const discard = () => {
     vscode.postMessage({ type: 'discardDelegation', ticketId: active.ticketId })
   }
+  const postpone = () => {
+    // "Not now" — snooze this pick and dismiss the popup. It stays in the
+    // pending list (header button keeps its count) and resurfaces later.
+    vscode.postMessage({ type: 'postponeDelegation', ticketId: active.ticketId })
+    onClose()
+  }
   const openInClickUp = () => {
-    if (active.ticketUrl) window.open(active.ticketUrl, '_blank', 'noopener')
+    // Route through the server so the ticket opens in Chrome (where the user
+    // works), not the browser hosting this dashboard (Firefox).
+    if (active.ticketUrl) vscode.postMessage({ type: 'openExternalUrl', url: active.ticketUrl })
   }
 
   const btnStyle: React.CSSProperties = {
@@ -205,6 +213,18 @@ export function DelegationConfirmModal({ delegations, onClose }: DelegationConfi
             }}
           >
             Discard
+          </button>
+          <button
+            onClick={postpone}
+            title="Snooze this pick — it stays decided but hides for a while, then resurfaces"
+            style={{
+              ...btnStyle,
+              color: 'var(--pixel-text)',
+              background: 'var(--pixel-bg)',
+              border: '2px solid var(--pixel-border)',
+            }}
+          >
+            Postpone
           </button>
           <button
             onClick={start}

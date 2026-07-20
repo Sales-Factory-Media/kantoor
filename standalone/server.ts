@@ -29,7 +29,8 @@ import { preloadAssets, WORKER_IDENTITY_FILE } from './serverContext.js';
 import type { ServerContext, WorkerIdentity } from './serverContext.js';
 import { createDispatchRegistry, releaseTicket } from './dispatchRegistry.js';
 import { createDelegationStore, getPendingDelegations } from './delegationStore.js';
-import { handleConfirmDelegation, handleDiscardDelegation } from './delegationHandlers.js';
+import { handleConfirmDelegation, handleDiscardDelegation, handlePostponeDelegation, loadDelegationsIntoStore } from './delegationHandlers.js';
+import { openUrlInExternalBrowser } from './openExternal.js';
 import { runMigrations } from '../src/db/migrate.js';
 import { migrateLegacyJsonIntoDb } from '../src/db/migrateFromJson.js';
 import { initActiveBuilding, listBuildings, switchActiveBuilding } from '../src/db/activeBuilding.js';
@@ -70,6 +71,7 @@ import {
 	handleConfigureBuildingConnector,
 	handleListProjects,
 	handleSetProjectMembership,
+	handleSetProjectLogo,
 } from './buildingHandlers.js';
 import {
 	handleClickupStartWork,
@@ -99,13 +101,14 @@ import { startWorkerMode, stopWorkerMode, reportDesignerSessionEndedToHub, repor
 
 // ── CLI argument parsing ────────────────────────────────────
 
-function parseCliArgs(): { hubUrl: string | null; name: string | null; color: string | null; roles: string[] | null; noLocalDev: boolean } {
+function parseCliArgs(): { hubUrl: string | null; name: string | null; color: string | null; roles: string[] | null; noLocalDev: boolean; serialDev: boolean } {
 	const args = process.argv.slice(2);
 	let hubUrl: string | null = null;
 	let name: string | null = null;
 	let color: string | null = null;
 	let roles: string[] | null = null;
 	let noLocalDev = false;
+	let serialDev = false;
 
 	for (const arg of args) {
 		if (arg.startsWith('--hub=')) hubUrl = arg.slice('--hub='.length);
@@ -115,6 +118,7 @@ function parseCliArgs(): { hubUrl: string | null; name: string | null; color: st
 			roles = arg.slice('--roles='.length).split(',').map(r => r.trim()).filter(r => r.length > 0);
 		}
 		else if (arg === '--no-local-dev') noLocalDev = true;
+		else if (arg === '--serial-dev') serialDev = true;
 	}
 
 	// Also check env vars as fallback
@@ -125,8 +129,11 @@ function parseCliArgs(): { hubUrl: string | null; name: string | null; color: st
 	if (!noLocalDev && process.env.NO_LOCAL_DEV && process.env.NO_LOCAL_DEV !== '0' && process.env.NO_LOCAL_DEV.toLowerCase() !== 'false') {
 		noLocalDev = true;
 	}
+	if (!serialDev && process.env.SERIAL_DEV && process.env.SERIAL_DEV !== '0' && process.env.SERIAL_DEV.toLowerCase() !== 'false') {
+		serialDev = true;
+	}
 
-	return { hubUrl, name, color, roles, noLocalDev };
+	return { hubUrl, name, color, roles, noLocalDev, serialDev };
 }
 
 function loadOrCreateWorkerIdentity(
@@ -277,7 +284,7 @@ function handleWebviewReady(ws: WebSocket, ctx: ServerContext): void {
 	agentManager.sendAgentStatuses(wsSink);
 
 	// Send ClickUp state
-	ws.send(JSON.stringify({ type: 'clickupConfigured', configured: !!ctx.clickupConfig, listId: ctx.clickupConfig?.listId }));
+	ws.send(JSON.stringify({ type: 'clickupConfigured', configured: !!ctx.clickupConfig, listIds: ctx.clickupConfig?.listIds ?? [] }));
 	if (ctx.clickupTickets.length > 0) {
 		ws.send(JSON.stringify({ type: 'clickupTickets', statuses: ctx.clickupTickets, nextFetchAt: ctx.clickupNextFetchAt }));
 	}
@@ -328,6 +335,11 @@ const messageHandlers: Record<string, (ws: WebSocket, msg: Record<string, unknow
 		if (rejectIfWorker(ctx, 'discardDelegation')) return;
 		handleDiscardDelegation(msg, ctx);
 	},
+	postponeDelegation: (_ws, msg, ctx) => {
+		if (rejectIfWorker(ctx, 'postponeDelegation')) return;
+		handlePostponeDelegation(msg, ctx);
+	},
+	openExternalUrl: (_ws, msg) => openUrlInExternalBrowser(String(msg.url ?? '')),
 	clickupRefresh: (_ws, _msg, ctx) => { handleClickupRefresh(ctx).catch(() => {}); },
 	clickupStartWork: (_ws, msg, ctx) => {
 		if (rejectIfWorker(ctx, 'clickupStartWork')) return;
@@ -340,6 +352,7 @@ const messageHandlers: Record<string, (ws: WebSocket, msg: Record<string, unknow
 	configureBuildingConnector: (_ws, msg, ctx) => { handleConfigureBuildingConnector(msg, ctx).catch(err => console.error('[Standalone] configureBuildingConnector failed:', err)); },
 	listProjects: (ws, _msg, ctx) => { handleListProjects(ws, ctx).catch(err => console.error('[Standalone] listProjects failed:', err)); },
 	setProjectMembership: (_ws, msg, ctx) => { handleSetProjectMembership(msg, ctx).catch(err => console.error('[Standalone] setProjectMembership failed:', err)); },
+	setProjectLogo: (_ws, msg, ctx) => { handleSetProjectLogo(msg, ctx).catch(err => console.error('[Standalone] setProjectLogo failed:', err)); },
 	startConference: (_ws, msg, ctx) => handleStartConference(msg, ctx),
 	endConference: (_ws, msg, ctx) => handleEndConference(msg, ctx),
 	updateProjectDescription: (_ws, msg, ctx) => handleUpdateProjectDescription(msg, ctx),
@@ -521,6 +534,9 @@ async function main(): Promise<void> {
 		// always cascades to a remote worker. Ignored when this process is itself
 		// a worker (workers accept whatever the hub dispatches).
 		noLocalDev: !isWorkerMode && cliArgs.noLocalDev,
+		// One-dev-session-at-a-time cap (legacy). Off by default so the hub can
+		// run several concurrent dev sessions. Hub-only.
+		serialDev: !isWorkerMode && cliArgs.serialDev,
 		workers: new Map(),
 		workerAssignments: isWorkerMode ? [] : loadAssignments(),
 		pendingWorkerRequests: new Map(),
@@ -529,6 +545,12 @@ async function main(): Promise<void> {
 		dispatchRegistry: createDispatchRegistry(),
 		delegationStore: createDelegationStore(),
 	};
+
+	// Rehydrate Auto Mode delegations persisted before the last restart, so the
+	// "Awaiting delegation" popups survive a hub reboot (hub-only).
+	if (!isWorkerMode) {
+		await loadDelegationsIntoStore(ctx);
+	}
 
 	// ── Workspace path cache (decoded from project hash) ────
 	const workspacePathCache = new Map<string, string | null>();
@@ -780,6 +802,8 @@ async function main(): Promise<void> {
 		}
 		if (ctx.noLocalDev) {
 			console.log(`  Dev dispatch: workers-only (--no-local-dev) — Darryl will never run dev work on the hub.\n`);
+		} else if (ctx.serialDev) {
+			console.log(`  Dev dispatch: serial (--serial-dev) — one dev session at a time on this machine.\n`);
 		}
 		console.log(`  Watching ~/.claude/projects/ for agent sessions...\n`);
 	});

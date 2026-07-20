@@ -17,7 +17,7 @@ import {
 	buildJanSystemPrompt,
 } from './systemPrompts.js';
 import { getJanDesignConfig, getAutoModeEnabled } from './agentHandlers.js';
-import type { ClickUpConfig, ClickUpStatusGroup } from '../src/connectors/clickupClient.js';
+import { normalizeListIds, type ClickUpConfig, type ClickUpStatusGroup } from '../src/connectors/clickupClient.js';
 import type { ServerContext } from './serverContext.js';
 import {
 	getActiveBuildingConnectorConfig,
@@ -51,7 +51,7 @@ import {
 	handleJanBatchDispatch,
 	dispatchDarrylClassify,
 } from './orchestratorDispatch.js';
-import { pendingDelegationIds } from './delegationStore.js';
+import { delegationExcludeSet } from './delegationStore.js';
 
 // ── Polling ──────────────────────────────────────────────────
 
@@ -99,6 +99,25 @@ export function runAutoPickupNow(ctx: ServerContext): void {
  * registry) is never re-classified. Qualification is strictly one-at-a-time —
  * Darryl is a singleton and we only ever hand him a single ticket per cycle.
  */
+/**
+ * Index the current ticket cache by id → connector date_updated (epoch ms).
+ * Used to decide whether a pending delegation's ticket changed since it was
+ * last evaluated.
+ */
+function buildTicketUpdatedAtLookup(
+	clickupTickets: ClickUpStatusGroup[],
+): (ticketId: string) => number | undefined {
+	const byId = new Map<string, number>();
+	for (const group of clickupTickets) {
+		for (const task of group.tasks) {
+			const raw = (task as { dateUpdated?: string }).dateUpdated;
+			const n = raw != null ? Number(raw) : NaN;
+			if (Number.isFinite(n)) byId.set(task.id, n);
+		}
+	}
+	return (ticketId: string) => byId.get(ticketId);
+}
+
 export function autoJasperClassifyPickup(ctx: ServerContext): void {
 	if (ctx.isWorkerMode) return;
 	if (!getAutoModeEnabled()) return;
@@ -109,7 +128,10 @@ export function autoJasperClassifyPickup(ctx: ServerContext): void {
 	if (darryl?.currentSessionId) return;
 
 	// Exclude tickets already classified (awaiting confirmation) or in flight.
-	const exclude = pendingDelegationIds(ctx.delegationStore);
+	// A pending recommendation whose ticket was UPDATED since Darryl evaluated it
+	// is dropped from the exclude set so it gets re-classified (fresh info).
+	const liveUpdatedAt = buildTicketUpdatedAtLookup(ctx.clickupTickets);
+	const exclude = delegationExcludeSet(ctx.delegationStore, liveUpdatedAt);
 	for (const id of claimedTicketIds(ctx.dispatchRegistry)) exclude.add(id);
 
 	const candidates = selectJasperClassifyPickups(ctx.clickupTickets, exclude, AUTO_MODE_ASSIGNEE_USERNAME);
@@ -310,15 +332,23 @@ export function autoJanPickup(ctx: ServerContext): void {
 
 export async function handleClickupConfigure(msg: Record<string, unknown>, ctx: ServerContext): Promise<void> {
 	const apiToken = msg.apiToken as string | undefined;
-	const listId = msg.listId as string | undefined;
+	// New shape: listIds: string[]. Accept the legacy single listId too.
+	const rawListIds = Array.isArray(msg.listIds)
+		? (msg.listIds as unknown[])
+		: (typeof msg.listId === 'string' ? [msg.listId] : undefined);
 
 	const patch: Record<string, unknown> = {};
 	if (apiToken !== undefined) patch.apiToken = apiToken;
-	if (listId !== undefined) patch.listId = listId;
+	if (rawListIds !== undefined) {
+		patch.listIds = rawListIds;
+		// Clear the legacy single-list key so a stale value can't linger and get
+		// re-merged by normalizeListIds. (undefined is dropped on JSONB write.)
+		patch.listId = undefined;
+	}
 
 	const merged = await patchActiveBuildingConnectorConfig(patch);
 	const mergedToken = merged.apiToken as string | undefined;
-	const mergedListId = merged.listId as string | undefined;
+	const mergedListIds = normalizeListIds(merged);
 
 	// Rebuild the connector from the patched config so polling sees the change.
 	const { connectorForBuilding } = await import('../src/connectors/registry.js');
@@ -328,15 +358,15 @@ export async function handleClickupConfigure(msg: Record<string, unknown>, ctx: 
 		ctx.connector = connectorForBuilding(refreshed);
 	}
 
-	if (!mergedToken || !mergedListId) {
+	if (!mergedToken || mergedListIds.length === 0) {
 		ctx.clickupConfig = null;
-		ctx.broadcastSink.postMessage({ type: 'clickupConfigured', configured: false });
+		ctx.broadcastSink.postMessage({ type: 'clickupConfigured', configured: false, listIds: [] });
 		return;
 	}
 
-	const config: ClickUpConfig = { apiToken: mergedToken, listId: mergedListId };
+	const config: ClickUpConfig = { apiToken: mergedToken, listIds: mergedListIds };
 	ctx.clickupConfig = config;
-	ctx.broadcastSink.postMessage({ type: 'clickupConfigured', configured: true, listId: config.listId });
+	ctx.broadcastSink.postMessage({ type: 'clickupConfigured', configured: true, listIds: config.listIds });
 
 	startClickupPolling(ctx);
 	handleClickupRefresh(ctx).catch(() => {});
@@ -350,9 +380,9 @@ export async function handleClickupConfigure(msg: Record<string, unknown>, ctx: 
 export async function loadActiveClickupConfig(): Promise<ClickUpConfig | null> {
 	const cfg = await getActiveBuildingConnectorConfig();
 	const apiToken = cfg.apiToken as string | undefined;
-	const listId = cfg.listId as string | undefined;
-	if (!apiToken || !listId) return null;
-	return { apiToken, listId };
+	const listIds = normalizeListIds(cfg);
+	if (!apiToken || listIds.length === 0) return null;
+	return { apiToken, listIds };
 }
 
 // ── Jan single-ticket design briefing (legacy webview message) ──
