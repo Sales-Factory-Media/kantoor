@@ -66,7 +66,7 @@ import {
 	type OrchestratorBatchSpec,
 } from './orchestratorDispatch.js';
 import { createDispatchRegistry } from './dispatchRegistry.js';
-import { EXIT_REMINDER } from './launchHelpers.js';
+import { ANNOUNCE_REMINDER, EXIT_REMINDER } from './launchHelpers.js';
 import type { TicketInfo } from './launchHelpers.js';
 
 function makeCtx(persistentAgents: PersistentAgent[] = []): ServerContext {
@@ -204,7 +204,7 @@ describe('dispatchOrchestratorBatch', () => {
 		]);
 	});
 
-	it('appends EXIT_REMINDER to the initial-task body produced by the spec', () => {
+	it('appends ANNOUNCE_REMINDER + EXIT_REMINDER to the initial-task body produced by the spec', () => {
 		const { spec, buildInitialTaskMock } = makeSpec();
 		buildInitialTaskMock.mockReturnValueOnce('BODY_OUT');
 		const ctx = makeCtx();
@@ -212,7 +212,8 @@ describe('dispatchOrchestratorBatch', () => {
 		dispatchOrchestratorBatch(spec, makeBatch(['T-1']), ctx);
 
 		const [, , initialTaskArg] = launchPersistentAgentSessionMock.mock.calls[0];
-		expect(initialTaskArg).toBe('BODY_OUT' + EXIT_REMINDER);
+		// Reminders trail the body — the session card title comes off the head.
+		expect(initialTaskArg).toBe('BODY_OUT' + ANNOUNCE_REMINDER + EXIT_REMINDER);
 	});
 
 	it('passes the first batch ticket (NOT a later one) to launchPersistentAgentSession for UI-label tracking', () => {

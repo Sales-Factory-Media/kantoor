@@ -33,6 +33,21 @@ export interface TicketInfo {
  * iTerm tab when work is complete. The matching bash block lives in the
  * agent's system prompt under "## Self-Exit" (buildSelfExitBlock).
  */
+/**
+ * Append this to every initial task: the agent must state its plan before it
+ * starts executing, so the human watching the tab can interrupt or redirect.
+ * The full rationale lives in the system prompt under "## Announce Before You
+ * Act" (buildAnnounceIntentBlock) — this is the recency nudge at task level.
+ *
+ * Appended (not prepended) on purpose: the session card title in the webview is
+ * derived from the head of the first user prompt, so the ticket line must stay
+ * first.
+ */
+export const ANNOUNCE_REMINDER =
+	'\n\n**Before you start:** print what you are about to do (plan in a few bullets + the files/commands it ' +
+	'touches + anything you\'re assuming). Then start immediately — do NOT wait for approval. Announce again ' +
+	'before each new phase. See "## Announce Before You Act" in your system prompt.';
+
 export const EXIT_REMINDER =
 	'\n\nWhen you have finished this work (PR open, ticket status flipped, MemPalace updated), ' +
 	'run the `## Self-Exit` bash block from your system prompt to close your iTerm tab. ' +

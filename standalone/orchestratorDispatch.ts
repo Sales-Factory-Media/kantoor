@@ -34,6 +34,7 @@ import {
 	JAN_WORKSPACE,
 } from './constants.js';
 import {
+	ANNOUNCE_REMINDER,
 	EXIT_REMINDER,
 	launchPersistentAgentSession,
 	type TicketInfo,
@@ -126,7 +127,7 @@ export function dispatchOrchestratorBatch<S extends string>(
 	const systemPrompt = spec.buildSystemPrompt(agent, roster);
 	const initialTask = spec.buildInitialTask(
 		batch.map(t => ({ id: t.ticketId, name: t.ticketName, url: t.ticketUrl, status: t.status })),
-	) + EXIT_REMINDER;
+	) + ANNOUNCE_REMINDER + EXIT_REMINDER;
 
 	// Track only the first ticket on the persistent-agent record (used for UI
 	// labels); the rest are listed in the initial task.
@@ -222,7 +223,7 @@ export function dispatchDarrylClassify(
 		{ id: ticket.ticketId, name: ticket.ticketName, url: ticket.ticketUrl },
 		workers,
 		SERVER_PORT,
-	) + EXIT_REMINDER;
+	) + ANNOUNCE_REMINDER + EXIT_REMINDER;
 
 	console.log(`[Standalone] Auto-pickup: Darryl classifying ticket ${ticket.ticketId} (${workers.length} eligible workers)`);
 	const result = launchPersistentAgentSession(

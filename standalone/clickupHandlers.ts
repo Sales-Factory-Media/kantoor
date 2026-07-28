@@ -28,6 +28,7 @@ import {
 	computeDevFleetCapacity,
 } from './capacity.js';
 import {
+	ANNOUNCE_REMINDER,
 	EXIT_REMINDER,
 	launchPersistentAgentSession,
 	type TicketInfo,
@@ -405,7 +406,7 @@ export function handleJanDesignBriefing(msg: Record<string, unknown>, ctx: Serve
 	const initialTask = (ticketStatus === 'to refine'
 		? buildJanRefineInitialTask(ticketId, ticketName, ticketUrl)
 		: buildJanSingleTodoInitialTask(ticketId, ticketName, ticketUrl)
-	) + EXIT_REMINDER;
+	) + ANNOUNCE_REMINDER + EXIT_REMINDER;
 
 	const result = launchPersistentAgentSession(
 		jan,
