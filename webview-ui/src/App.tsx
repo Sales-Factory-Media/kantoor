@@ -312,6 +312,7 @@ function App() {
       {showDelegationModal && pendingDelegations.length > 0 && (
         <DelegationConfirmModal
           delegations={pendingDelegations}
+          knownProjects={knownProjects}
           onClose={() => setShowDelegationModal(false)}
         />
       )}

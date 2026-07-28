@@ -8,7 +8,7 @@ import { getActivity, getDotInfo, groupByRoom, deleteButtonStyle } from './agent
 import type { ClickUpTicketRef } from './agentSidebarUtils.js'
 import { OfflineAgentRow } from './OfflineAgentRow.js'
 import { EmployeeAvatar } from './EmployeeAvatar.js'
-import { ProjectLogo, makeProjectLogoLookup } from './ProjectLogo.js'
+import { ProjectLogo, makeProjectLogoLookup, fileToLogoDataUri } from './ProjectLogo.js'
 
 export interface AgentRoomListProps {
   officeState: OfficeState
@@ -196,6 +196,50 @@ export function AgentRoomList({
           {/* Description editor */}
           {editingDescRoom === (group.workspacePath || projectName) && (
             <div style={{ padding: '4px 6px', borderBottom: '1px solid var(--pixel-border)' }}>
+              {/* Logo — same setProjectLogo message the building's Manage-projects modal uses */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+                <ProjectLogo logo={projectLogo(group.workspacePath, projectName)} size={24} />
+                <label
+                  style={{
+                    padding: '2px 8px',
+                    fontSize: '14px',
+                    color: 'var(--pixel-text)',
+                    background: 'var(--pixel-btn-bg)',
+                    border: '2px solid var(--pixel-border)',
+                    borderRadius: 0,
+                    cursor: 'pointer',
+                  }}
+                >
+                  {projectLogo(group.workspacePath, projectName) ? 'Change logo' : 'Upload logo'}
+                  <input
+                    type="file"
+                    accept="image/*"
+                    style={{ display: 'none' }}
+                    onChange={async (e) => {
+                      const file = e.target.files?.[0]
+                      e.target.value = ''
+                      if (!file) return
+                      try {
+                        const logo = await fileToLogoDataUri(file)
+                        vscode.postMessage({ type: 'setProjectLogo', workspacePath: group.workspacePath, logo })
+                      } catch (err) {
+                        console.error('[ProjectLogo] upload failed:', err)
+                      }
+                    }}
+                  />
+                </label>
+                {projectLogo(group.workspacePath, projectName) && (
+                  <button
+                    onClick={() =>
+                      vscode.postMessage({ type: 'setProjectLogo', workspacePath: group.workspacePath, logo: '' })
+                    }
+                    title="Remove logo"
+                    style={deleteButtonStyle}
+                  >
+                    {'✕'}
+                  </button>
+                )}
+              </div>
               <textarea
                 style={{
                   width: '100%',

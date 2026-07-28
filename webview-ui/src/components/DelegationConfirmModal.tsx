@@ -1,12 +1,21 @@
 import { useState } from 'react'
-import type { PendingDelegation } from '../hooks/useExtensionMessages.js'
+import type { KnownProject, PendingDelegation } from '../hooks/useExtensionMessages.js'
 import { EmployeeAvatar } from './EmployeeAvatar.js'
+import { ProjectLogo, makeProjectLogoLookup } from './ProjectLogo.js'
 import { vscode } from '../vscodeApi.js'
 
 interface DelegationConfirmModalProps {
   delegations: PendingDelegation[]
+  /** Used to turn the recommended worker's workspace path into a project name/logo. */
+  knownProjects: KnownProject[]
   /** Hide the modal — the pending list is kept; reopen from the header button. */
   onClose: () => void
+}
+
+/** Last path segment — fallback label when the workspace isn't a known project. */
+function basename(path: string): string {
+  const parts = path.replace(/[/\\]+$/, '').split(/[/\\]/)
+  return parts[parts.length - 1] || path
 }
 
 /**
@@ -15,12 +24,19 @@ interface DelegationConfirmModalProps {
  * dispatch (on the current branch), Discard to drop it, or opens the ticket in
  * ClickUp. Multiple pending decisions render as tabs.
  */
-export function DelegationConfirmModal({ delegations, onClose }: DelegationConfirmModalProps) {
+export function DelegationConfirmModal({ delegations, knownProjects, onClose }: DelegationConfirmModalProps) {
   const [activeIndex, setActiveIndex] = useState(0)
 
   if (delegations.length === 0) return null
   const idx = Math.min(activeIndex, delegations.length - 1)
   const active = delegations[idx]
+
+  // Which project the recommended worker belongs to — so the human can verify
+  // the ticket is about to be worked in the right codebase.
+  const workspacePath = active.recommendedWorkspacePath || ''
+  const project = knownProjects.find((p) => p.workspacePath === workspacePath)
+  const projectLabel = project?.name || (workspacePath ? basename(workspacePath) : 'Unknown project')
+  const projectLogo = makeProjectLogoLookup(knownProjects)(workspacePath, project?.name)
 
   const start = () => {
     vscode.postMessage({ type: 'confirmDelegation', ticketId: active.ticketId })
@@ -168,6 +184,29 @@ export function DelegationConfirmModal({ delegations, onClose }: DelegationConfi
             {active.recommendedAgentRole && (
               <div style={{ fontSize: '15px', color: 'var(--pixel-text-dim)' }}>{active.recommendedAgentRole}</div>
             )}
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 5,
+                marginTop: 2,
+                fontSize: '15px',
+                color: 'var(--pixel-text-dim)',
+              }}
+              title={workspacePath}
+            >
+              <ProjectLogo logo={projectLogo} size={14} />
+              <span
+                style={{
+                  color: 'var(--pixel-text)',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {projectLabel}
+              </span>
+            </div>
           </div>
         </div>
 
