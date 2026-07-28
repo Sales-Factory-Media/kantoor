@@ -5,10 +5,12 @@
  * `systemPrompts.ts`. Separated out so the template literals (which get long)
  * don't bloat the orchestration handlers in `clickupHandlers.ts`.
  *
- * Convention: every builder returns a string WITHOUT the EXIT_REMINDER
- * appended — the caller adds it via `launchHelpers.EXIT_REMINDER`. Keeping
- * the reminder at the call site makes it easy to spot if a handler forgets
- * it.
+ * Convention: every builder returns a string WITHOUT the shared reminders
+ * appended — the caller adds `launchHelpers.ANNOUNCE_REMINDER` (state your
+ * plan before acting) and `launchHelpers.EXIT_REMINDER` (close your tab when
+ * done), in that order. Keeping the reminders at the call site makes it easy
+ * to spot if a handler forgets them. Both are appended, never prepended: the
+ * session card title in the webview is derived from the head of this string.
  */
 
 import {

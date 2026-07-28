@@ -17,6 +17,7 @@ import {
 import type { PersistentAgent, DesignConfig } from './agentStore.js';
 import { DEFAULT_DESIGN_CONFIG } from './agentStore.js';
 import { buildSystemPrompt } from './systemPrompts.js';
+import { ANNOUNCE_REMINDER } from './launchHelpers.js';
 import { getOfflineAgents, buildIdentityPrompt, buildNewWorkerPopup } from './serverHelpers.js';
 import type { ServerContext } from './serverContext.js';
 import { loadSeats, saveSeats } from '../src/db/seatStore.js';
@@ -43,7 +44,11 @@ export function launchPersistentAgent(pa: PersistentAgent, persistentAgents: Per
 	const cwd = expandHome(pa.workspacePath || '~');
 	const mcpConfigPath = ensureMempalaceMcpConfig(mempalaceHost);
 	console.log(`[Standalone] Launching agent "${pa.name}" with session ${newSessionId} in ${cwd}${callInTask ? ` with task: ${callInTask}` : ''}`);
-	const launched = launchAgentSession(newSessionId, cwd, prompt, callInTask, { mcpConfigPath });
+	// The announce-first nudge rides along with the typed task (the system prompt
+	// carries the full rule). Appended, never prepended — `callInTask` itself is
+	// what the session card shows as its title.
+	const initialTask = callInTask ? callInTask + ANNOUNCE_REMINDER : undefined;
+	const launched = launchAgentSession(newSessionId, cwd, prompt, initialTask, { mcpConfigPath });
 
 	// We know the opening prompt right now — stash it so the session's card shows
 	// the real task immediately instead of "Tab N" while the JSONL is still being

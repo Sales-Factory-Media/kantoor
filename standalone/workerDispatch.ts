@@ -56,6 +56,7 @@ import { loadKnownProjects } from '../src/projectStore.js';
 import { findBusyDevSlot, findBusyVisualSlot, findDevWorkerForWorkspace, findFreeDevWorker, isDevWorker } from './capacity.js';
 import { expandHome } from './agentStore.js';
 import {
+	ANNOUNCE_REMINDER,
 	EXIT_REMINDER,
 	launchPersistentAgentSession,
 	type LaunchOptions,
@@ -326,7 +327,7 @@ function tryLaunchDevWorkerLocal(msg: Record<string, unknown>, ctx: ServerContex
 	if (useTeam) {
 		initialTask += '\n\nUse team mode: spawn sub-agents for parallel work.';
 	}
-	initialTask += EXIT_REMINDER;
+	initialTask += ANNOUNCE_REMINDER + EXIT_REMINDER;
 
 	const outcome = launchLocally(pa, systemPrompt, initialTask, ticketId, ticketName, ticketUrl, ctx);
 	if (outcome.success) {
@@ -443,7 +444,7 @@ function tryLaunchDesignerLocal(msg: Record<string, unknown>, ctx: ServerContext
 	const briefBlock = brief
 		? `${brief}\n\n`
 		: `⚠ No Brief was passed by Jan — you will need to read the ticket description yourself.\n\n`;
-	const initialTask = buildUxDesignerInitialTask(ticketId, ticketName, ticketUrl, briefBlock, !!revisionMode) + EXIT_REMINDER;
+	const initialTask = buildUxDesignerInitialTask(ticketId, ticketName, ticketUrl, briefBlock, !!revisionMode) + ANNOUNCE_REMINDER + EXIT_REMINDER;
 
 	const outcome = launchLocally(designer, systemPrompt, initialTask, ticketId, ticketName, ticketUrl, ctx);
 	if (outcome.success) {
@@ -499,7 +500,7 @@ function tryLaunchVisualDesignerLocal(msg: Record<string, unknown>, ctx: ServerC
 	const briefBlock = brief
 		? `${brief}\n\n`
 		: `⚠ No Brief was passed by Jan — look at the ticket to find the approved UX Figma node.\n\n`;
-	const initialTask = buildVisualDesignerInitialTask(ticketId, ticketName, ticketUrl, briefBlock, !!revisionMode) + EXIT_REMINDER;
+	const initialTask = buildVisualDesignerInitialTask(ticketId, ticketName, ticketUrl, briefBlock, !!revisionMode) + ANNOUNCE_REMINDER + EXIT_REMINDER;
 
 	const outcome = launchLocally(designer, systemPrompt, initialTask, ticketId, ticketName, ticketUrl, ctx);
 	if (outcome.success) {
@@ -543,7 +544,7 @@ function tryLaunchVisualQaLocal(msg: Record<string, unknown>, ctx: ServerContext
 	if (!qa) return { success: false, error: 'No Visual QA agent seeded on this machine' };
 
 	const systemPrompt = buildVisualQaSystemPrompt(qa, getJanDesignConfig());
-	const initialTask = buildVisualQaInitialTask({ ticketId, ticketName, ticketUrl, designerName }) + EXIT_REMINDER;
+	const initialTask = buildVisualQaInitialTask({ ticketId, ticketName, ticketUrl, designerName }) + ANNOUNCE_REMINDER + EXIT_REMINDER;
 
 	const outcome = launchLocally(qa, systemPrompt, initialTask, ticketId, ticketName, ticketUrl, ctx, { withPeers: true });
 	if (outcome.success) {

@@ -45,6 +45,27 @@ export const VISUAL_DESIGN_CHECKLIST: string[] = [
 		: ['**Light mode only** — the team is not shipping dark mode yet. Designs must be light-mode only. A dark-mode variant on the page = FAIL (it pollutes the component library with untoken\'d dark styles).']),
 ];
 
+// Announce-before-acting block — goes into EVERY agent's system prompt.
+// The human watching the iTerm tab steers agents in real time: they read the
+// stated plan, then either let it run or hit Esc and redirect. Newer models
+// tend to start executing immediately and only summarise at the end, which is
+// too late to steer. This is a broadcast, NOT a permission request — agents
+// must never block waiting for an "ok".
+export function buildAnnounceIntentBlock(): string[] {
+	return [
+		'## Announce Before You Act',
+		'',
+		'Before you start working on a task — and again before each new phase, or before any step that changes state (writing files, running commands/migrations, committing, pushing, moving tickets, dispatching other agents) — first PRINT what you are about to do:',
+		'- The plan in 1–4 short bullets.',
+		'- The concrete files / commands / endpoints it will touch.',
+		'- Any assumption you are making, or anything you are unsure about.',
+		'',
+		'Then just do it. Do NOT wait for approval and do NOT ask "shall I proceed?" — this is a broadcast, not a question, and blocking on it stalls the pipeline.',
+		'',
+		'The reason: a human reads your terminal live and will interrupt (Esc) or send an extra prompt if you are heading the wrong way. A summary written only after the work is finished gives them nothing to steer with. Announce first, work second, summarise last.',
+	];
+}
+
 // Self-exit block — tells the agent the bash command to close its own iTerm2 tab
 // when its work is complete. Works by walking up the process tree to find a TTY
 // and closing the matching iTerm2 session via osascript. macOS + iTerm2 only.
@@ -189,6 +210,7 @@ export function buildSystemPrompt(agent: PersistentAgent, projectDescription?: s
 			projectDescription,
 		);
 	}
+	lines.push('', ...buildAnnounceIntentBlock());
 	lines.push('', ...buildMemoryBlock(agent.id, agent.roleShort, agent.sessionCount, agent.lastSessionEnd));
 	if (concurrentJob) {
 		lines.push(
@@ -275,6 +297,8 @@ export function buildDarrylSystemPrompt(agent: PersistentAgent, roster: RosterEn
 	const lines = [
 		'You are Darryl, the Foreman. You ASSESS and DISPATCH — you never implement tickets yourself.',
 		'',
+		...buildAnnounceIntentBlock(),
+		'',
 		'## RULES (violating these = failure)',
 		...rules,
 		'',
@@ -324,6 +348,8 @@ export function buildJanSystemPrompt(agent: PersistentAgent, roster: RosterEntry
 	const cfg = designConfig ?? DEFAULT_DESIGN_CONFIG;
 	const lines = [
 		'You are Jan, the Art Director. You ASSESS briefings, WRITE UX briefings, and DISPATCH designers / QA. You never review designer output yourself — that\'s what Visual QA exists for, and what humans do on `qa test` tickets.',
+		'',
+		...buildAnnounceIntentBlock(),
 		'',
 		'## HARD RULES',
 		'1. **You NEVER open Figma.** No `figma_*` tool, ever, for any reason. Opening Figma is a design-worker job, not an orchestrator job. If you find yourself reaching for a `figma_*` tool, STOP — you\'re confusing your role with a designer\'s.',
@@ -394,6 +420,8 @@ export function buildDesignerSystemPrompt(agent: PersistentAgent, projectDescrip
 	const lines = [
 		`You are ${agent.name}, a UX Designer in Jan's pipeline. You produce one UX exploration per ticket.`,
 		'',
+		...buildAnnounceIntentBlock(),
+		'',
 		'## RULES (violating these = rejected output)',
 		'1. Jan\'s Brief (in your initial task) is authoritative. Do NOT re-fetch the parent ticket or every comment — only pull the current briefing sub-ticket for specific details you need.',
 		'2. Work on a CLEAN playground Figma page named `{ticket_id} — {Direction Title}`. Never edit main files or the central design board.',
@@ -433,6 +461,8 @@ export function buildVisualDesignerSystemPrompt(agent: PersistentAgent, projectD
 	const cfg = designConfig ?? DEFAULT_DESIGN_CONFIG;
 	const lines = [
 		`You are ${agent.name}, a Visual Designer. You take an approved UX direction and re-skin it to the design system.`,
+		'',
+		...buildAnnounceIntentBlock(),
 		'',
 		'## 🚨 NON-NEGOTIABLE RULES — the Visual QA rejects work that breaks any of these',
 		'1. **Every UI element must be a library component instance.** Buttons, cards, inputs, chips, nav — all of them. Raw frames that duplicate a library component = rejection.',
@@ -518,6 +548,8 @@ export function buildVisualQaSystemPrompt(agent: PersistentAgent, designConfig?:
 	const cfg = designConfig ?? DEFAULT_DESIGN_CONFIG;
 	const lines = [
 		`You are ${agent.name}, Visual Quality Reviewer. You judge Visual Designer output against a fixed checklist — AND you fix the small stuff yourself rather than bouncing it back.`,
+		'',
+		...buildAnnounceIntentBlock(),
 		'',
 		'## RULES',
 		'1. Grade every checklist item PASS / FAIL / N/A.',
@@ -632,6 +664,8 @@ export function buildUxQaSystemPrompt(agent: PersistentAgent): string {
 		'',
 		'Note: AI Review for the UX team is NOT YET ENABLED. You exist as a team member in the organogram',
 		'and may be activated later. For now, no automated workflow will assign you tickets.',
+		'',
+		...buildAnnounceIntentBlock(),
 		'',
 		...buildMemoryBlock(agent.id, agent.roleShort),
 	];
