@@ -66,6 +66,29 @@ export function buildAnnounceIntentBlock(): string[] {
 	];
 }
 
+// Plain-language block — goes into EVERY agent's system prompt.
+// Agents write for a human reading the iTerm tab live, plus for ClickUp
+// comments and PR bodies that non-engineers read. Models default to dense,
+// jargon-heavy prose that sounds authoritative but hides what actually
+// happened. This is about how agents EXPLAIN — not about renaming things in
+// code, where the existing conventions still win.
+export function buildPlainLanguageBlock(): string[] {
+	return [
+		'## Explain Things in Plain Language',
+		'',
+		'Everything you write for a human to read — terminal output, plans, summaries, ClickUp comments, PR descriptions, questions — must be in simple, everyday words. Assume the reader is smart but does not share your context and does not want to decode you.',
+		'',
+		'- Use the plainest word that is still accurate. "Uses" not "leverages". "Runs before" not "is invoked upstream of". "Split up" not "decompose".',
+		'- Say what actually happens, concretely. "The list was empty so nothing was saved" beats "a state-synchronisation edge case surfaced".',
+		'- Short sentences. One idea each. Skip the throat-clearing and get to the point.',
+		'- Name real things — files, buttons, statuses, commands — instead of abstract categories.',
+		'- If a technical term is genuinely the right word (a library name, a real API, an established concept in this codebase), use it, but explain it once in plain words the first time it comes up.',
+		'- Never dress up an unfinished or broken result in impressive-sounding language. Say plainly what works, what does not, and what you skipped.',
+		'',
+		'This is about how you EXPLAIN, not how you code — keep following the naming and style conventions already in the codebase.',
+	];
+}
+
 // Self-exit block — tells the agent the bash command to close its own iTerm2 tab
 // when its work is complete. Works by walking up the process tree to find a TTY
 // and closing the matching iTerm2 session via osascript. macOS + iTerm2 only.
@@ -211,6 +234,7 @@ export function buildSystemPrompt(agent: PersistentAgent, projectDescription?: s
 		);
 	}
 	lines.push('', ...buildAnnounceIntentBlock());
+	lines.push('', ...buildPlainLanguageBlock());
 	lines.push('', ...buildMemoryBlock(agent.id, agent.roleShort, agent.sessionCount, agent.lastSessionEnd));
 	if (concurrentJob) {
 		lines.push(
@@ -299,6 +323,8 @@ export function buildDarrylSystemPrompt(agent: PersistentAgent, roster: RosterEn
 		'',
 		...buildAnnounceIntentBlock(),
 		'',
+		...buildPlainLanguageBlock(),
+		'',
 		'## RULES (violating these = failure)',
 		...rules,
 		'',
@@ -350,6 +376,8 @@ export function buildJanSystemPrompt(agent: PersistentAgent, roster: RosterEntry
 		'You are Jan, the Art Director. You ASSESS briefings, WRITE UX briefings, and DISPATCH designers / QA. You never review designer output yourself — that\'s what Visual QA exists for, and what humans do on `qa test` tickets.',
 		'',
 		...buildAnnounceIntentBlock(),
+		'',
+		...buildPlainLanguageBlock(),
 		'',
 		'## HARD RULES',
 		'1. **You NEVER open Figma.** No `figma_*` tool, ever, for any reason. Opening Figma is a design-worker job, not an orchestrator job. If you find yourself reaching for a `figma_*` tool, STOP — you\'re confusing your role with a designer\'s.',
@@ -422,6 +450,8 @@ export function buildDesignerSystemPrompt(agent: PersistentAgent, projectDescrip
 		'',
 		...buildAnnounceIntentBlock(),
 		'',
+		...buildPlainLanguageBlock(),
+		'',
 		'## RULES (violating these = rejected output)',
 		'1. Jan\'s Brief (in your initial task) is authoritative. Do NOT re-fetch the parent ticket or every comment — only pull the current briefing sub-ticket for specific details you need.',
 		'2. Work on a CLEAN playground Figma page named `{ticket_id} — {Direction Title}`. Never edit main files or the central design board.',
@@ -463,6 +493,8 @@ export function buildVisualDesignerSystemPrompt(agent: PersistentAgent, projectD
 		`You are ${agent.name}, a Visual Designer. You take an approved UX direction and re-skin it to the design system.`,
 		'',
 		...buildAnnounceIntentBlock(),
+		'',
+		...buildPlainLanguageBlock(),
 		'',
 		'## 🚨 NON-NEGOTIABLE RULES — the Visual QA rejects work that breaks any of these',
 		'1. **Every UI element must be a library component instance.** Buttons, cards, inputs, chips, nav — all of them. Raw frames that duplicate a library component = rejection.',
@@ -550,6 +582,8 @@ export function buildVisualQaSystemPrompt(agent: PersistentAgent, designConfig?:
 		`You are ${agent.name}, Visual Quality Reviewer. You judge Visual Designer output against a fixed checklist — AND you fix the small stuff yourself rather than bouncing it back.`,
 		'',
 		...buildAnnounceIntentBlock(),
+		'',
+		...buildPlainLanguageBlock(),
 		'',
 		'## RULES',
 		'1. Grade every checklist item PASS / FAIL / N/A.',
@@ -666,6 +700,8 @@ export function buildUxQaSystemPrompt(agent: PersistentAgent): string {
 		'and may be activated later. For now, no automated workflow will assign you tickets.',
 		'',
 		...buildAnnounceIntentBlock(),
+		'',
+		...buildPlainLanguageBlock(),
 		'',
 		...buildMemoryBlock(agent.id, agent.roleShort),
 	];
